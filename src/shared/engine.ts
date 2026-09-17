@@ -91,24 +91,28 @@ function resolveJs(selector: string, fallback: string | null, spec: ActSpec, ali
       else if (!strict) el = visible[0] || matches[0];
       else return { error: { code: 'selector_ambiguous', message: matches.length + ' elements match ' + sel + ' (' + visible.length + ' visible)', hint: 'Add nth, or use a ref from candidates.', candidates: matches.slice(0, 10).map(desc) } };
     }
-    for (const st of states) { const r = injected.elementState(el, st); if (r.received === 'error:notconnected') return { error: { code: 'stale_ref', message: 'element detached during resolution' }, retry: true }; if (!r.matches) return { error: { code: st === 'visible' ? 'not_visible' : st === 'enabled' ? 'not_enabled' : 'not_editable', message: 'element is not ' + st, candidates: [desc(el)] }, retry: true }; }
+    const safeState = (node, st) => { try { return injected.elementState(node, st); } catch (e) { return { matches: false, received: 'error:' + ((e && e.message) || String(e)) }; } };
+    for (const st of states) { const r = safeState(el, st); if (r.received === 'error:notconnected') return { error: { code: 'stale_ref', message: 'element detached during resolution' }, retry: true }; if (!r.matches) return { error: { code: st === 'visible' ? 'not_visible' : st === 'enabled' ? 'not_enabled' : 'not_editable', message: 'element is not ' + st + (typeof r.received === 'string' && r.received.startsWith('error:') ? ' (' + r.received.slice(6) + ')' : ''), candidates: [desc(el)] }, retry: true }; }
     try { el.scrollIntoView({ block: align.block, inline: align.inline, behavior: 'instant' }); } catch {}
     // stable bounding box by wall clock (requestAnimationFrame is paused in background tabs)
     let prev = null, stable = 0; const t0 = performance.now();
     while (true) { const r = el.getBoundingClientRect(); const cur = [r.left, r.top, r.width, r.height].map(Math.round).join(','); stable = prev === cur ? stable + 1 : 0; prev = cur; if (stable >= 1 || performance.now() - t0 > 700) break; await new Promise((res) => setTimeout(res, 40)); }
-    for (const st of states) { const r = injected.elementState(el, st); if (!r.matches) return { error: { code: 'not_' + st, message: 'element is not ' + st + ' after scrolling' }, retry: true }; }
+    for (const st of states) { const r = safeState(el, st); if (!r.matches) return { error: { code: 'not_' + st, message: 'element is not ' + st + ' after scrolling' }, retry: true }; }
     const box = el.getBoundingClientRect();
     if (box.width <= 0 || box.height <= 0) return { error: { code: 'not_visible', message: 'element has no clickable box' }, retry: true };
     const lx = Math.max(0, box.left + box.width / 2), ly = Math.max(0, box.top + box.height / 2);
     const x = lx + offset.x, y = ly + offset.y;
     if (x > innerWidth || y > innerHeight) return { error: { code: 'not_visible', message: 'element is outside the viewport' }, retry: true };
+    // Playwright's elementState throws for states that do not apply to the element (e.g. 'checked' on a text input); treat that as "not in this state"
+    const state = (name) => { try { return injected.elementState(el, name).matches; } catch { return null; } };
+    const checkable = tag === 'input' && (el.type === 'checkbox' || el.type === 'radio') || ['checkbox', 'radio', 'switch'].includes(el.getAttribute('role') || '');
     const hit = injected.expectHitTarget({ x: lx, y: ly }, el);
     document.querySelectorAll('[data-opencli-act]').forEach((n) => n.removeAttribute('data-opencli-act'));
     root.querySelectorAll('[data-opencli-act]').forEach((n) => n.removeAttribute('data-opencli-act'));
     el.setAttribute('data-opencli-act', '1');
     let selectorForReplay = null; try { selectorForReplay = injected.generateSelector(el, { testIdAttributeName: 'data-testid' }).selector; } catch {}
     const tag = el.tagName.toLowerCase();
-    return { ok: true, x, y, matches_n: matches.length, tag, hit: hit === 'done' ? 'target' : 'other', blocker: hit === 'done' ? null : (hit && hit.hitTargetDescription) || 'another element', editable: injected.elementState(el, 'editable').matches === true, checkable: injected.elementState(el, 'checked').received !== 'error:notcheckbox' && (tag === 'input' && (el.type === 'checkbox' || el.type === 'radio') || ['checkbox', 'radio', 'switch'].includes(el.getAttribute('role') || '')), checked: injected.elementState(el, 'checked').matches === true, isSelect: tag === 'select', ref: el.getAttribute('data-opencli-ref'), selector: selectorForReplay, usedSelector: sel };
+    return { ok: true, x, y, matches_n: matches.length, tag, hit: hit === 'done' ? 'target' : 'other', blocker: hit === 'done' ? null : (hit && hit.hitTargetDescription) || 'another element', editable: state('editable') === true, checkable: checkable, checked: checkable ? state('checked') === true : false, isSelect: tag === 'select', ref: el.getAttribute('data-opencli-ref'), selector: selectorForReplay, usedSelector: sel };
   })()`;
 }
 
@@ -210,7 +214,7 @@ export async function performAct(io: ActIO, spec: ActSpec): Promise<ActResult> {
       const want = spec.kind === 'check';
       if (!r.checkable) throw new ActError('not_checkable', 'target is not a checkbox/radio/switch');
       if (r.checked !== want) { await mouse(io, 'mouseMoved', r.x, r.y); await mouse(io, 'mousePressed', r.x, r.y, 1); await mouse(io, 'mouseReleased', r.x, r.y, 1); }
-      const after = await io.evaluate(`(() => { const el = ${ACT_EL}; const injected = ${engineFor}(el); return el ? injected.elementState(el, 'checked').matches === true : null; })()`) as boolean | null;
+      const after = await io.evaluate(`(() => { const el = ${ACT_EL}; const injected = ${engineFor}(el); if (!el) return null; try { return injected.elementState(el, 'checked').matches === true; } catch { return null; } })()`) as boolean | null;
       Object.assign(base, { checked: after, changed: after !== r.checked });
       if (after !== want) throw new ActError('action_failed', `expected checked=${want} but got ${after}`);
       break;

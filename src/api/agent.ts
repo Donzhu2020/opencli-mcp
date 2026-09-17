@@ -130,6 +130,11 @@ export class Tab {
   async find(target: Target & { limit?: number }): Promise<{ matches_n: number; entries: FindEntry[] }> {
     const L = await lib();
     return this.use(async (page) => {
+      if ('x' in target) {
+        // element at a viewport point (screenshot coordinates) → locator-oriented description, like Codex's elementInfo
+        const r = await page.evaluateWithArgs(`(() => { const el = document.elementFromPoint(x, y); if (!el) return { matches_n: 0, entries: [] }; const chain = []; let n = el; while (n && n !== document.body && chain.length < 4) { chain.push(n); n = n.parentElement; } const desc = (e, i) => { const r = e.getBoundingClientRect(); return { nth: i, ref: Number(e.getAttribute('data-opencli-ref')) || 0, tag: e.tagName.toLowerCase(), role: e.getAttribute('role') || '', text: (e.innerText || e.textContent || '').trim().slice(0, 120), attrs: Object.fromEntries(['id','class','name','type','placeholder','aria-label','title','href','data-testid'].filter((a) => e.getAttribute(a)).map((a) => [a, e.getAttribute(a)])), visible: r.width > 0 && r.height > 0, box: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) } }; }; return { matches_n: chain.length, entries: chain.map(desc) }; })()`, { x: target.x, y: target.y }) as { matches_n: number; entries: FindEntry[] };
+        return r;
+      }
       const js = 'css' in target ? L.buildFindJs(target.css, { limit: target.limit ?? 20 }) : L.buildSemanticFindJs({ role: (target as { role?: string }).role, name: (target as { name?: string }).name, label: (target as { label?: string }).label, text: (target as { text?: string }).text, testid: (target as { testid?: string }).testid, limit: target.limit ?? 20 });
       const r = await page.evaluate(js);
       if (L.isFindError(r)) throw new ActionError(r.error.code, r.error.message, r.error.hint);
@@ -197,12 +202,25 @@ export class Tab {
 
   readonly network = {
     start: async (pattern = ''): Promise<boolean> => this.use((p) => p.startNetworkCapture(pattern)),
-    read: async (opts: { pattern?: string; limit?: number; includeStatic?: boolean } = {}): Promise<unknown[]> => this.use(async (p) => {
+    /** Cursor-paged read: pass `afterSequence` from the previous result to get only new requests. */
+    read: async (opts: { pattern?: string; limit?: number; includeStatic?: boolean; afterSequence?: number } = {}): Promise<{ cursor: number; entries: unknown[]; hasMore: boolean }> => this.use(async (p) => {
       const captured = await p.readNetworkCapture().catch(() => [] as unknown[]);
-      const entries = captured.length ? captured : await p.networkRequests(opts.includeStatic ?? false);
-      const list = (entries as Array<Record<string, unknown>>).filter((e) => !opts.pattern || String(e.url ?? e.name ?? '').includes(opts.pattern));
-      for (const e of list.slice(0, 50)) this.ctx.state.trace.record({ kind: 'network', url: String(e.url ?? e.name ?? ''), method: e.method as string | undefined, status: e.status as number | undefined, contentType: (e.contentType ?? e.mimeType) as string | undefined, bodyBytes: typeof e.responseBody === 'string' ? (e.responseBody as string).length : undefined, page: this.id });
-      return list.slice(0, opts.limit ?? 100);
+      const fresh = (captured.length ? captured : await p.networkRequests(opts.includeStatic ?? false)) as Array<Record<string, unknown>>;
+      let log = this.ctx.state.netLog.get(this.id);
+      if (!log) { log = { seq: 0, entries: [], seen: new Set() }; this.ctx.state.netLog.set(this.id, log); }
+      for (const e of fresh) {
+        const key = String(e.requestId ?? `${e.method ?? 'GET'} ${e.url ?? e.name ?? ''} ${e.startTime ?? e.timestamp ?? e.ts ?? ''}`);
+        if (log.seen.has(key)) continue;
+        log.seen.add(key);
+        log.entries.push({ ...e, seq: ++log.seq });
+        this.ctx.state.trace.record({ kind: 'network', url: String(e.url ?? e.name ?? ''), method: e.method as string | undefined, status: e.status as number | undefined, contentType: (e.contentType ?? e.mimeType) as string | undefined, bodyBytes: typeof e.responseBody === 'string' ? (e.responseBody as string).length : undefined, page: this.id });
+      }
+      if (log.entries.length > 2000) { log.entries.splice(0, log.entries.length - 2000); }
+      const after = opts.afterSequence ?? 0;
+      const matching = log.entries.filter((e) => e.seq > after && (!opts.pattern || String(e.url ?? e.name ?? '').includes(opts.pattern)));
+      const limit = opts.limit ?? 100;
+      const page = matching.slice(0, limit);
+      return { cursor: page.length ? page[page.length - 1].seq : after, entries: page, hasMore: matching.length > limit };
     }),
   };
   async cookies(domain: string): Promise<unknown[]> { return this.use((p) => p.getCookies({ domain })); }
@@ -330,8 +348,9 @@ export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
       if (!rt.registry.has(site)) throw new ActionError('unknown_site', `no site "${site}"`, 'Use sites.search() to find the right name.');
       state.enabledSites.set(site, { write: Boolean(opts.write) });
       rt.emit('tools-changed', { site });
-      const tools = rt.registry.commands(site).filter((c) => opts.write || c.access === 'read').map((c) => `${site}_${c.name}`.replace(/[^A-Za-z0-9_-]/g, '_'));
-      return { site, tools };
+      const cmds = rt.registry.commands(site).filter((c) => opts.write || c.access === 'read');
+      const tools = cmds.map((c) => `${site}_${c.name}`.replace(/[^A-Za-z0-9_-]/g, '_'));
+      return { site, tools, commands: cmds.map((c) => ({ tool: `${site}_${c.name}`.replace(/[^A-Za-z0-9_-]/g, '_'), description: c.description, access: c.access, strategy: String(c.strategy ?? 'public'), args: c.args.map((a) => `${a.name}${a.required ? '*' : ''}${a.type ? `:${a.type}` : ''}`) })), note: cmds.some((c) => c.browser) ? 'Browser-backed commands reuse your logged-in Chrome session in a background adapter tab.' : undefined };
     },
     disable: (site: string) => { const ok = state.enabledSites.delete(site); if (ok) rt.emit('tools-changed', { site }); return ok; },
     run: async (site: string, name: string, args: Record<string, unknown> = {}) => {

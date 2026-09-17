@@ -45,7 +45,7 @@ if (ut) {
 }
 await call('js', { code: `const b = await agent.browsers.getDefault();\nconst t = await b.tabs.new('https://example.com/');\nconst st = await t.observe();\nnodeRepl.write(st.state.slice(0, 160));\nconst shot = await t.screenshot();\n({ url: st.url, title: st.title, tabs: (await b.tabs.list()).length })` }, { show: 600 });
 await call('tools_compile', { site: 'example', name: 'more-info', description: 'click through to IANA', inputs: {} }, { show: 500 });
-await call('session_trace', { limit: 8 }, { show: 400 });
+{ const tr = await client.readResource({ uri: 'opencli://session/trace' }); console.log(`\n▶ resource opencli://session/trace → ${JSON.parse(tr.contents[0].text).length} events`); }
 await call('session_finalize', { keep: [] }, { show: 300 });
 await client.close();
 console.log(`\nbrowser smoke done; unexpected results: ${failures}`);

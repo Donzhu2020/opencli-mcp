@@ -81,6 +81,7 @@ export async function discoverEndpoints(page: RuntimePage, opts: { maxScripts?: 
   let networkEntries = 0;
   const captured = await page.readNetworkCapture().catch(() => [] as unknown[]);
   const perf = await page.networkRequests(false).catch(() => [] as unknown[]);
+  // (the session-level cursor log lives on Tab.network; recon merges what the page reports now)
   for (const e of [...captured, ...perf] as Array<Record<string, unknown>>) {
     const url = String(e.url ?? e.name ?? '');
     if (!url) continue;

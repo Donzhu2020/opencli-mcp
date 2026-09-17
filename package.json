@@ -15,7 +15,10 @@
     "build:ext": "node scripts/build-extension.mjs",
     "dev": "tsx src/main.ts",
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p extension/tsconfig.json",
+    "smoke": "node scripts/smoke.mjs --dist",
+    "smoke:browser": "node scripts/smoke-browser.mjs",
+    "prepare": "npm run build"
   },
   "files": [
     "dist/",

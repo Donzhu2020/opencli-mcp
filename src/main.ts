@@ -49,7 +49,7 @@ async function main(): Promise<void> {
     case 'install': {
       const { install } = await import('./host/install.js');
       const browsers = flag('--browsers')?.split(',');
-      const r = install({ browsers, extensionId: flag('--extension-id') });
+      const r = install({ browsers, extensionId: flag('--extension-id'), userDataDirs: flag('--user-data-dir')?.split(',') });
       process.stdout.write(`${JSON.stringify(r, null, 2)}\n\nNext: chrome://extensions → Developer mode → Load unpacked → ${r.extensionDir}\nThe extension ID will be ${r.extensionId}. Then run: opencli-mcp doctor\n`);
       return;
     }
@@ -72,7 +72,7 @@ async function main(): Promise<void> {
     }
     case 'version': case '--version': case '-V': process.stdout.write(`${VERSION}\n`); return;
     default:
-      process.stderr.write(`Unknown command: ${cmd}\n${['stdio', 'host --native', 'serve [--port N] [--cdp ws://…] [--no-auth]', 'install [--browsers chrome,edge]', 'uninstall', 'doctor', 'extension-path', 'version'].map((c) => `  opencli-mcp ${c}`).join('\n')}\n`);
+      process.stderr.write(`Unknown command: ${cmd}\n${['stdio', 'host --native', 'serve [--port N] [--cdp ws://…] [--no-auth]', 'install [--browsers chrome,edge] [--user-data-dir /path/to/profile]', 'uninstall', 'doctor', 'extension-path', 'version'].map((c) => `  opencli-mcp ${c}`).join('\n')}\n`);
       process.exitCode = 2;
   }
 }

@@ -16,11 +16,15 @@ import { TraceRecorder } from './trace.js';
 import { JsSession } from '../mcp/js-session.js';
 import { opencliVersion } from '../lib/opencli.js';
 import { emitHook } from '../sites/hooks.js';
+import { Policy } from './policy.js';
 
 export type Backend = 'extension' | 'cdp' | 'none';
 
 export interface RuntimeOptions {
   bridge?: ExtensionBridge | null;
+  policy?: import('./policy.js').PolicyConfig;
+  sites?: string[];
+  sitesWrite?: string[];
   cdpEndpoint?: string;
   cursor?: boolean;
   log?: (msg: string) => void;
@@ -67,6 +71,9 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
   bridge: ExtensionBridge | null;
   cdpEndpoint: string | undefined;
   readonly cursorEnabled: boolean;
+  readonly policy: Policy;
+  readonly configSites: string[];
+  readonly configSitesWrite: string[];
   readonly startedAt = Date.now();
 
   constructor(opts: RuntimeOptions = {}) {
@@ -74,6 +81,9 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
     this.bridge = opts.bridge ?? null;
     this.cdpEndpoint = opts.cdpEndpoint ?? process.env.OPENCLI_CDP_ENDPOINT ?? undefined;
     this.cursorEnabled = opts.cursor ?? true;
+    this.policy = new Policy(opts.policy);
+    this.configSites = opts.sites ?? [];
+    this.configSitesWrite = opts.sitesWrite ?? [];
     if (opts.log) this.on('log', opts.log);
     this.bridge?.on('event', (e) => this.emit('browser-event', e));
     this.bridge?.on('close', () => { this.adapterPages.clear(); for (const s of this.sessions.values()) s.browserPage = undefined; });

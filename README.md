@@ -87,3 +87,9 @@ docs/           agent-facing docs
 ```
 
 Apache-2.0. Page semantics and site adapters come from [OpenCLI](https://github.com/jackwener/OpenCLI); the endpoint analyzer follows [jsluice](https://github.com/BishopFox/jsluice) (MIT).
+
+## Policy shapes (off by default)
+`~/.opencli-mcp/config.json` → `"policy": { "askNewOrigins": true, "confirmWrites": true, "allowedHosts": ["example.com"], "blockedHosts": [] }`. With `askNewOrigins`, the first navigation to a new host returns `needs_origin_approval` until `origin_allow` is called; with `confirmWrites`, write site commands return `needs_confirmation` until re-called with `confirm:true`. Denials carry `retryable`; a non-retryable denial must not be bypassed by another path. Page content and page-registered (WebMCP) tools never authorize consequential actions.
+
+## Custom Chrome profiles
+Chrome looks up user-level Native Messaging hosts relative to its user data dir. For a profile started with `--user-data-dir=/some/dir`, run `opencli-mcp install --user-data-dir /some/dir`.

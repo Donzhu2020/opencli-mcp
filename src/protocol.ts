@@ -87,7 +87,7 @@ export type BrowserEvent =
   | { kind: 'webmcp_changed'; page?: string }
   | { kind: 'session_released'; session: string; reason: string };
 
-export type HostToExt = { type: 'command'; command: Command };
+export type HostToExt = { type: 'command'; command: Command } | { type: 'ready'; version: string; port: number };
 export type ExtToHost =
   | { type: 'hello'; extensionVersion: string; protocolVersion: number; contextId?: string }
   | { type: 'result'; result: Result }

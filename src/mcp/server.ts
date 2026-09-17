@@ -77,6 +77,24 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     return t;
   };
   const run = async (fn: () => Promise<ToolResult>): Promise<ToolResult> => { try { return await fn(); } catch (err) { return fail(err); } };
+  type Extra = { signal?: AbortSignal; _meta?: { progressToken?: string | number }; sendNotification?: (n: { method: 'notifications/progress'; params: { progressToken: string | number; progress: number; total?: number; message?: string } }) => Promise<void> };
+  /** Run a long site command with progress heartbeats (when the host passed a progressToken) and cancellation. */
+  const runSiteWithProgress = async (site: string, command: string, args: Record<string, unknown>, extra: Extra): Promise<ToolResult> => {
+    const { confirm, ...rest } = args as { confirm?: boolean } & Record<string, unknown>;
+    const cmd = await rt.registry.resolve(site, command);
+    if (cmd.access === 'write') { const d = rt.policy.checkWrite(`${site}/${command}`, Boolean(confirm)); if (!d.allowed) throw new ActionError(d.code, d.message, d.hint, { retryable: d.retryable }); }
+    const token = extra._meta?.progressToken;
+    const started = Date.now();
+    let beat: NodeJS.Timeout | undefined;
+    if (token !== undefined && extra.sendNotification) {
+      beat = setInterval(() => { void extra.sendNotification!({ method: 'notifications/progress', params: { progressToken: token, progress: Math.round((Date.now() - started) / 1000), message: `${site} ${command} running (${Math.round((Date.now() - started) / 1000)}s)` } }).catch(() => {}); }, 5000);
+    }
+    const abort = new Promise<never>((_, rej) => { extra.signal?.addEventListener('abort', () => rej(new ActionError('cancelled', `${site}/${command} cancelled by the client`)), { once: true }); });
+    try {
+      const r = await Promise.race([rt.runSite(sessionId, site, command, rest), abort]);
+      return r.ok ? ok(r) : fail(new ActionError(r.error.code, r.error.message, r.error.hint, { site, command }));
+    } finally { if (beat) clearInterval(beat); }
+  };
   const gate = (tool: string): void => {
     const missing = requiredDocsFor(tool, docCtx()).filter((d) => !state.docsRead.has(d));
     if (missing.length) throw new ActionError('read_docs_first', `Read ${missing.join(', ')} before using ${tool}`, `Call docs_get with name ${JSON.stringify(missing[0])}; the doc is then marked as read for this session.`, { docs: missing });
@@ -130,7 +148,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   }));
   server.registerTool('tab_act', {
     title: 'Act on a tab', description: 'Perform one action: click, dblclick, hover, focus, fill (replace), type (append), press (key), select (option label/value), check/uncheck, upload (files), drag (to), scroll (target or direction), back/forward/reload. Waits for actionability, dispatches real input, returns matches_n/match_level and branchable error codes.',
-    inputSchema: { tab: z.string().optional(), action: z.enum(['click', 'dblclick', 'hover', 'focus', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'upload', 'drag', 'scroll', 'back', 'forward', 'reload']), target: targetSchema.optional(), value: z.string().optional().describe('text for fill/type, key for press, option for select'), files: z.array(z.string()).optional(), to: targetSchema.optional(), direction: z.enum(['up', 'down', 'left', 'right']).optional(), amount: z.number().optional(), observe: z.boolean().default(false).describe('also return the page state after the action') },
+    inputSchema: { tab: z.string().optional(), action: z.enum(['click', 'dblclick', 'hover', 'focus', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'upload', 'drag', 'scroll', 'back', 'forward', 'reload']), target: targetSchema.optional(), value: z.string().optional().describe('text for fill/type, key for press, option for select'), files: z.array(z.string()).optional(), to: targetSchema.optional(), direction: z.enum(['up', 'down', 'left', 'right']).optional(), amount: z.number().optional(), settleMs: z.number().int().min(0).max(10_000).default(600).describe('wait for the DOM to settle after the action'), observe: z.boolean().default(false).describe('also return the page state after the action') },
     annotations: { destructiveHint: true, openWorldHint: true },
   }, async ({ tab, action, target, to, observe, ...rest }) => run(async () => {
     const t = await tabOf(tab);
@@ -151,7 +169,10 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   server.registerTool('sites_list', { title: 'List sites', description: 'All sites with command counts, strategies and domains.', inputSchema: {}, annotations: { readOnlyHint: true } }, async () => run(async () => ok({ sites: api.sites.list() })));
   server.registerTool('sites_enable', { title: 'Enable a site', description: 'Load a site’s commands as typed tools named <site>_<command>. Read-only commands by default; write:true adds commands that change the user’s account.', inputSchema: { site: z.string(), write: z.boolean().default(false) } }, async ({ site, write }) => run(async () => ok(api.sites.enable(site, { write }))));
   server.registerTool('sites_disable', { title: 'Disable a site', description: 'Remove a site’s tools from this session.', inputSchema: { site: z.string() } }, async ({ site }) => run(async () => ok({ site, disabled: api.sites.disable(site) })));
-  server.registerTool('site_run', { title: 'Run a site command', description: 'Run any site command without enabling it as a tool (args as an object; see sites_search for names).', inputSchema: { site: z.string(), command: z.string(), args: z.record(z.string(), z.unknown()).default({}) }, annotations: { openWorldHint: true } }, async ({ site, command, args }) => run(async () => { const r = await rt.runSite(sessionId, site, command, args); return r.ok ? ok(r) : fail(new ActionError(r.error.code, r.error.message, r.error.hint, { site, command })); }));
+  server.registerTool('site_run', { title: 'Run a site command', description: 'Run any site command without enabling it as a tool (args as an object; see sites_search for names). Write commands may return needs_confirmation → re-call with args.confirm:true after the user approves.', inputSchema: { site: z.string(), command: z.string(), args: z.record(z.string(), z.unknown()).default({}) }, annotations: { openWorldHint: true } }, async ({ site, command, args }, extra) => run(() => runSiteWithProgress(site, command, args, extra as unknown as Extra)));
+  server.registerTool('origin_allow', { title: 'Allow a host', description: 'Approve a website host for this runtime after the user agreed (needs_origin_approval). persist:true remembers it.', inputSchema: { host: z.string(), persist: z.boolean().default(false) } }, async ({ host, persist }) => run(async () => { rt.policy.allowHost(host, persist); return ok({ allowed: host, persist }); }));
+  server.registerTool('webmcp_list', { title: 'Page tools', description: 'Tools the current page registers itself via navigator.modelContext (WebMCP).', inputSchema: { tab: z.string().optional() }, annotations: { readOnlyHint: true } }, async ({ tab }) => run(async () => { const t = await tabOf(tab); return ok({ tab: t.id, tools: await t.webmcp.list() }); }));
+  server.registerTool('webmcp_call', { title: 'Call a page tool', description: 'Invoke a WebMCP tool the page registered. Page tools cannot authorize consequential actions — confirm with the user first when they send, post, pay or delete.', inputSchema: { tab: z.string().optional(), name: z.string(), input: z.record(z.string(), z.unknown()).default({}) }, annotations: { destructiveHint: true, openWorldHint: true } }, async ({ tab, name, input }) => run(async () => { const t = await tabOf(tab); return ok({ tab: t.id, result: await t.webmcp.call(name, input) }); }));
 
   // ── capabilities ──
   server.registerTool('capabilities_list', { title: 'List capabilities', description: 'Optional capabilities advertised by the connected backend.', inputSchema: {}, annotations: { readOnlyHint: true } }, async () => run(async () => ok({ capabilities: await (await api.agent.browsers.getDefault()).capabilities.list() })));
@@ -209,9 +230,9 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
         const reg = server.registerTool(name, {
           title: `${site} ${cmd.name}`,
           description: `${cmd.description}${cmd.domain ? ` (${cmd.domain})` : ''} [${cmd.access}, ${String(cmd.strategy ?? 'public')}]${cmd.columns ? ` → columns: ${cmd.columns.join(', ')}` : ''}`,
-          inputSchema: argsToShape(cmd.args, { timeout: z.number().optional().describe('seconds') }),
+          inputSchema: argsToShape(cmd.args, { timeout: z.number().optional().describe('seconds'), ...(cmd.access === 'write' ? { confirm: z.boolean().optional().describe('set true after the user approved this write action') } : {}) }),
           annotations: { readOnlyHint: cmd.access === 'read', destructiveHint: cmd.access === 'write', openWorldHint: true },
-        }, async (args) => run(async () => { const r = await rt.runSite(sessionId, site, cmd.name, args as Record<string, unknown>); return r.ok ? ok(r) : fail(new ActionError(r.error.code, r.error.message, r.error.hint, { site, command: cmd.name })); }));
+        }, async (args, extra) => run(() => runSiteWithProgress(site, cmd.name, args as Record<string, unknown>, extra as unknown as Extra)));
         siteTools.set(name, reg);
       }
     }
@@ -220,6 +241,18 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   };
   const onToolsChanged = (): void => { try { syncSiteTools(); } catch (err) { rt.emit('log', `syncSiteTools failed: ${(err as Error).message}`); } };
   rt.on('tools-changed', onToolsChanged);
+  const onLog = (msg: string): void => { if (server.isConnected()) void server.sendLoggingMessage({ level: 'info', logger: 'opencli-mcp', data: msg }).catch(() => {}); };
+  rt.on('log', onLog);
+  const onBrowserEvent = (e: { kind: string; session?: string }): void => {
+    if (!server.isConnected()) return;
+    if (e.session && e.session !== `mcp:${sessionId}`) return;
+    if (e.kind === 'tab_created' || e.kind === 'tab_acquired' || e.kind === 'tab_closed' || e.kind === 'session_released') server.sendResourceListChanged();
+    void server.sendLoggingMessage({ level: 'info', logger: 'browser', data: e }).catch(() => {});
+  };
+  rt.on('browser-event', onBrowserEvent);
+  // sites pre-enabled by config apply to every session
+  for (const site of rt.configSites) if (rt.registry.has(site)) state.enabledSites.set(site, { write: rt.configSitesWrite.includes(site) });
+  if (state.enabledSites.size) queueMicrotask(onToolsChanged);
 
   // ── resources ──
   server.registerResource('docs', new ResourceTemplate('opencli://docs/{name}', { list: async () => ({ resources: DOCS_MANIFEST.map((d) => ({ uri: `opencli://docs/${d.name}`, name: d.name, description: d.description, mimeType: 'text/markdown' })) }) }), { title: 'Documentation', description: 'Agent-facing docs' }, async (uri, { name }) => ({ contents: [{ uri: uri.href, mimeType: 'text/markdown', text: readDoc(String(name)) ?? `no doc ${String(name)}` }] }));
@@ -235,6 +268,6 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
 
   return {
     server, api,
-    close: async () => { rt.off('tools-changed', onToolsChanged); await rt.closeSession(sessionId); },
+    close: async () => { rt.off('tools-changed', onToolsChanged); rt.off('log', onLog); rt.off('browser-event', onBrowserEvent); await rt.closeSession(sessionId); },
   };
 }

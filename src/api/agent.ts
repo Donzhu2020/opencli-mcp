@@ -10,6 +10,7 @@ import type { ExtensionRuntimePage, UserTabInfo } from '../backends/extension-pa
 import { importDist } from '../lib/opencli.js';
 import { lineDiff } from './diff.js';
 import { ActionError } from './errors.js';
+import { Policy } from '../runtime/policy.js';
 import { discoverEndpoints, type DiscoverResult } from '../recon/discover.js';
 import { compileFromTrace, listDefinedTools, type ToolDefinition } from '../sites/define.js';
 import { buildInstructions, readDoc, type DocContext } from '../docs/manifest.js';
@@ -22,13 +23,14 @@ export type Target =
 
 export type ActAction = 'click' | 'dblclick' | 'hover' | 'focus' | 'fill' | 'type' | 'press' | 'select' | 'check' | 'uncheck' | 'upload' | 'drag' | 'scroll' | 'back' | 'forward' | 'reload';
 
-export interface ActOptions { target?: Target; action: ActAction; value?: string; files?: string[]; to?: Target; direction?: 'up' | 'down' | 'left' | 'right'; amount?: number; timeoutMs?: number }
+export interface ActOptions { target?: Target; action: ActAction; value?: string; files?: string[]; to?: Target; direction?: 'up' | 'down' | 'left' | 'right'; amount?: number; timeoutMs?: number; settleMs?: number }
 
 export interface ObserveOptions { mode?: 'state' | 'screenshot' | 'both'; source?: 'dom' | 'ax'; diff?: boolean; interactive?: boolean; compact?: boolean; maxDepth?: number; maxTextLength?: number; annotate?: boolean; fullPage?: boolean }
 
 export interface ImageValue { __image: true; mimeType: string; base64: string }
 
 type Lib = {
+  waitForDomStableJs: (maxMs: number, quietMs: number) => string;
   formatSnapshot: (raw: string, opts?: Record<string, unknown>) => string;
   buildSemanticFindJs: (opts: Record<string, unknown>) => string;
   buildFindJs: (selector: string, opts?: Record<string, unknown>) => string;
@@ -38,8 +40,8 @@ type Lib = {
 };
 let libPromise: Promise<Lib> | null = null;
 function lib(): Promise<Lib> {
-  if (!libPromise) libPromise = Promise.all([importDist('snapshotFormatter.js'), importDist('browser/find.js'), importDist('browser/target-resolver.js')])
-    .then(([sf, fd, tr]) => ({ formatSnapshot: sf.formatSnapshot, buildSemanticFindJs: fd.buildSemanticFindJs, buildFindJs: fd.buildFindJs, isFindError: fd.isFindError, resolveTargetJs: tr.resolveTargetJs, selectResolvedJs: tr.selectResolvedJs }));
+  if (!libPromise) libPromise = Promise.all([importDist('snapshotFormatter.js'), importDist('browser/find.js'), importDist('browser/target-resolver.js'), importDist('browser/dom-helpers.js')])
+    .then(([sf, fd, tr, dh]) => ({ waitForDomStableJs: dh.waitForDomStableJs, formatSnapshot: sf.formatSnapshot, buildSemanticFindJs: fd.buildSemanticFindJs, buildFindJs: fd.buildFindJs, isFindError: fd.isFindError, resolveTargetJs: tr.resolveTargetJs, selectResolvedJs: tr.selectResolvedJs }));
   return libPromise;
 }
 
@@ -67,6 +69,7 @@ export class Tab {
 
   async goto(url: string, opts: { waitUntil?: 'load' | 'none'; settleMs?: number } = {}): Promise<{ url: string | null; title: string | null }> {
     if (!/^https?:\/\//i.test(url)) throw new ActionError('invalid_url', 'Only http(s) URLs can be opened', 'Pass an absolute http:// or https:// URL');
+    Policy.throwIfDenied(this.ctx.rt.policy.checkOrigin(url));
     return this.use(async (page) => {
       await page.goto(url, opts);
       this.ctx.state.trace.record({ kind: 'goto', url, page: this.id });
@@ -175,6 +178,7 @@ export class Tab {
           else if (action === 'hover') await (page as unknown as { tryNativeMouseMove?: (x: number, y: number) => Promise<boolean> }).tryNativeMouseMove?.(resolved.point.x, resolved.point.y);
           else throw new ActionError('unsupported_target', `action "${action}" does not support point targets`);
           record(true, { ref: 'point' });
+          await this.settle(page, opts.settleMs);
           return { ok: true, action, point: resolved.point, method: 'cdp' };
         }
         const { ref, nth } = resolved;
@@ -207,6 +211,7 @@ export class Tab {
           default: throw new ActionError('unsupported_action', `unknown action "${String(action)}"`);
         }
         record(true, { ...result, ref });
+        await this.settle(page, opts.settleMs);
         return { ok: true, action, target: describeTarget(opts.target), ref, ...result };
       } catch (err) {
         record(false);
@@ -218,6 +223,25 @@ export class Tab {
       }
     });
   }
+
+  /** After an action, wait briefly until the DOM stops mutating (Codex-style auto-wait) so the next observe is current. */
+  private async settle(page: RuntimePage, settleMs = 600): Promise<void> {
+    if (settleMs <= 0) return;
+    const L = await lib();
+    try { await page.evaluate(L.waitForDomStableJs(settleMs, Math.min(200, settleMs))); } catch { /* navigation in flight — fine */ }
+  }
+
+  /** WebMCP: tools the page itself registers via navigator.modelContext (page-provided tool source). */
+  readonly webmcp = {
+    list: async (): Promise<Array<{ name: string; description?: string; inputSchema?: unknown }>> => this.use(async (p) => {
+      const r = await p.evaluate(`(async () => { const mc = navigator.modelContext || document.modelContext; if (!mc || typeof mc.getTools !== 'function') return []; const tools = await mc.getTools(); return (tools || []).map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })); })()`);
+      return Array.isArray(r) ? r as Array<{ name: string; description?: string; inputSchema?: unknown }> : [];
+    }),
+    call: async (name: string, input: Record<string, unknown> = {}): Promise<unknown> => this.use(async (p) => {
+      this.ctx.state.trace.record({ kind: 'note', text: `webmcp ${name}(${JSON.stringify(input).slice(0, 120)})`, page: this.id });
+      return p.evaluateWithArgs(`(async () => { const mc = navigator.modelContext || document.modelContext; if (!mc) throw new Error('page exposes no modelContext'); if (typeof mc.executeTool === 'function') return await mc.executeTool(name, input); const tools = await mc.getTools(); const t = (tools || []).find(x => x.name === name); if (!t || typeof t.execute !== 'function') throw new Error('unknown page tool ' + name); return await t.execute(input); })()`, { name, input });
+    }),
+  };
 
   async wait(opts: { text?: string; selector?: string; url?: string; time?: number; timeout?: number } = {}): Promise<{ ok: true }> {
     return this.use(async (page) => {
@@ -272,6 +296,7 @@ export class Browser {
     new: async (url?: string): Promise<Tab> => {
       const page = await this.page();
       if (url && !/^https?:\/\//i.test(url)) throw new ActionError('invalid_url', 'Only http(s) URLs can be opened');
+      if (url) Policy.throwIfDenied(this.ctx.rt.policy.checkOrigin(url));
       if (!page.getActivePage() && url) { await page.goto(url); }
       else { const id = await page.newTab(url); if (id) page.setActivePage(id); if (url) await page.wait({ time: 0.5 }).catch(() => {}); }
       const id = page.getActivePage();
@@ -299,6 +324,7 @@ export class Browser {
   readonly user = {
     openTabs: async (): Promise<UserTabInfo[]> => this.ext(await this.page()).userTabs(),
     claimTab: async (tab: { tabId: number; title?: string; url?: string }): Promise<Tab> => {
+      if (tab.url) Policy.throwIfDenied(this.ctx.rt.policy.checkOrigin(tab.url));
       const page = this.ext(await this.page());
       const r = await page.claim(tab);
       this.ctx.state.trace.record({ kind: 'note', text: `claimed user tab ${tab.tabId} ${r.url ?? ''}` });
@@ -317,6 +343,7 @@ export class Browser {
       const base = [
         { id: 'cdp', description: 'Raw Chrome DevTools Protocol on the current tab (allowlisted methods).' },
         { id: 'viewport', description: 'Temporarily override the viewport size for responsive checks; reset when done.' },
+        { id: 'webmcp', description: 'Tools the current page registers itself (navigator.modelContext); prefer them over clicking through the DOM.' },
       ];
       if (this.type === 'extension') base.push({ id: 'visibility', description: 'Show or hide the session window to the user. Default: background.' });
       return base;
@@ -327,6 +354,7 @@ export class Browser {
       if (id === 'cdp') return { send: (method: string, params?: Record<string, unknown>) => page.cdp(method, params), documentation: () => readDoc('capabilities/cdp') };
       if (id === 'viewport') return { set: ({ width, height }: { width: number; height: number }) => page.cdp('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false }), reset: () => page.cdp('Emulation.clearDeviceMetricsOverride', {}) };
       if (id === 'visibility') { const ext = this.ext(page); return { get: () => ext.getVisibility(), set: (v: boolean) => ext.setVisibility(v), documentation: () => readDoc('capabilities/visibility') }; }
+      if (id === 'webmcp') { const sel = await this.tabs.selected(); if (!sel) throw new ActionError('no_tab', 'Open a tab first'); return { list: () => sel.webmcp.list(), call: (name: string, input?: Record<string, unknown>) => sel.webmcp.call(name, input), documentation: () => readDoc('capabilities/webmcp') }; }
       throw new ActionError('unknown_capability', `no capability "${id}"`);
     },
   };
@@ -372,7 +400,10 @@ export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
     },
     disable: (site: string) => { const ok = state.enabledSites.delete(site); if (ok) rt.emit('tools-changed', { site }); return ok; },
     run: async (site: string, name: string, args: Record<string, unknown> = {}) => {
-      const r = await rt.runSite(sessionId, site, name, args);
+      const { confirm, ...rest } = args as { confirm?: boolean } & Record<string, unknown>;
+      const cmd = await rt.registry.resolve(site, name);
+      if (cmd.access === 'write') Policy.throwIfDenied(rt.policy.checkWrite(`${site}/${name}`, Boolean(confirm)));
+      const r = await rt.runSite(sessionId, site, name, rest);
       if (!r.ok) throw new ActionError(r.error.code, r.error.message, r.error.hint, { site, command: name });
       return r.rows ?? r.value;
     },

@@ -44,29 +44,32 @@ export class NativeHost {
       return false;
     }
     this.port = port;
-    port.onMessage.addListener((msg: HostToExt) => { void this.handle(msg); });
+    const openedAt = Date.now();
+    port.onMessage.addListener((msg: HostToExt) => {
+      // any frame from the host proves the link is real → reset backoff
+      if (this.attempt > 0) { this.attempt = 0; chrome.alarms.clear(RECONNECT_ALARM); }
+      void this.handle(msg);
+    });
     port.onDisconnect.addListener(() => {
       const err = chrome.runtime.lastError?.message ?? null;
       this.lastError = err;
       this.port = null;
       this.status = 'disconnected';
-      console.warn('[opencli-mcp] native host disconnected', err ?? '');
+      const lived = Date.now() - openedAt;
+      if (lived < 2000) this.attempt++; // died at once: host missing/crashing → back off
+      if (this.attempt <= 1 || this.attempt % 10 === 0) console.warn(`[opencli-mcp] native host disconnected after ${lived}ms (attempt ${this.attempt})`, err ?? '');
       this.scheduleReconnect();
     });
     this.status = 'connected';
-    this.attempt = 0;
-    chrome.alarms.clear(RECONNECT_ALARM);
     void this.contextId().then((contextId) => this.send({ type: 'hello', extensionVersion: chrome.runtime.getManifest().version, protocolVersion: PROTOCOL_VERSION, contextId }));
-    console.log('[opencli-mcp] native host connected');
     return true;
   }
 
   private scheduleReconnect(): void {
     if (this.timer) return;
-    const delay = Math.min(5000, 500 * 2 ** Math.min(this.attempt, 4));
-    this.attempt++;
-    this.timer = setTimeout(() => { this.timer = null; this.connect(); }, delay);
-    // alarms survive service-worker restarts; chrome allows >= 30s periods
+    // 1s, 2s, 4s … 30s; after that only the 30s alarm keeps trying (survives SW restarts)
+    const delay = Math.min(30_000, 1000 * 2 ** Math.min(this.attempt, 5));
+    if (this.attempt < 6) this.timer = setTimeout(() => { this.timer = null; this.connect(); }, delay);
     chrome.alarms.create(RECONNECT_ALARM, { periodInMinutes: 0.5 });
   }
 
@@ -77,7 +80,9 @@ export class NativeHost {
   event(event: BrowserEvent): void { this.send({ type: 'event', event }); }
 
   private async handle(msg: HostToExt): Promise<void> {
-    if (!msg || msg.type !== 'command') return;
+    if (!msg) return;
+    if (msg.type === 'ready') { console.log(`[opencli-mcp] host ${msg.version} ready on port ${msg.port}`); return; }
+    if (msg.type !== 'command') return;
     const cmd = msg.command;
     let result: Result;
     try { result = await this.onCommand(cmd); }

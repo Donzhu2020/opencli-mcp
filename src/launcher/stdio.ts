@@ -27,13 +27,11 @@ export async function runStdio(opts: { version: string; forceEmbedded?: boolean 
   }
   log(`host not running (${'error' in health ? health.error : 'embedded mode'}): embedded runtime; browser needs Chrome + extension or OPENCLI_CDP_ENDPOINT`);
   const config = readConfig();
-  const rt = new Runtime({ cdpEndpoint: config.cdpEndpoint, cursor: config.cursor ?? true, log });
+  const rt = new Runtime({ cdpEndpoint: config.cdpEndpoint, cursor: config.cursor ?? true, sites: config.sites, sitesWrite: config.sitesWrite, log });
   await rt.init();
   const session = createMcpServer(rt, 'stdio', { version: opts.version });
-  for (const site of config.sites ?? []) rt.session('stdio').enabledSites.set(site, { write: (config.sitesWrite ?? []).includes(site) });
   const transport = new StdioServerTransport();
   await session.server.connect(transport);
-  if ((config.sites ?? []).length) rt.emit('tools-changed', {});
   transport.onclose = () => { void session.close().then(() => rt.shutdown()).finally(() => process.exit(0)); };
 }
 

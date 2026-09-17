@@ -29,6 +29,9 @@ export class ExtensionBridge extends EventEmitter<BridgeEvents> {
   contextId: string | undefined;
   connected = false;
 
+  /** Set by the host so the extension learns where MCP is served (informational). */
+  ready: { version: string; port: number } | null = null;
+
   constructor(private readonly channel: NativeChannel) {
     super();
     channel.on('message', (raw) => this.onMessage(raw as ExtToHost));
@@ -49,6 +52,7 @@ export class ExtensionBridge extends EventEmitter<BridgeEvents> {
       this.connected = true;
       this.extensionVersion = msg.extensionVersion;
       this.contextId = msg.contextId;
+      if (this.ready) { try { this.channel.send({ type: 'ready', ...this.ready }); } catch { /* ignore */ } }
       this.emit('hello', msg);
       return;
     }

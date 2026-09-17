@@ -57,6 +57,7 @@ export function nativeHostDirs(): Array<{ browser: string; dir: string }> {
       { browser: 'chrome', dir: path.join(base, 'Google', 'Chrome', 'NativeMessagingHosts') },
       { browser: 'chrome-beta', dir: path.join(base, 'Google', 'Chrome Beta', 'NativeMessagingHosts') },
       { browser: 'chrome-canary', dir: path.join(base, 'Google', 'Chrome Canary', 'NativeMessagingHosts') },
+      { browser: 'chrome-for-testing', dir: path.join(base, 'Google', 'Chrome for Testing', 'NativeMessagingHosts') },
       { browser: 'chromium', dir: path.join(base, 'Chromium', 'NativeMessagingHosts') },
       { browser: 'edge', dir: path.join(base, 'Microsoft Edge', 'NativeMessagingHosts') },
       { browser: 'brave', dir: path.join(base, 'BraveSoftware', 'Brave-Browser', 'NativeMessagingHosts') },
@@ -91,18 +92,20 @@ export function writeLauncher(): string {
   return file;
 }
 
-export function install(opts: { browsers?: string[]; extensionId?: string } = {}): { extensionId: string; extensionDir: string; launcher: string; manifests: Array<{ browser: string; file: string; written: boolean }> } {
+export function install(opts: { browsers?: string[]; extensionId?: string; userDataDirs?: string[] } = {}): { extensionId: string; extensionDir: string; launcher: string; manifests: Array<{ browser: string; file: string; written: boolean }> } {
   const { key, id } = ensureExtensionKey();
   const extDir = patchExtensionManifest(key);
   const extensionId = opts.extensionId ?? id;
   const launcher = writeLauncher();
   const manifest = { name: NATIVE_HOST_NAME, description: 'opencli-mcp browser runtime host', path: launcher, type: 'stdio', allowed_origins: [`chrome-extension://${extensionId}/`] };
   const manifests: Array<{ browser: string; file: string; written: boolean }> = [];
-  for (const { browser, dir } of nativeHostDirs()) {
+  // Chrome resolves user-level hosts relative to its user data dir: custom --user-data-dir profiles get their own copy
+  const targets = [...nativeHostDirs(), ...(opts.userDataDirs ?? []).map((d) => ({ browser: `profile:${d}`, dir: path.join(d, 'NativeMessagingHosts') }))];
+  for (const { browser, dir } of targets) {
     if (opts.browsers && !opts.browsers.includes(browser)) continue;
     const parent = path.dirname(dir);
     // only write where the browser profile dir exists (or for explicitly requested browsers)
-    if (!opts.browsers && !fs.existsSync(parent)) { manifests.push({ browser, file: path.join(dir, `${NATIVE_HOST_NAME}.json`), written: false }); continue; }
+    if (!opts.browsers && !browser.startsWith('profile:') && !fs.existsSync(parent)) { manifests.push({ browser, file: path.join(dir, `${NATIVE_HOST_NAME}.json`), written: false }); continue; }
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, `${NATIVE_HOST_NAME}.json`);
     fs.writeFileSync(file, JSON.stringify(manifest, null, 2));

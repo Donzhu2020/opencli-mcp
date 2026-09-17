@@ -64,6 +64,7 @@ function resolverJs(spec: ActSpec): string {
     if (needEnabled && !enabled(el)) return { error: { code: 'not_enabled', message: 'target is disabled' }, retry: true };
     try { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); } catch {}
     return new Promise((res) => {
+      // wall-clock polling, not requestAnimationFrame: agent tabs are background tabs, where Chrome pauses rAF
       const t0 = performance.now(); let prev = null; let stable = 0;
       const tick = () => {
         const r = el.getBoundingClientRect(); const cur = [r.left, r.top, r.width, r.height].map(Math.round).join(',');
@@ -77,9 +78,9 @@ function resolverJs(spec: ActSpec): string {
           el.setAttribute('data-opencli-act', '1');
           const ce = el.isContentEditable; const tag = el.tagName.toLowerCase();
           res({ ok: true, x: cx, y: cy, matches_n: candidates.length, visible_n: visible.length, tag, hit, blocker: hit === 'other' ? desc(hitEl) : null, editable: ce || ((tag === 'input' || tag === 'textarea') && !el.readOnly), checkable: tag === 'input' && (el.type === 'checkbox' || el.type === 'radio') || ['checkbox','radio','switch'].includes(el.getAttribute('role') || ''), checked: el.checked ?? (el.getAttribute('aria-checked') === 'true'), isSelect: tag === 'select', ref: el.getAttribute('data-opencli-ref') });
-        } else requestAnimationFrame(tick);
+        } else setTimeout(tick, 40);
       };
-      requestAnimationFrame(tick);
+      setTimeout(tick, 0);
     });
   })()`;
 }

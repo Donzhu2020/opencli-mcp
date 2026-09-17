@@ -140,11 +140,14 @@ export class SessionManager {
     let windowId = s.windowId ?? await pick();
     const target = url && isHttp(url) ? url : 'about:blank';
     // Register the load watcher before the tab exists so a fast (cached) load is never missed.
-    let createdId = -1; let loaded = false;
+    let createdId = -1; let loaded = false; let navError: string | null = null;
     const loadedP = new Promise<void>((resolve) => {
-      const listener = (id: number, info: chrome.tabs.OnUpdatedInfo) => { if (id === createdId && info.status === 'complete') { loaded = true; chrome.tabs.onUpdated.removeListener(listener); resolve(); } };
+      const done = () => { chrome.tabs.onUpdated.removeListener(listener); chrome.webNavigation.onErrorOccurred.removeListener(onErr); resolve(); };
+      const listener = (id: number, info: chrome.tabs.OnUpdatedInfo) => { if (id === createdId && info.status === 'complete') { loaded = true; done(); } };
+      const onErr = (d: chrome.webNavigation.WebNavigationFramedErrorCallbackDetails) => { if (d.tabId === createdId && d.frameId === 0) { navError = d.error; done(); } };
       chrome.tabs.onUpdated.addListener(listener);
-      setTimeout(() => { chrome.tabs.onUpdated.removeListener(listener); resolve(); }, 15_000);
+      chrome.webNavigation.onErrorOccurred.addListener(onErr);
+      setTimeout(done, 15_000);
     });
     let tab: chrome.tabs.Tab;
     try { tab = await chrome.tabs.create({ windowId, url: target, active: s.visible }); }
@@ -154,6 +157,7 @@ export class SessionManager {
       const t = await chrome.tabs.get(createdId).catch(() => null);
       if (t?.status === 'complete' && t.url) loaded = true; else await loadedP;
       tab = await chrome.tabs.get(createdId).catch(() => tab);
+      if (navError) throw new SessionError('page_not_loaded', `navigation to ${target} failed: ${navError}`, 'The browser blocked or could not reach the URL (policy, offline, DNS, or an extension). Check chrome://policy and the network.');
       if (!loaded) console.warn(`[opencli-mcp] tab ${createdId} did not finish loading ${target} within 15s (url=${tab.url ?? ''})`);
     }
     const tabId = tab.id!;

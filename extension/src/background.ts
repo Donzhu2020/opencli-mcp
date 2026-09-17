@@ -160,6 +160,19 @@ async function handleExec(cmd: Command, s: Session): Promise<Result> {
   return pageScoped(cmd.id, tabId, await executor.evaluateAsync(tabId, cmd.code, aggressive, commandTimeoutMs(cmd)));
 }
 
+/** True when the tab's committed document is Chrome's error page (blocked / DNS / refused), which the tabs API hides behind the requested URL. */
+async function isErrorDocument(tabId: number): Promise<string | null> {
+  try {
+    const r = await executor.evaluateAsync(tabId, `document.documentURI`, false, 2_000);
+    const uri = typeof r === 'string' ? r : '';
+    return uri.startsWith('chrome-error://') ? uri : null;
+  } catch { return null; }
+}
+
+function notLoaded(id: string, target: string, detail: string): Result {
+  return { id, ok: false, errorCode: 'page_not_loaded', error: `navigation to ${target} did not load: ${detail}`, errorHint: 'The browser blocked or could not reach the URL (policy, an extension, offline, DNS). Check the URL is reachable from this browser; chrome://policy lists URL blocklists.' };
+}
+
 async function handleNavigate(cmd: Command, s: Session): Promise<Result> {
   if (!cmd.url) return { id: cmd.id, ok: false, error: 'Missing url' };
   if (!isSafeNavigationUrl(cmd.url)) return { id: cmd.id, ok: false, error: 'Blocked URL scheme — only http:// and https:// are allowed', errorCode: 'invalid_url' };
@@ -170,23 +183,32 @@ async function handleNavigate(cmd: Command, s: Session): Promise<Result> {
   if (normalizeUrl(before.url) === normalizeUrl(target) || (before.pendingUrl && normalizeUrl(before.pendingUrl) === normalizeUrl(target))) {
     // already there, or just created for this URL (createTab already waited for the load once)
     const t = hadTab ? await waitForLoad(tabId, 15_000) : before;
-    if (!t.url) return { id: cmd.id, ok: false, errorCode: 'page_not_loaded', error: `navigation to ${target} did not commit (status ${t.status})`, errorHint: 'The page was blocked, offline, or cancelled; check the URL is reachable from this browser.' };
+    if (!t.url) return notLoaded(cmd.id, target, `did not commit (status ${t.status})`);
+    const errDoc = await isErrorDocument(tabId);
+    if (errDoc) return notLoaded(cmd.id, target, `the browser shows its error page (${errDoc})`);
     return pageScoped(cmd.id, tabId, { title: t.title, url: t.url, timedOut: t.status !== 'complete' });
   }
   if (!executor.hasActiveNetworkCapture(tabId)) await executor.detach(tabId);
   const beforeNorm = normalizeUrl(before.url);
+  let navError: string | null = null;
+  const onErr = (d: chrome.webNavigation.WebNavigationFramedErrorCallbackDetails) => { if (d.tabId === tabId && d.frameId === 0) navError = d.error; };
+  chrome.webNavigation.onErrorOccurred.addListener(onErr);
   await chrome.tabs.update(tabId, { url: target });
   let timedOut = false;
   await new Promise<void>((resolve) => {
     let done = false;
-    const finish = () => { if (done) return; done = true; chrome.tabs.onUpdated.removeListener(listener); clearTimeout(timer); clearTimeout(check); resolve(); };
+    const finish = () => { if (done) return; done = true; chrome.tabs.onUpdated.removeListener(listener); chrome.webNavigation.onErrorOccurred.removeListener(onErr); clearTimeout(timer); clearTimeout(check); resolve(); };
     const isDone = (url?: string) => normalizeUrl(url) === normalizeUrl(target) || normalizeUrl(url) !== beforeNorm;
     const listener = (id: number, info: chrome.tabs.OnUpdatedInfo, tab: chrome.tabs.Tab) => { if (id === tabId && info.status === 'complete' && isDone(tab.url ?? info.url)) finish(); };
     chrome.tabs.onUpdated.addListener(listener);
     const check = setTimeout(async () => { try { const t = await chrome.tabs.get(tabId); if (t.status === 'complete' && isDone(t.url)) finish(); } catch { finish(); } }, 100);
     const timer = setTimeout(() => { timedOut = true; finish(); }, 15_000);
   });
+  chrome.webNavigation.onErrorOccurred.removeListener(onErr);
   const after = await chrome.tabs.get(tabId);
+  if (navError) return notLoaded(cmd.id, target, navError);
+  const errDoc = await isErrorDocument(tabId);
+  if (errDoc) return notLoaded(cmd.id, target, `the browser shows its error page (${errDoc})`);
   const lease = s.leases.get(tabId); if (lease) { lease.url = after.url; lease.title = after.title; void sessions.badge(tabId, lease.state === 'handoff' ? 'handoff' : 'active'); }
   return pageScoped(cmd.id, tabId, { title: after.title, url: after.url, timedOut });
 }

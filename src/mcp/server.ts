@@ -131,7 +131,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   // ── tabs ──
   server.registerTool('tab_open', {
     title: 'Open a tab', description: 'Open a URL in a new agent tab (background, in this session’s tab group) and return its id plus the initial page state.',
-    inputSchema: { url: z.string().url().optional(), observe: z.boolean().default(true) },
+    inputSchema: { url: z.string().optional().describe('http(s) URL, or data:text/html,… for a scratch page'), observe: z.boolean().default(true) },
   }, async ({ url, observe }) => run(async () => {
     const b = await api.agent.browsers.getDefault();
     const tab = await b.tabs.new(url);

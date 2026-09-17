@@ -37,7 +37,7 @@ function sessionFor(cmd: Command): Session {
   const key = cmd.session ?? 'default';
   return sessions.get(key, cmd.surface ?? 'browser', cmd.siteSession);
 }
-function isSafeNavigationUrl(url: string): boolean { return url.startsWith('http://') || url.startsWith('https://'); }
+function isSafeNavigationUrl(url: string): boolean { return url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:text/html'); }
 function normalizeUrl(url?: string): string {
   if (!url) return '';
   try { const p = new URL(url); if ((p.protocol === 'https:' && p.port === '443') || (p.protocol === 'http:' && p.port === '80')) p.port = ''; return `${p.protocol}//${p.host}${p.pathname === '/' ? '' : p.pathname}${p.search}${p.hash}`; } catch { return url; }
@@ -87,7 +87,8 @@ async function handleCommand(cmd: Command): Promise<Result> {
         if (!cmd.act) return { id: cmd.id, ok: false, error: 'Missing act spec', errorCode: 'invalid_target' };
         const tabId = await sessions.resolveTab(s, cmd.page);
         await ensureLoaded(tabId);
-        const result = await performAct(tabId, { ...cmd.act, timeoutMs: cmd.act.timeoutMs ?? Math.min(commandTimeoutMs(cmd) ?? 3000, 15_000) }, { aggressive: s.surface === 'browser', cursor: cmd.act.cursor ? (x, y) => sessions.cursor(tabId, x, y, true) : undefined });
+        // the action budget is the spec's own timeout (default 3s) — never the whole command deadline
+        const result = await performAct(tabId, { ...cmd.act, timeoutMs: Math.min(cmd.act.timeoutMs ?? 3000, 60_000) }, { aggressive: s.surface === 'browser', cursor: cmd.act.cursor ? (x, y) => sessions.cursor(tabId, x, y, true) : undefined });
         return pageScoped(cmd.id, tabId, result);
       }
       case 'navigate': return await handleNavigate(cmd, s);

@@ -74,8 +74,8 @@ export class Tab {
   }
 
   async goto(url: string, opts: { waitUntil?: 'load' | 'none'; settleMs?: number } = {}): Promise<{ url: string | null; title: string | null }> {
-    if (!/^https?:\/\//i.test(url)) throw new ActionError('invalid_url', 'Only http(s) URLs can be opened', 'Pass an absolute http:// or https:// URL');
-    Policy.throwIfDenied(this.ctx.rt.policy.checkOrigin(url));
+    if (!/^(https?:\/\/|data:text\/html)/i.test(url)) throw new ActionError('invalid_url', 'Only http(s) (or data:text/html) URLs can be opened', 'Pass an absolute http:// or https:// URL');
+    if (!url.startsWith('data:')) Policy.throwIfDenied(this.ctx.rt.policy.checkOrigin(url));
     return this.use(async (page) => {
       await page.goto(url, opts);
       this.ctx.state.trace.record({ kind: 'goto', url, page: this.id });
@@ -246,8 +246,8 @@ export class Browser {
   readonly tabs = {
     new: async (url?: string): Promise<Tab> => {
       const page = await this.page();
-      if (url && !/^https?:\/\//i.test(url)) throw new ActionError('invalid_url', 'Only http(s) URLs can be opened');
-      if (url) Policy.throwIfDenied(this.ctx.rt.policy.checkOrigin(url));
+      if (url && !/^(https?:\/\/|data:text\/html)/i.test(url)) throw new ActionError('invalid_url', 'Only http(s) (or data:text/html) URLs can be opened');
+      if (url && !url.startsWith('data:')) Policy.throwIfDenied(this.ctx.rt.policy.checkOrigin(url));
       if (!page.getActivePage() && url) { await page.goto(url); }
       else { const id = await page.newTab(url); if (id) page.setActivePage(id); if (url) await page.wait({ time: 0.5 }).catch(() => {}); }
       const id = page.getActivePage();

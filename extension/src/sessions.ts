@@ -34,7 +34,7 @@ const CONTENT_FILE = 'content/cursor.js';
 
 export class SessionError extends Error { constructor(readonly code: string, message: string, readonly hint?: string) { super(message); } }
 
-function isHttp(url?: string): boolean { return Boolean(url && (url.startsWith('http://') || url.startsWith('https://'))); }
+function isHttp(url?: string): boolean { return Boolean(url && (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:text/html'))); }
 
 const STORE_KEY = 'opencli_mcp_sessions_v1';
 type StoredSession = Omit<Session, 'leases' | 'idleTimer'> & { leases: Lease[] };

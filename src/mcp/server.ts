@@ -158,8 +158,8 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     inputSchema: { tab: z.string().optional(), mode: z.enum(['state', 'screenshot', 'both']).default('state'), source: z.enum(['dom', 'ax']).default('dom'), diff: z.boolean().default(true), interactive: z.boolean().optional().describe('only interactive elements'), maxTextLength: z.number().int().optional(), maxDepth: z.number().int().optional(), annotate: z.boolean().default(false).describe('overlay [N] labels on the screenshot'), fullPage: z.boolean().default(false) },
     annotations: { readOnlyHint: true },
   }, async ({ tab, ...o }) => run(async () => { const t = await tabOf(tab); const { data, images } = stripImage({ tab: t.id, ...(await t.observe(o)) }); return ok(data, images); }));
-  server.registerTool('tab_find', { title: 'Find elements', description: 'Query elements by css or semantic locator (role/name/label/text/testid). Returns entries with refs for tab_act.', inputSchema: { tab: z.string().optional(), target: targetSchema, limit: z.number().int().max(100).default(20) }, annotations: { readOnlyHint: true } }, async ({ tab, target, limit }) => run(async () => {
-    const t = await tabOf(tab); const tg = pickTarget(target); if (!tg || 'x' in tg) throw new ActionError('invalid_target', 'find needs css or a semantic locator');
+  server.registerTool('tab_find', { title: 'Find elements', description: 'Query elements by css or semantic locator (role/name/label/text/testid), or describe the element under a point {x,y} (screenshot coordinates). Returns entries with refs for tab_act.', inputSchema: { tab: z.string().optional(), target: targetSchema, limit: z.number().int().max(100).default(20) }, annotations: { readOnlyHint: true } }, async ({ tab, target, limit }) => run(async () => {
+    const t = await tabOf(tab); const tg = pickTarget(target); if (!tg) throw new ActionError('invalid_target', 'find needs css, a semantic locator, or a point {x,y}');
     return ok(await t.find({ ...tg, limit }));
   }));
   server.registerTool('tab_act', {

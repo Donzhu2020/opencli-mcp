@@ -127,10 +127,18 @@ async function waitForLoad(tabId: number, timeoutMs: number): Promise<chrome.tab
     await new Promise((r) => setTimeout(r, 100));
   }
 }
-/** Fail fast instead of hanging when a tab never committed a document (url ''), e.g. a cancelled navigation. */
+/**
+ * A tab can be acted on as soon as it has a committed document (non-empty url) — even while still 'loading'
+ * (long-polling pages never reach 'complete'). Only a tab with no document at all is waited for, briefly, then fails fast.
+ */
 async function ensureLoaded(tabId: number): Promise<void> {
-  const t = await waitForLoad(tabId, 10_000);
-  if (!t.url) throw new SessionError('page_not_loaded', `tab ${tabId} has no committed document (status ${t.status})`, 'Navigate the tab to an http(s) URL first.');
+  const deadline = Date.now() + 5_000;
+  for (;;) {
+    const t = await chrome.tabs.get(tabId);
+    if (t.url) return;
+    if (Date.now() > deadline) throw new SessionError('page_not_loaded', `tab ${tabId} has no committed document (status ${t.status}, pending ${t.pendingUrl ?? 'none'})`, 'The navigation did not commit (blocked, offline, or cancelled). Navigate to a reachable http(s) URL first.');
+    await new Promise((r) => setTimeout(r, 100));
+  }
 }
 
 async function handleExec(cmd: Command, s: Session): Promise<Result> {
@@ -150,12 +158,14 @@ async function handleExec(cmd: Command, s: Session): Promise<Result> {
 async function handleNavigate(cmd: Command, s: Session): Promise<Result> {
   if (!cmd.url) return { id: cmd.id, ok: false, error: 'Missing url' };
   if (!isSafeNavigationUrl(cmd.url)) return { id: cmd.id, ok: false, error: 'Blocked URL scheme — only http:// and https:// are allowed', errorCode: 'invalid_url' };
+  const hadTab = s.preferredTabId !== null || Boolean(cmd.page);
   const tabId = await sessions.resolveTab(s, cmd.page, cmd.url);
   const before = await chrome.tabs.get(tabId);
   const target = cmd.url;
   if (normalizeUrl(before.url) === normalizeUrl(target) || (before.pendingUrl && normalizeUrl(before.pendingUrl) === normalizeUrl(target))) {
-    // already there (or just created for this URL): only wait for the load to finish
-    const t = await waitForLoad(tabId, 15_000);
+    // already there, or just created for this URL (createTab already waited for the load once)
+    const t = hadTab ? await waitForLoad(tabId, 15_000) : before;
+    if (!t.url) return { id: cmd.id, ok: false, errorCode: 'page_not_loaded', error: `navigation to ${target} did not commit (status ${t.status})`, errorHint: 'The page was blocked, offline, or cancelled; check the URL is reachable from this browser.' };
     return pageScoped(cmd.id, tabId, { title: t.title, url: t.url, timedOut: t.status !== 'complete' });
   }
   if (!executor.hasActiveNetworkCapture(tabId)) await executor.detach(tabId);

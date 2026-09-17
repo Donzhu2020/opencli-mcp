@@ -32,7 +32,8 @@ export async function runStdio(opts: { version: string; forceEmbedded?: boolean 
   const session = createMcpServer(rt, 'stdio', { version: opts.version });
   const transport = new StdioServerTransport();
   await session.server.connect(transport);
-  const bye = () => { void session.close().then(() => rt.shutdown()).finally(() => process.exit(0)); };
+  let closing = false;
+  const bye = () => { if (closing) return; closing = true; void session.close().catch(() => {}).then(() => rt.shutdown()).catch(() => {}).finally(() => process.exit(0)); };
   transport.onclose = bye;
   process.stdin.once('end', bye);
 }
@@ -65,7 +66,14 @@ async function proxyToHost(host: string, port: number, token: string, version: s
   client.setNotificationHandler(PromptListChangedNotificationSchema, async () => { await server.sendPromptListChanged(); });
   client.setNotificationHandler(LoggingMessageNotificationSchema, async (n) => { await server.sendLoggingMessage(n.params); });
   const transport = new StdioServerTransport();
-  const bye = (why: string) => { log(why); void client.close().catch(() => {}).finally(() => process.exit(0)); };
+  let closing = false;
+  const bye = (why: string) => {
+    if (closing) return; closing = true;
+    log(why);
+    // detach the close callbacks first: client.close() closes the transport, which would re-enter bye()
+    upstream.onclose = undefined; upstream.onerror = undefined; transport.onclose = undefined;
+    void client.close().catch(() => {}).finally(() => process.exit(0));
+  };
   transport.onclose = () => bye('stdio closed');
   process.stdin.once('end', () => bye('stdin ended'));
   upstream.onclose = () => bye('host connection closed');

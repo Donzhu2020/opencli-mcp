@@ -27,14 +27,15 @@ const targetSchema = z.object({
   testid: z.string().optional().describe('data-testid'),
   x: z.number().optional().describe('viewport x (with y) for coordinate clicks'),
   y: z.number().optional(),
-}).describe('One of: {ref} | {css,nth?} | {role,name} | {label} | {text} | {testid} | {x,y}');
+  frame: z.union([z.string(), z.number().int()]).optional().describe('same-origin iframe to enter first: css selector of the <iframe> or its index'),
+}).describe('One of: {ref} | {css,nth?} | {role,name} | {label} | {text} | {testid} | {x,y}; add frame to target inside a same-origin iframe');
 
 function pickTarget(t: z.infer<typeof targetSchema> | undefined): Target | undefined {
   if (!t) return undefined;
-  if (t.ref !== undefined) return { ref: t.ref };
-  if (t.css) return { css: t.css, nth: t.nth };
+  if (t.ref !== undefined) return { ref: t.ref, frame: t.frame };
+  if (t.css) return { css: t.css, nth: t.nth, frame: t.frame };
   if (t.x !== undefined && t.y !== undefined) return { x: t.x, y: t.y };
-  if (t.role || t.name || t.label || t.text || t.testid) return { role: t.role, name: t.name, label: t.label, text: t.text, testid: t.testid, nth: t.nth };
+  if (t.role || t.name || t.label || t.text || t.testid) return { role: t.role, name: t.name, label: t.label, text: t.text, testid: t.testid, nth: t.nth, frame: t.frame };
   return undefined;
 }
 

@@ -15,7 +15,8 @@ export function installEngineJs(source: string): string {
     if (globalThis.${ENGINE_GLOBAL}) return 'present';
     const module = {};
     ${source}
-    globalThis.${ENGINE_GLOBAL} = new (module.exports.InjectedScript())(globalThis, {
+    globalThis.${ENGINE_GLOBAL}Class = module.exports.InjectedScript();
+    globalThis.${ENGINE_GLOBAL} = new globalThis.${ENGINE_GLOBAL}Class(globalThis, {
       isUnderTest: false, sdkLanguage: 'javascript', frameSeq: 0, testIdAttributeName: 'data-testid',
       stableRafCount: 1, browserName: 'chromium', shouldPrependErrorPrefix: false, isUtilityWorld: true, customEngines: [],
     });
@@ -59,11 +60,26 @@ const ALIGNMENTS = [{ block: 'center', inline: 'center' }, { block: 'end', inlin
 function resolveJs(selector: string, fallback: string | null, spec: ActSpec, alignment: { block: string; inline: string }): string {
   const strict = WRITE_KINDS.has(spec.kind);
   const states = spec.kind === 'hover' || spec.kind === 'focus' || spec.kind === 'scroll' ? ['visible'] : spec.kind === 'fill' || spec.kind === 'type' ? ['visible', 'enabled', 'editable'] : ['visible', 'enabled'];
+  const frame = spec.target.frame;
   return `(async () => {
-    const injected = globalThis.${ENGINE_GLOBAL};
+    let injected = globalThis.${ENGINE_GLOBAL};
+    let root = document; let offset = { x: 0, y: 0 };
+    const frameSpec = ${JSON.stringify(frame ?? null)};
+    if (frameSpec !== null) {
+      // enter a same-origin iframe the way the plugin's enter-frame does: locate the frame element, then run a fresh engine instance in its window
+      const frames = typeof frameSpec === 'number' ? [...document.querySelectorAll('iframe,frame')] : injected.querySelectorAll(injected.parseSelector(frameSpec), document);
+      const fe = typeof frameSpec === 'number' ? frames[frameSpec] : frames[0];
+      if (!fe) return { error: { code: 'frame_not_found', message: 'no iframe matches ' + String(frameSpec) } };
+      let fw = null; try { fw = fe.contentWindow; if (fw) fw.document; } catch { fw = null; }
+      if (!fw || !fw.document) return { error: { code: 'frame_cross_origin', message: 'the iframe is cross-origin; use tab_evaluate with frame index for read access', hint: 'Cross-origin frames need a separate debugger target; not supported by act yet.' } };
+      try { fe.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }); } catch {}
+      const fr = fe.getBoundingClientRect(); offset = { x: fr.left + fe.clientLeft, y: fr.top + fe.clientTop };
+      if (!fw.${ENGINE_GLOBAL}) fw.${ENGINE_GLOBAL} = new globalThis.${ENGINE_GLOBAL}Class(fw, { isUnderTest: false, sdkLanguage: 'javascript', frameSeq: 0, testIdAttributeName: 'data-testid', stableRafCount: 1, browserName: 'chromium', shouldPrependErrorPrefix: false, isUtilityWorld: true, customEngines: [] });
+      injected = fw.${ENGINE_GLOBAL}; root = fw.document;
+    }
     const strict = ${strict}; const states = ${JSON.stringify(states)}; const align = ${JSON.stringify(alignment)};
     const desc = (el) => { const r = el.getBoundingClientRect(); return { tag: el.tagName.toLowerCase(), role: el.getAttribute('role') || '', text: (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 80), ref: el.getAttribute('data-opencli-ref'), visible: injected.elementState(el, 'visible').matches === true, box: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) } }; };
-    const locate = (sel) => { const parsed = injected.parseSelector(sel); return { parsed, matches: injected.querySelectorAll(parsed, document) }; };
+    const locate = (sel) => { const parsed = injected.parseSelector(sel); return { parsed, matches: injected.querySelectorAll(parsed, root) }; };
     let sel = ${JSON.stringify(selector)}; let { parsed, matches } = locate(sel);
     if (!matches.length && ${JSON.stringify(fallback)}) { sel = ${JSON.stringify(fallback)}; ({ parsed, matches } = locate(sel)); }
     if (!matches.length) return { error: { code: 'not_found', message: 'no element matches ' + sel, hint: 'Observe the page and use a ref, or loosen the locator.' }, retry: true };
@@ -83,10 +99,12 @@ function resolveJs(selector: string, fallback: string | null, spec: ActSpec, ali
     for (const st of states) { const r = injected.elementState(el, st); if (!r.matches) return { error: { code: 'not_' + st, message: 'element is not ' + st + ' after scrolling' }, retry: true }; }
     const box = el.getBoundingClientRect();
     if (box.width <= 0 || box.height <= 0) return { error: { code: 'not_visible', message: 'element has no clickable box' }, retry: true };
-    const x = Math.max(0, box.left + box.width / 2), y = Math.max(0, box.top + box.height / 2);
+    const lx = Math.max(0, box.left + box.width / 2), ly = Math.max(0, box.top + box.height / 2);
+    const x = lx + offset.x, y = ly + offset.y;
     if (x > innerWidth || y > innerHeight) return { error: { code: 'not_visible', message: 'element is outside the viewport' }, retry: true };
-    const hit = injected.expectHitTarget({ x, y }, el);
+    const hit = injected.expectHitTarget({ x: lx, y: ly }, el);
     document.querySelectorAll('[data-opencli-act]').forEach((n) => n.removeAttribute('data-opencli-act'));
+    root.querySelectorAll('[data-opencli-act]').forEach((n) => n.removeAttribute('data-opencli-act'));
     el.setAttribute('data-opencli-act', '1');
     let selectorForReplay = null; try { selectorForReplay = injected.generateSelector(el, { testIdAttributeName: 'data-testid' }).selector; } catch {}
     const tag = el.tagName.toLowerCase();
@@ -94,7 +112,8 @@ function resolveJs(selector: string, fallback: string | null, spec: ActSpec, ali
   })()`;
 }
 
-const ACT_EL = `document.querySelector('[data-opencli-act]')`;
+/** The element marked by the resolver — in the document or in any same-origin iframe entered. */
+const ACT_EL = `(document.querySelector('[data-opencli-act]') || [...document.querySelectorAll('iframe,frame')].map((f) => { try { return f.contentDocument && f.contentDocument.querySelector('[data-opencli-act]'); } catch { return null; } }).find(Boolean))`;
 function settleJs(maxMs: number, quietMs: number): string {
   return `new Promise((res) => { const t0 = performance.now(); let last = performance.now(); const obs = new MutationObserver(() => { last = performance.now(); }); obs.observe(document, { subtree: true, childList: true, attributes: true, characterData: true }); const tick = () => { const now = performance.now(); if (now - last >= ${quietMs} || now - t0 >= ${maxMs}) { obs.disconnect(); res(Math.round(now - t0)); } else setTimeout(tick, 50); }; setTimeout(tick, 50); })`;
 }
@@ -174,8 +193,9 @@ export async function performAct(io: ActIO, spec: ActSpec): Promise<ActResult> {
   const r = await resolve(io, spec, spec.target, timeoutMs, started);
   if (spec.cursor && io.cursor) await io.cursor(r.x, r.y).catch(() => {});
   const base: ActResult = { ok: true, kind: spec.kind, ref: r.ref, matches_n: r.matches_n, visible_n: r.matches_n, match_level: 'exact', point: { x: Math.round(r.x), y: Math.round(r.y) }, method: 'cdp', hit: r.hit, tag: r.tag, waitedMs: Date.now() - started, selector: r.selector ?? undefined };
-  const focus = () => io.evaluate(`(() => { const injected = globalThis.${ENGINE_GLOBAL}; const el = ${ACT_EL}; if (!el) return 'error:notconnected'; const t = injected.retarget(el, 'follow-label') || el; const r = injected.focusNode(t, false); return r; })()`);
-  const readValue = () => io.evaluate(`(() => { const injected = globalThis.${ENGINE_GLOBAL}; const el = ${ACT_EL}; if (!el) return null; const t = injected.retarget(el, 'follow-label') || el; return t.isContentEditable ? t.textContent : t.value; })()`) as Promise<string | null>;
+  const engineFor = `((el) => (el && el.ownerDocument && el.ownerDocument.defaultView && el.ownerDocument.defaultView.${ENGINE_GLOBAL}) || globalThis.${ENGINE_GLOBAL})`;
+  const focus = () => io.evaluate(`(() => { const el = ${ACT_EL}; const injected = ${engineFor}(el); if (!el) return 'error:notconnected'; const t = injected.retarget(el, 'follow-label') || el; const r = injected.focusNode(t, false); return r; })()`);
+  const readValue = () => io.evaluate(`(() => { const el = ${ACT_EL}; const injected = ${engineFor}(el); if (!el) return null; const t = injected.retarget(el, 'follow-label') || el; return t.isContentEditable ? t.textContent : t.value; })()`) as Promise<string | null>;
   const navWait = spec.kind === 'click' || spec.kind === 'dblclick' || spec.kind === 'press' ? io.waitForNavigation?.(300, timeoutMs + 12_000) : undefined;
   switch (spec.kind) {
     case 'hover': await mouse(io, 'mouseMoved', r.x, r.y); break;
@@ -190,7 +210,7 @@ export async function performAct(io: ActIO, spec: ActSpec): Promise<ActResult> {
       const want = spec.kind === 'check';
       if (!r.checkable) throw new ActError('not_checkable', 'target is not a checkbox/radio/switch');
       if (r.checked !== want) { await mouse(io, 'mouseMoved', r.x, r.y); await mouse(io, 'mousePressed', r.x, r.y, 1); await mouse(io, 'mouseReleased', r.x, r.y, 1); }
-      const after = await io.evaluate(`(() => { const injected = globalThis.${ENGINE_GLOBAL}; const el = ${ACT_EL}; return el ? injected.elementState(el, 'checked').matches === true : null; })()`) as boolean | null;
+      const after = await io.evaluate(`(() => { const el = ${ACT_EL}; const injected = ${engineFor}(el); return el ? injected.elementState(el, 'checked').matches === true : null; })()`) as boolean | null;
       Object.assign(base, { checked: after, changed: after !== r.checked });
       if (after !== want) throw new ActError('action_failed', `expected checked=${want} but got ${after}`);
       break;
@@ -199,7 +219,7 @@ export async function performAct(io: ActIO, spec: ActSpec): Promise<ActResult> {
       if (!r.editable) throw new ActError('not_editable', 'target is not an editable field', 'Click the control that opens the editor, or target the input itself.');
       const value = spec.value ?? '';
       // Playwright's fill: sets the value for date/color/range inputs ('done'), or focuses + selects text and asks for input ('needsinput')
-      const outcome = await io.evaluate(`(() => { const injected = globalThis.${ENGINE_GLOBAL}; const el = ${ACT_EL}; if (!el) return 'error:notconnected'; try { return injected.fill(el, ${JSON.stringify(value)}); } catch (e) { return 'error:' + (e && e.message || e); } })()`) as string;
+      const outcome = await io.evaluate(`(() => { const el = ${ACT_EL}; const injected = ${engineFor}(el); if (!el) return 'error:notconnected'; try { return injected.fill(el, ${JSON.stringify(value)}); } catch (e) { return 'error:' + (e && e.message || e); } })()`) as string;
       if (outcome === 'needsinput') {
         if (value === '') await key(io, 'Backspace'); else await io.cdp('Input.insertText', { text: value });
       } else if (outcome !== 'done') throw new ActError('not_editable', outcome.replace(/^error:/, ''));
@@ -207,7 +227,7 @@ export async function performAct(io: ActIO, spec: ActSpec): Promise<ActResult> {
       let verified = actual === value;
       if (!verified) {
         // React/Vue controlled inputs that swallow insertText: native setter + input event, then re-verify
-        await io.evaluate(`(() => { const injected = globalThis.${ENGINE_GLOBAL}; const el = ${ACT_EL}; if (!el) return; const t = injected.retarget(el, 'follow-label') || el; const v = ${JSON.stringify(value)}; if (t.isContentEditable) t.textContent = v; else { const proto = t.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; const set = Object.getOwnPropertyDescriptor(proto, 'value')?.set; if (set) set.call(t, v); else t.value = v; } t.dispatchEvent(new Event('input', { bubbles: true })); t.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+        await io.evaluate(`(() => { const el = ${ACT_EL}; const injected = ${engineFor}(el); if (!el) return; const t = injected.retarget(el, 'follow-label') || el; const v = ${JSON.stringify(value)}; if (t.isContentEditable) t.textContent = v; else { const proto = t.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; const set = Object.getOwnPropertyDescriptor(proto, 'value')?.set; if (set) set.call(t, v); else t.value = v; } t.dispatchEvent(new Event('input', { bubbles: true })); t.dispatchEvent(new Event('change', { bubbles: true })); })()`);
         verified = (await readValue()) === value;
         Object.assign(base, { method: 'dom' });
       }
@@ -226,7 +246,7 @@ export async function performAct(io: ActIO, spec: ActSpec): Promise<ActResult> {
     case 'press': { const f = await focus(); if (f !== 'done' && f !== 'error:notconnected') { /* non-focusable targets still receive page-level keys */ } await key(io, spec.value ?? 'Enter'); Object.assign(base, { key: spec.value ?? 'Enter' }); break; }
     case 'select': {
       if (!r.isSelect) throw new ActError('not_a_select', 'target is not a <select>; click it and choose the option like a user');
-      const res = await io.evaluate(`(() => { const injected = globalThis.${ENGINE_GLOBAL}; const el = ${ACT_EL}; if (!el) return { error: 'gone' }; const want = ${JSON.stringify(spec.value ?? '')}; let r = injected.selectOptions(el, [{ valueOrLabel: want }]); if (r === 'error:optionsnotfound' && /^\\d+$/.test(want)) r = injected.selectOptions(el, [{ index: Number(want) }]); if (typeof r === 'string' && r.startsWith('error:')) return { error: r.slice(6), available: [...el.options].slice(0, 50).map((o) => o.label || o.text) }; return { selected: Array.isArray(r) ? r : [want] }; })()`) as { error?: string; available?: string[]; selected?: string[] };
+      const res = await io.evaluate(`(() => { const el = ${ACT_EL}; const injected = ${engineFor}(el); if (!el) return { error: 'gone' }; const want = ${JSON.stringify(spec.value ?? '')}; let r = injected.selectOptions(el, [{ valueOrLabel: want }]); if (r === 'error:optionsnotfound' && /^\\d+$/.test(want)) r = injected.selectOptions(el, [{ index: Number(want) }]); if (typeof r === 'string' && r.startsWith('error:')) return { error: r.slice(6), available: [...el.options].slice(0, 50).map((o) => o.label || o.text) }; return { selected: Array.isArray(r) ? r : [want] }; })()`) as { error?: string; available?: string[]; selected?: string[] };
       if (res.error) throw new ActError(res.error === 'optionsnotfound' ? 'option_not_found' : res.error, res.error === 'optionsnotfound' ? `no option matches "${spec.value}"` : res.error, undefined, res.available ? { available: res.available } : undefined);
       Object.assign(base, { method: 'dom', selected: res.selected });
       break;
@@ -265,7 +285,7 @@ export async function performAct(io: ActIO, spec: ActSpec): Promise<ActResult> {
   if (navWait) { const nav: { navigated: boolean; url?: string } = await navWait.catch(() => ({ navigated: false })); if (nav.navigated) Object.assign(base, { navigated: true, url: nav.url }); }
   const settleMs = spec.settleMs ?? 600;
   if (settleMs > 0 && !(base as { navigated?: boolean }).navigated) { try { await io.evaluate(settleJs(settleMs, Math.min(200, settleMs)), settleMs + 1500); } catch { /* navigation in flight */ } }
-  try { await io.evaluate(`document.querySelectorAll('[data-opencli-act]').forEach((n) => n.removeAttribute('data-opencli-act'))`, 1000); } catch { /* page changed */ }
+  try { await io.evaluate(`(() => { const el = ${ACT_EL}; if (el) el.removeAttribute('data-opencli-act'); })()`, 1000); } catch { /* page changed */ }
   return base;
 }
 

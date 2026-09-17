@@ -16,11 +16,11 @@ import { compileFromTrace, listDefinedTools, type ToolDefinition } from '../site
 import { buildInstructions, readDoc, type DocContext } from '../docs/manifest.js';
 import { ariaSnapshotJs } from '../shared/engine.js';
 
-export type Target =
+export type Target = ({ frame?: string | number }) & (
   | { ref: number | string }
   | { css: string; nth?: number }
   | { role?: string; name?: string; label?: string; text?: string; testid?: string; nth?: number }
-  | { x: number; y: number };
+  | { x: number; y: number });
 
 export type ActAction = 'click' | 'dblclick' | 'hover' | 'focus' | 'fill' | 'type' | 'press' | 'select' | 'check' | 'uncheck' | 'upload' | 'drag' | 'scroll' | 'back' | 'forward' | 'reload';
 

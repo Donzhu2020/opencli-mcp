@@ -77,7 +77,7 @@ export interface Command {
 }
 
 export type ActKind = 'click' | 'dblclick' | 'hover' | 'focus' | 'fill' | 'type' | 'press' | 'check' | 'uncheck' | 'select' | 'scroll' | 'upload' | 'drag';
-export interface ActTarget { ref?: number | string; css?: string; nth?: number; role?: string; name?: string; label?: string; text?: string; testid?: string; x?: number; y?: number }
+export interface ActTarget { ref?: number | string; css?: string; nth?: number; role?: string; name?: string; label?: string; text?: string; testid?: string; x?: number; y?: number; /** same-origin iframe to enter first: css selector of the <iframe>, or its 0-based index */ frame?: string | number }
 export interface ActSpec {
   kind: ActKind;
   target: ActTarget;

@@ -11,6 +11,7 @@ import { JsSession, safeStringify } from './js-session.js';
 import { buildInstructions, listDocs, readDoc, requiredDocsFor, DOCS_MANIFEST, type DocContext } from '../docs/manifest.js';
 import { argsToShape } from '../sites/schema.js';
 import { listDefinedTools } from '../sites/define.js';
+import { readSiteKnowledge, writeSiteKnowledge } from '../sites/knowledge.js';
 
 type Content = Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>;
 type ToolResult = { content: Content; structuredContent?: Record<string, unknown>; isError?: boolean };
@@ -77,12 +78,28 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     return t;
   };
   const run = async (fn: () => Promise<ToolResult>): Promise<ToolResult> => { try { return await fn(); } catch (err) { return fail(err); } };
+  /** Ask the user through MCP elicitation when the host supports it; null = host cannot ask (fall back to the error shape). */
+  const elicitApproval = async (title: string, message: string): Promise<boolean | null> => {
+    const caps = server.server.getClientCapabilities();
+    if (!caps?.elicitation) return null;
+    try {
+      const r = await server.server.elicitInput({ message: `${title}: ${message}`, requestedSchema: { type: 'object', properties: { approve: { type: 'boolean', title: 'Approve this action', description: message } }, required: ['approve'] } });
+      return r.action === 'accept' && Boolean((r.content as { approve?: boolean } | undefined)?.approve);
+    } catch { return null; }
+  };
   type Extra = { signal?: AbortSignal; _meta?: { progressToken?: string | number }; sendNotification?: (n: { method: 'notifications/progress'; params: { progressToken: string | number; progress: number; total?: number; message?: string } }) => Promise<void> };
   /** Run a long site command with progress heartbeats (when the host passed a progressToken) and cancellation. */
   const runSiteWithProgress = async (site: string, command: string, args: Record<string, unknown>, extra: Extra): Promise<ToolResult> => {
     const { confirm, ...rest } = args as { confirm?: boolean } & Record<string, unknown>;
     const cmd = await rt.registry.resolve(site, command);
-    if (cmd.access === 'write') { const d = rt.policy.checkWrite(`${site}/${command}`, Boolean(confirm)); if (!d.allowed) throw new ActionError(d.code, d.message, d.hint, { retryable: d.retryable }); }
+    if (cmd.access === 'write') {
+      const d = rt.policy.checkWrite(`${site}/${command}`, Boolean(confirm));
+      if (!d.allowed) {
+        const approved = await elicitApproval(`${site} ${command}`, `Run ${site}/${command} with ${JSON.stringify(rest).slice(0, 300)}? This changes the user's account or sends data.`);
+        if (approved === null) throw new ActionError(d.code, d.message, d.hint, { retryable: d.retryable });
+        if (!approved) throw new ActionError('user_declined', `The user declined ${site}/${command}`, undefined, { retryable: false });
+      }
+    }
     const token = extra._meta?.progressToken;
     const started = Date.now();
     let beat: NodeJS.Timeout | undefined;
@@ -182,7 +199,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   server.registerTool('viewport_set', { title: 'Viewport override', description: 'Set (width/height) or reset the viewport for responsive checks.', inputSchema: { width: z.number().int().optional(), height: z.number().int().optional(), reset: z.boolean().default(false) } }, async ({ width, height, reset }) => run(async () => { const cap = await (await api.agent.browsers.getDefault()).capabilities.get('viewport') as { set: (v: { width: number; height: number }) => Promise<unknown>; reset: () => Promise<unknown> }; if (reset || !width || !height) await cap.reset(); else await cap.set({ width, height }); return ok({ ok: true }); }));
 
   // ── recon & tools ──
-  server.registerTool('recon_discover', { title: 'Discover endpoints', description: 'Syntax-aware scan of the page’s loaded scripts for API endpoints (fetch/XHR/jQuery/axios/WebSocket…), merged with captured network evidence. Candidates, not contracts.', inputSchema: { tab: z.string().optional(), maxScripts: z.number().int().max(200).default(40), includeAssets: z.boolean().default(false), includeInline: z.boolean().default(true) }, annotations: { readOnlyHint: true } }, async ({ tab, ...o }) => run(async () => { state.docsRead.add('recon'); const t = await tabOf(tab); return ok(await api.recon.discover(t, o)); }));
+  server.registerTool('recon_discover', { title: 'Discover endpoints', description: 'Syntax-aware scan of the page’s loaded scripts for API endpoints (fetch/XHR/jQuery/axios/WebSocket…), merged with captured network evidence. Candidates, not contracts.', inputSchema: { tab: z.string().optional(), maxScripts: z.number().int().max(200).default(40), includeAssets: z.boolean().default(false), includeInline: z.boolean().default(true), save: z.boolean().default(false).describe('persist candidates (never secrets) into site knowledge') }, annotations: { readOnlyHint: true } }, async ({ tab, ...o }) => run(async () => { state.docsRead.add('recon'); const t = await tabOf(tab); return ok(await api.recon.discover(t, o)); }));
   const argDef = z.object({ name: z.string(), type: z.enum(['string', 'int', 'number', 'boolean']).optional(), default: z.unknown().optional(), required: z.boolean().optional(), help: z.string().optional(), choices: z.array(z.string()).optional() });
   server.registerTool('tools_define', {
     title: 'Define a tool', description: 'Freeze a flow into a persistent site command (<site>_<name>, and sites.<site>.<name>() in js). Provide `func` (source of async (page, args) => {...}) or `pipeline` steps.',
@@ -258,6 +275,8 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   server.registerResource('docs', new ResourceTemplate('opencli://docs/{name}', { list: async () => ({ resources: DOCS_MANIFEST.map((d) => ({ uri: `opencli://docs/${d.name}`, name: d.name, description: d.description, mimeType: 'text/markdown' })) }) }), { title: 'Documentation', description: 'Agent-facing docs' }, async (uri, { name }) => ({ contents: [{ uri: uri.href, mimeType: 'text/markdown', text: readDoc(String(name)) ?? `no doc ${String(name)}` }] }));
   server.registerResource('sites', 'opencli://sites', { title: 'Sites', description: 'All sites with command counts', mimeType: 'application/json' }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(api.sites.list(), null, 2) }] }));
   server.registerResource('site', new ResourceTemplate('opencli://sites/{site}', { list: undefined }), { title: 'Site commands', mimeType: 'application/json' }, async (uri, { site }) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(rt.registry.commands(String(site)).map((c) => ({ name: c.name, description: c.description, access: c.access, strategy: c.strategy, domain: c.domain, args: c.args, columns: c.columns })), null, 2) }] }));
+  server.registerResource('site-knowledge', new ResourceTemplate('opencli://sites/{site}/knowledge', { list: undefined }), { title: 'Site knowledge', description: 'Endpoints/notes recorded for a site (OpenCLI site memory)', mimeType: 'application/json' }, async (uri, { site }) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(readSiteKnowledge(String(site)), null, 2) }] }));
+  server.registerTool('sites_knowledge', { title: 'Site knowledge', description: 'Endpoints, field maps and notes previously recorded for a site (from OpenCLI site memory and recon results). Check before re-discovering.', inputSchema: { site: z.string() }, annotations: { readOnlyHint: true } }, async ({ site }) => run(async () => ok(readSiteKnowledge(site))));
   server.registerResource('trace', 'opencli://session/trace', { title: 'Session trace', mimeType: 'application/json' }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(api.session.trace(), null, 2) }] }));
   server.registerResource('tabs', 'opencli://session/tabs', { title: 'Session tabs', mimeType: 'application/json' }, async (uri) => { let tabs: unknown = []; try { tabs = await (await api.agent.browsers.getDefault()).tabs.list(); } catch { /* none */ } return { contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(tabs, null, 2) }] }; });
   server.registerResource('doctor', 'opencli://doctor', { title: 'Doctor', mimeType: 'application/json' }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(rt.doctor(), null, 2) }] }));

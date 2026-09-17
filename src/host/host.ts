@@ -3,6 +3,7 @@
  * Lives exactly as long as the extension keeps its port open (Chrome's contract) — so the bridge,
  * the port and the debugger attach stay warm together.
  */
+import { Writable } from 'node:stream';
 import { NativeChannel } from './native-messaging.js';
 import { ExtensionBridge } from './bridge.js';
 import { Runtime } from '../runtime/runtime.js';
@@ -11,12 +12,14 @@ import { DEFAULT_PORT, clearHostState, loadOrCreateToken, readConfig, writeHostS
 
 export async function runNativeHost(opts: { version: string }): Promise<void> {
   const log = (m: string): void => { process.stderr.write(`[opencli-mcp host] ${m}\n`); };
-  // stdout belongs to Native Messaging: silence anything that would corrupt frames
-  (console as unknown as { log: unknown }).log = (...a: unknown[]) => log(a.map(String).join(' '));
-  const channel = new NativeChannel(process.stdin, process.stdout);
+  // stdout belongs to Native Messaging: route every other stdout write (console.log, library logs) to stderr
+  const rawWrite = process.stdout.write.bind(process.stdout);
+  const frames = new Writable({ write(chunk, _enc, cb) { rawWrite(chunk as Buffer, cb); } });
+  process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => (process.stderr.write as (...a: unknown[]) => boolean)(chunk, ...rest)) as typeof process.stdout.write;
+  const channel = new NativeChannel(process.stdin, frames);
   const bridge = new ExtensionBridge(channel);
   const config = readConfig();
-  const rt = new Runtime({ bridge, cursor: config.cursor ?? true, cdpEndpoint: config.cdpEndpoint, sites: config.sites, sitesWrite: config.sitesWrite, log });
+  const rt = new Runtime({ bridge, cursor: config.cursor ?? true, cdpEndpoint: config.cdpEndpoint, sites: config.sites, sitesWrite: config.sitesWrite, ablation: config.ablation, log });
   await rt.init();
   const token = loadOrCreateToken();
   let http;
@@ -25,6 +28,7 @@ export async function runNativeHost(opts: { version: string }): Promise<void> {
   bridge.ready = { version: opts.version, port: http.port };
   const state = () => ({ pid: process.pid, port: http.port, host: http.host, token, startedAt: rt.startedAt, extensionVersion: bridge.extensionVersion, contextId: bridge.contextId, version: opts.version });
   bridge.on('hello', (h) => { log(`extension ${h.extensionVersion} connected (protocol ${h.protocolVersion})`); writeHostState(state()); });
+  if (bridge.connected) { bridge.sendReady(); writeHostState(state()); log(`extension ${bridge.extensionVersion} connected before startup finished`); }
   rt.on('browser-event', (e) => log(`event ${e.kind}`));
   log(`listening on http://${http.host}:${http.port}/mcp`);
 

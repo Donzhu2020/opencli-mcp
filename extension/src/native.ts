@@ -47,7 +47,7 @@ export class NativeHost {
     const openedAt = Date.now();
     port.onMessage.addListener((msg: HostToExt) => {
       // any frame from the host proves the link is real → reset backoff
-      if (this.attempt > 0) { this.attempt = 0; chrome.alarms.clear(RECONNECT_ALARM); }
+      this.attempt = 0; void chrome.alarms.clear(RECONNECT_ALARM);
       void this.handle(msg);
     });
     port.onDisconnect.addListener(() => {
@@ -56,7 +56,7 @@ export class NativeHost {
       this.port = null;
       this.status = 'disconnected';
       const lived = Date.now() - openedAt;
-      if (lived < 2000) this.attempt++; // died at once: host missing/crashing → back off
+      this.attempt++; // any disconnect without a host frame in between counts as a failure (reset happens on messages)
       if (this.attempt <= 1 || this.attempt % 10 === 0) console.warn(`[opencli-mcp] native host disconnected after ${lived}ms (attempt ${this.attempt})`, err ?? '');
       this.scheduleReconnect();
     });

@@ -9,7 +9,7 @@ import type { NativeChannel } from './native-messaging.js';
 import type { Action, BrowserEvent, Command, ExtToHost, Result } from '../protocol.js';
 
 export class BrowserCommandError extends Error {
-  constructor(message: string, readonly code: string = 'browser_command_failed', readonly hint?: string) {
+  constructor(message: string, readonly code: string = 'browser_command_failed', readonly hint?: string, readonly data?: unknown) {
     super(message);
     this.name = 'BrowserCommandError';
   }
@@ -31,6 +31,8 @@ export class ExtensionBridge extends EventEmitter<BridgeEvents> {
 
   /** Set by the host so the extension learns where MCP is served (informational). */
   ready: { version: string; port: number } | null = null;
+  /** Push the ready frame now (used when hello arrived before the host finished starting). */
+  sendReady(): void { if (this.ready && this.connected) { try { this.channel.send({ type: 'ready', ...this.ready }); } catch { /* ignore */ } } }
 
   constructor(private readonly channel: NativeChannel) {
     super();
@@ -86,7 +88,7 @@ export class ExtensionBridge extends EventEmitter<BridgeEvents> {
         reject(err as Error);
       }
     });
-    if (!result.ok) throw new BrowserCommandError(result.error ?? `${action} failed`, result.errorCode ?? 'browser_command_failed', result.errorHint);
+    if (!result.ok) throw new BrowserCommandError(result.error ?? `${action} failed`, result.errorCode ?? 'browser_command_failed', result.errorHint, result.data);
     return { data: result.data, page: result.page };
   }
 }

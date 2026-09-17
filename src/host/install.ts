@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash, generateKeyPairSync } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { NATIVE_HOST_NAME } from '../protocol.js';
 import { OPENCLI_MCP_DIR } from './state.js';
@@ -111,7 +112,7 @@ export function install(opts: { browsers?: string[]; extensionId?: string; userD
     fs.writeFileSync(file, JSON.stringify(manifest, null, 2));
     manifests.push({ browser, file, written: true });
     if (process.platform === 'win32') {
-      try { const { execFileSync } = require('node:child_process') as typeof import('node:child_process'); execFileSync('reg', ['add', `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${NATIVE_HOST_NAME}`, '/ve', '/t', 'REG_SZ', '/d', file, '/f'], { stdio: 'ignore' }); } catch { /* best effort */ }
+      try { execFileSync('reg', ['add', `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${NATIVE_HOST_NAME}`, '/ve', '/t', 'REG_SZ', '/d', file, '/f'], { stdio: 'ignore' }); } catch { /* best effort */ }
     }
   }
   return { extensionId, extensionDir: extDir, launcher, manifests };

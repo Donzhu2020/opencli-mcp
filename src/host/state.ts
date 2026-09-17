@@ -12,7 +12,8 @@ export const CONFIG_FILE = path.join(OPENCLI_MCP_DIR, 'config.json');
 export const DEFAULT_PORT = 19850;
 
 export interface HostState { pid: number; port: number; host: string; token: string; startedAt: number; extensionVersion?: string | null; contextId?: string; version: string }
-export interface Config { port?: number; cursor?: boolean; sites?: string[]; sitesWrite?: string[]; cdpEndpoint?: string; policy?: { askNewOrigins?: boolean; confirmWrites?: boolean; allowedHosts?: string[]; blockedHosts?: string[] } }
+export interface Ablation { actMode?: 'extension' | 'host'; observeDiff?: boolean; observeSource?: 'dom' | 'ax'; settleMs?: number; refRescue?: boolean }
+export interface Config { ablation?: Ablation; port?: number; cursor?: boolean; sites?: string[]; sitesWrite?: string[]; cdpEndpoint?: string; policy?: { askNewOrigins?: boolean; confirmWrites?: boolean; allowedHosts?: string[]; blockedHosts?: string[] } }
 
 export function readConfig(): Config {
   try { return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) as Config; } catch { return {}; }

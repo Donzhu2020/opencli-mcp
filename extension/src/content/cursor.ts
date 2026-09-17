@@ -40,6 +40,7 @@ function moveTo(x: number, y: number, animate: boolean): Promise<void> {
   const dist = Math.hypot(x - from.x, y - from.y);
   const duration = !animate || from.x < 0 ? 0 : Math.min(600, 120 + dist * 0.6);
   const start = performance.now();
+  if (duration === 0 || document.visibilityState !== 'visible') { pos = { x, y }; el.style.transform = `translate(${x - 2}px, ${y - 2}px)`; return Promise.resolve(); }
   return new Promise((resolve) => {
     const step = (now: number) => {
       const t = duration === 0 ? 1 : Math.min(1, (now - start) / duration);

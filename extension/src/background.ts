@@ -10,6 +10,7 @@ import * as identity from './identity';
 import { executeWithJournal } from './journal';
 import { NativeHost } from './native';
 import { SessionManager, SessionError, type Session } from './sessions';
+import { performAct, ActError } from './act';
 
 const CDP_ALLOWLIST = new Set([
   'Accessibility.enable', 'Accessibility.getFullAXTree', 'Accessibility.getPartialAXTree',
@@ -52,6 +53,7 @@ async function pageScoped(id: string, tabId: number, data: unknown): Promise<Res
 }
 function errorResult(id: string, err: unknown): Result {
   if (err instanceof SessionError) return { id, ok: false, error: err.message, errorCode: err.code, errorHint: err.hint };
+  if (err instanceof ActError) return { id, ok: false, error: err.message, errorCode: err.code, errorHint: err.hint, data: err.extra };
   const e = err as { message?: string; code?: string; hint?: string };
   const message = e?.message ?? String(err);
   const code = e?.code ?? (/No tab with id|no longer exists/i.test(message) ? 'stale_page' : /Cannot access|chrome:\/\//i.test(message) ? 'not_debuggable' : 'command_failed');
@@ -75,11 +77,19 @@ function enumerateCrossOriginFrames(tree: unknown): Array<{ index: number; frame
 
 // ── router ──
 async function handleCommand(cmd: Command): Promise<Result> {
+  await sessions.ready();
   const s = sessionFor(cmd);
   try {
     switch (cmd.action) {
       case 'ping': return { id: cmd.id, ok: true, data: { pong: true, version: chrome.runtime.getManifest().version } };
       case 'exec': return await handleExec(cmd, s);
+      case 'act': {
+        if (!cmd.act) return { id: cmd.id, ok: false, error: 'Missing act spec', errorCode: 'invalid_target' };
+        const tabId = await sessions.resolveTab(s, cmd.page);
+        await ensureLoaded(tabId);
+        const result = await performAct(tabId, { ...cmd.act, timeoutMs: cmd.act.timeoutMs ?? Math.min(commandTimeoutMs(cmd) ?? 3000, 15_000) }, { aggressive: s.surface === 'browser', cursor: cmd.act.cursor ? (x, y) => sessions.cursor(tabId, x, y, true) : undefined });
+        return pageScoped(cmd.id, tabId, result);
+      }
       case 'navigate': return await handleNavigate(cmd, s);
       case 'tabs': return await handleTabs(cmd, s);
       case 'cookies': return await handleCookies(cmd);
@@ -92,7 +102,6 @@ async function handleCommand(cmd: Command): Promise<Result> {
       case 'network-capture-read': { const tabId = await sessions.resolveTab(s, cmd.page); return pageScoped(cmd.id, tabId, await executor.readNetworkCapture(tabId)); }
       case 'wait-download': return { id: cmd.id, ok: true, data: await executor.waitForDownload(cmd.pattern ?? '', cmd.timeoutMs ?? 30_000) };
       case 'close-window': { const r = await sessions.finalize(s, []); return { id: cmd.id, ok: true, data: { released: true, closedTabs: r.closed, keptTabs: r.kept } }; }
-      case 'bind': return await handleBind(cmd, s);
       // ── session & tab lifecycle ──
       case 'session-name': { if (!cmd.name) return { id: cmd.id, ok: false, error: 'Missing name' }; await sessions.nameSession(s, cmd.name); return { id: cmd.id, ok: true, data: { name: cmd.name } }; }
       case 'user-tabs': return { id: cmd.id, ok: true, data: await sessions.listUserTabs() };
@@ -100,7 +109,7 @@ async function handleCommand(cmd: Command): Promise<Result> {
       case 'mark': { if (!cmd.page) return { id: cmd.id, ok: false, error: 'Missing page' }; const tabId = await identity.resolveTabId(cmd.page); sessions.mark(s, tabId, cmd.mark ?? null); return { id: cmd.id, ok: true, data: { mark: cmd.mark ?? null } }; }
       case 'session-finalize': return { id: cmd.id, ok: true, data: await sessions.finalize(s, cmd.keep ?? []) };
       // ── human visibility ──
-      case 'cursor': { if (typeof cmd.x !== 'number' || typeof cmd.y !== 'number') return { id: cmd.id, ok: false, error: 'Missing x/y' }; const tabId = await sessions.resolveTab(s, cmd.page); const arrived = await sessions.cursor(tabId, cmd.x, cmd.y, cmd.waitForArrival !== false); return pageScoped(cmd.id, tabId, { arrived }); }
+      case 'cursor': { if (typeof cmd.x !== 'number' || typeof cmd.y !== 'number') return { id: cmd.id, ok: false, error: 'Missing x/y' }; const tabId = await sessions.resolveTab(s, cmd.page); const arrived = await sessions.cursor(tabId, cmd.x, cmd.y, cmd.waitForArrival !== false, cmd.timeoutMs ?? 1200); return pageScoped(cmd.id, tabId, { arrived }); }
       case 'visibility': { if (typeof cmd.visible === 'boolean') await sessions.setVisibility(s, cmd.visible); return { id: cmd.id, ok: true, data: { visible: s.visible } }; }
       default: return { id: cmd.id, ok: false, error: `Unknown action: ${String(cmd.action)}`, errorCode: 'unknown_action' };
     }
@@ -109,9 +118,26 @@ async function handleCommand(cmd: Command): Promise<Result> {
   }
 }
 
+/** Resolve when the tab reports status complete (or the timeout elapses); returns the latest tab. */
+async function waitForLoad(tabId: number, timeoutMs: number): Promise<chrome.tabs.Tab> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const t = await chrome.tabs.get(tabId);
+    if (t.status === 'complete' && t.url) return t;
+    if (Date.now() > deadline) return t;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+/** Fail fast instead of hanging when a tab never committed a document (url ''), e.g. a cancelled navigation. */
+async function ensureLoaded(tabId: number): Promise<void> {
+  const t = await waitForLoad(tabId, 10_000);
+  if (!t.url) throw new SessionError('page_not_loaded', `tab ${tabId} has no committed document (status ${t.status})`, 'Navigate the tab to an http(s) URL first.');
+}
+
 async function handleExec(cmd: Command, s: Session): Promise<Result> {
   if (!cmd.code) return { id: cmd.id, ok: false, error: 'Missing code' };
   const tabId = await sessions.resolveTab(s, cmd.page);
+  await ensureLoaded(tabId);
   const aggressive = s.surface === 'browser';
   if (cmd.frameIndex != null) {
     const frames = enumerateCrossOriginFrames(await executor.getFrameTree(tabId));
@@ -128,7 +154,11 @@ async function handleNavigate(cmd: Command, s: Session): Promise<Result> {
   const tabId = await sessions.resolveTab(s, cmd.page, cmd.url);
   const before = await chrome.tabs.get(tabId);
   const target = cmd.url;
-  if (before.status === 'complete' && normalizeUrl(before.url) === normalizeUrl(target)) return pageScoped(cmd.id, tabId, { title: before.title, url: before.url, timedOut: false });
+  if (normalizeUrl(before.url) === normalizeUrl(target) || (before.pendingUrl && normalizeUrl(before.pendingUrl) === normalizeUrl(target))) {
+    // already there (or just created for this URL): only wait for the load to finish
+    const t = await waitForLoad(tabId, 15_000);
+    return pageScoped(cmd.id, tabId, { title: t.title, url: t.url, timedOut: t.status !== 'complete' });
+  }
   if (!executor.hasActiveNetworkCapture(tabId)) await executor.detach(tabId);
   const beforeNorm = normalizeUrl(before.url);
   await chrome.tabs.update(tabId, { url: target });
@@ -143,7 +173,7 @@ async function handleNavigate(cmd: Command, s: Session): Promise<Result> {
     const timer = setTimeout(() => { timedOut = true; finish(); }, 15_000);
   });
   const after = await chrome.tabs.get(tabId);
-  const lease = s.leases.get(tabId); if (lease) { lease.url = after.url; lease.title = after.title; }
+  const lease = s.leases.get(tabId); if (lease) { lease.url = after.url; lease.title = after.title; void sessions.badge(tabId, lease.state === 'handoff' ? 'handoff' : 'active'); }
   return pageScoped(cmd.id, tabId, { title: after.title, url: after.url, timedOut });
 }
 
@@ -162,35 +192,31 @@ async function handleTabs(cmd: Command, s: Session): Promise<Result> {
     }
     case 'new': {
       if (cmd.url && !isSafeNavigationUrl(cmd.url)) return { id: cmd.id, ok: false, error: 'Blocked URL scheme', errorCode: 'invalid_url' };
-      const created = await sessions.createTab(s, cmd.url);
-      if (cmd.url) await new Promise<void>((resolve) => {
-        const listener = (id: number, info: chrome.tabs.OnUpdatedInfo) => { if (id === created.tabId && info.status === 'complete') { chrome.tabs.onUpdated.removeListener(listener); resolve(); } };
-        chrome.tabs.onUpdated.addListener(listener);
-        setTimeout(() => { chrome.tabs.onUpdated.removeListener(listener); resolve(); }, 15_000);
-      });
+      const created = await sessions.createTab(s, cmd.url); // waits for the initial load when a URL is given
       const t = await chrome.tabs.get(created.tabId).catch(() => created.tab);
       return { id: cmd.id, ok: true, page: created.page, data: { url: t.url, title: t.title } };
     }
     case 'close': {
       let tabId: number | undefined;
       if (cmd.page) tabId = await identity.resolveTabId(cmd.page).catch(() => undefined);
-      else if (cmd.index !== undefined) tabId = [...s.leases.keys()][cmd.index];
+      else if (cmd.index !== undefined) tabId = (await sessions.liveLeases(s))[cmd.index]?.tabId;
       else tabId = s.preferredTabId ?? undefined;
       if (tabId === undefined) return { id: cmd.id, ok: false, error: 'Page no longer exists', errorCode: 'stale_page' };
       const lease = s.leases.get(tabId);
+      if (!lease) return { id: cmd.id, ok: false, error: 'Page is not part of this session; only agent tabs can be closed', errorCode: 'page_not_in_session' };
       const page = await identity.resolveTargetId(tabId).catch(() => undefined);
       await executor.detach(tabId).catch(() => {});
       await sessions.badge(tabId, null);
       s.leases.delete(tabId);
       if (s.preferredTabId === tabId) s.preferredTabId = null;
-      if (!lease || lease.origin === 'agent') await chrome.tabs.remove(tabId).catch(() => {});
+      if (lease.origin === 'agent') await chrome.tabs.remove(tabId).catch(() => {});
       identity.evictTab(tabId);
-      return { id: cmd.id, ok: true, data: { closed: page, released: lease?.origin === 'user' } };
+      return { id: cmd.id, ok: true, data: { closed: page, released: lease.origin === 'user' } };
     }
     case 'select': {
       let tabId: number | undefined;
       if (cmd.page) tabId = await identity.resolveTabId(cmd.page).catch(() => undefined);
-      else if (cmd.index !== undefined) tabId = [...s.leases.keys()][cmd.index];
+      else if (cmd.index !== undefined) tabId = (await sessions.liveLeases(s))[cmd.index]?.tabId;
       if (tabId === undefined || !s.leases.has(tabId)) return { id: cmd.id, ok: false, error: 'Page is not in this session', errorCode: 'page_not_in_session' };
       s.preferredTabId = tabId;
       if (s.visible) await chrome.tabs.update(tabId, { active: true }).catch(() => {});
@@ -220,12 +246,4 @@ async function handleCdp(cmd: Command, s: Session): Promise<Result> {
     ? await executor.sendCommandInFrameTarget(tabId, routeFrameId, cmd.cdpMethod, rest, s.surface === 'browser', commandTimeoutMs(cmd) ?? 30_000, typeof targetUrl === 'string' ? targetUrl : undefined)
     : await executor.sendDebuggerCommand({ tabId }, cmd.cdpMethod, _fid !== undefined ? { ...rest, frameId: _fid } : rest, commandTimeoutMs(cmd));
   return pageScoped(cmd.id, tabId, data);
-}
-
-/** Legacy bind: claim the active tab of the last-focused window without an identity snapshot. */
-async function handleBind(cmd: Command, s: Session): Promise<Result> {
-  const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (!active?.id || !isSafeNavigationUrl(active.url ?? '')) return { id: cmd.id, ok: false, error: 'No debuggable tab in the current window', errorCode: 'bound_tab_not_found', errorHint: 'Focus the target tab, then retry.' };
-  const r = await sessions.claimUserTab(s, { tabId: active.id });
-  return { id: cmd.id, ok: true, page: r.page, data: { url: r.tab.url, title: r.tab.title, session: s.key } };
 }

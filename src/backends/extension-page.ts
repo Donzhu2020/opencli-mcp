@@ -8,7 +8,7 @@ import { BrowserCommandError } from '../host/bridge.js';
 import { importDist } from '../lib/opencli.js';
 import { buildEvaluateExpression } from '@jackwener/opencli/browser/utils';
 import type { RuntimePage } from './page-types.js';
-import type { Command } from '../protocol.js';
+import type { Command, ActSpec, ActResult } from '../protocol.js';
 
 export interface ExtensionPageOptions {
   session: string;
@@ -31,6 +31,8 @@ export interface ExtensionPageExtras {
   cursor(x: number, y: number, opts?: { waitForArrival?: boolean }): Promise<void>;
   setVisibility(visible: boolean): Promise<void>;
   getVisibility(): Promise<boolean>;
+  /** Atomic locate→wait→hit-test→input→settle inside the extension. */
+  act(spec: ActSpec): Promise<ActResult>;
 }
 
 export type ExtensionRuntimePage = RuntimePage & ExtensionPageExtras;
@@ -187,6 +189,7 @@ function definePageClass(lib: Lib): any {
         if (!(err instanceof BrowserCommandError)) throw err; /* overlay is best-effort */
       }
     }
+    async act(spec: ActSpec): Promise<ActResult> { return (await this.send('act', { act: spec, timeoutMs: (spec.timeoutMs ?? 3000) + 5000 })).data as ActResult; }
     async setVisibility(visible: boolean): Promise<void> { await this.bridge.send('visibility', { ...this.sessionOpts(), visible }); }
     async getVisibility(): Promise<boolean> { const r = await this.bridge.send('visibility', { ...this.sessionOpts() }); return Boolean((r.data as { visible?: boolean } | undefined)?.visible); }
   };

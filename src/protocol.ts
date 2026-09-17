@@ -14,10 +14,12 @@
 export type Action =
   // page control (superset of OpenCLI's bridge actions so the page semantics port cleanly)
   | 'exec' | 'navigate' | 'tabs' | 'cookies' | 'screenshot' | 'close-window'
-  | 'set-file-input' | 'insert-text' | 'bind' | 'network-capture-start' | 'network-capture-read'
+  | 'set-file-input' | 'insert-text' | 'network-capture-start' | 'network-capture-read'
   | 'wait-download' | 'cdp' | 'frames'
   // session & tab-lifecycle (Codex-style: name, claim, finalize)
   | 'session-name' | 'session-finalize' | 'user-tabs' | 'claim' | 'mark'
+  // atomic interaction at the runtime edge: locate → wait actionable → hit-test → real input → settle
+  | 'act'
   // human visibility
   | 'cursor' | 'visibility' | 'ping';
 
@@ -68,11 +70,40 @@ export interface Command {
   waitForArrival?: boolean;
   /** visibility */
   visible?: boolean;
+  /** act */
+  act?: ActSpec;
+}
+
+export type ActKind = 'click' | 'dblclick' | 'hover' | 'focus' | 'fill' | 'type' | 'press' | 'check' | 'uncheck' | 'select';
+export interface ActTarget { ref?: number | string; css?: string; nth?: number; role?: string; name?: string; label?: string; text?: string; testid?: string; x?: number; y?: number }
+export interface ActSpec {
+  kind: ActKind;
+  target: ActTarget;
+  value?: string;
+  timeoutMs?: number;
+  settleMs?: number;
+  cursor?: boolean;
+  force?: boolean;
+}
+export interface ActResult {
+  ok: true;
+  kind: ActKind;
+  ref?: string | null;
+  matches_n: number;
+  visible_n: number;
+  match_level: 'exact';
+  point: { x: number; y: number };
+  method: 'cdp' | 'dom';
+  hit: 'target' | 'ancestor' | 'other';
+  tag: string;
+  waitedMs: number;
+  filled?: boolean; verified?: boolean; actual?: string; checked?: boolean; changed?: boolean; key?: string;
 }
 
 export interface Result {
   id: string;
   ok: boolean;
+  /** result payload on success; structured error details (e.g. candidates) on failure */
   data?: unknown;
   error?: string;
   errorCode?: string;

@@ -23,6 +23,7 @@ export type Backend = 'extension' | 'cdp' | 'none';
 export interface RuntimeOptions {
   bridge?: ExtensionBridge | null;
   policy?: import('./policy.js').PolicyConfig;
+  ablation?: import('../host/state.js').Ablation;
   sites?: string[];
   sitesWrite?: string[];
   cdpEndpoint?: string;
@@ -72,6 +73,7 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
   cdpEndpoint: string | undefined;
   readonly cursorEnabled: boolean;
   readonly policy: Policy;
+  ablation: import('../host/state.js').Ablation;
   readonly configSites: string[];
   readonly configSitesWrite: string[];
   readonly startedAt = Date.now();
@@ -82,6 +84,7 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
     this.cdpEndpoint = opts.cdpEndpoint ?? process.env.OPENCLI_CDP_ENDPOINT ?? undefined;
     this.cursorEnabled = opts.cursor ?? true;
     this.policy = new Policy(opts.policy);
+    this.ablation = { actMode: 'extension', observeDiff: true, observeSource: 'dom', settleMs: 600, refRescue: true, ...opts.ablation };
     this.configSites = opts.sites ?? [];
     this.configSitesWrite = opts.sitesWrite ?? [];
     if (opts.log) this.on('log', opts.log);

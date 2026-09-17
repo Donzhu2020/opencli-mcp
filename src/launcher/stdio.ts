@@ -27,7 +27,7 @@ export async function runStdio(opts: { version: string; forceEmbedded?: boolean 
   }
   log(`host not running (${'error' in health ? health.error : 'embedded mode'}): embedded runtime; browser needs Chrome + extension or OPENCLI_CDP_ENDPOINT`);
   const config = readConfig();
-  const rt = new Runtime({ cdpEndpoint: config.cdpEndpoint, cursor: config.cursor ?? true, sites: config.sites, sitesWrite: config.sitesWrite, log });
+  const rt = new Runtime({ cdpEndpoint: config.cdpEndpoint, cursor: config.cursor ?? true, sites: config.sites, sitesWrite: config.sitesWrite, ablation: config.ablation, log });
   await rt.init();
   const session = createMcpServer(rt, 'stdio', { version: opts.version });
   const transport = new StdioServerTransport();
@@ -44,7 +44,15 @@ async function proxyToHost(host: string, port: number, token: string, version: s
     instructions: client.getInstructions(),
   });
   server.setRequestHandler(ListToolsRequestSchema, async (r) => client.listTools(r.params));
-  server.setRequestHandler(CallToolRequestSchema, async (r) => client.callTool(r.params) as Promise<Record<string, unknown>>);
+  server.setRequestHandler(CallToolRequestSchema, async (r, extra) => {
+    const token = r.params._meta?.progressToken;
+    return client.callTool(r.params, undefined, {
+      signal: extra.signal,
+      timeout: 1_800_000,
+      resetTimeoutOnProgress: true,
+      ...(token !== undefined && { onprogress: (p) => { void extra.sendNotification({ method: 'notifications/progress', params: { ...p, progressToken: token } }).catch(() => {}); } }),
+    }) as Promise<Record<string, unknown>>;
+  });
   server.setRequestHandler(ListResourcesRequestSchema, async (r) => client.listResources(r.params));
   server.setRequestHandler(ListResourceTemplatesRequestSchema, async (r) => client.listResourceTemplates(r.params));
   server.setRequestHandler(ReadResourceRequestSchema, async (r) => client.readResource(r.params));

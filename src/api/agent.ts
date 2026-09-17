@@ -22,6 +22,7 @@ export type Target =
   | { x: number; y: number };
 
 export type ActAction = 'click' | 'dblclick' | 'hover' | 'focus' | 'fill' | 'type' | 'press' | 'select' | 'check' | 'uncheck' | 'upload' | 'drag' | 'scroll' | 'back' | 'forward' | 'reload';
+type ActKindEdge = 'click' | 'dblclick' | 'hover' | 'focus' | 'fill' | 'type' | 'press' | 'check' | 'uncheck' | 'select';
 
 export interface ActOptions { target?: Target; action: ActAction; value?: string; files?: string[]; to?: Target; direction?: 'up' | 'down' | 'left' | 'right'; amount?: number; timeoutMs?: number; settleMs?: number }
 
@@ -95,16 +96,17 @@ export class Tab {
       const meta = await this.info(page);
       const out: { url: string | null; title: string | null; state?: string; diff?: boolean; changed?: { added: number; removed: number }; image?: ImageValue } = { ...meta };
       if (mode === 'state' || mode === 'both') {
-        const snapOpts = { interactive: opts.interactive, compact: opts.compact ?? true, maxDepth: opts.maxDepth, maxTextLength: opts.maxTextLength, source: opts.source ?? 'dom' };
+        const snapOpts = { interactive: opts.interactive, compact: opts.compact ?? true, maxDepth: opts.maxDepth, maxTextLength: opts.maxTextLength, source: opts.source ?? this.ctx.rt.ablation.observeSource ?? 'dom' };
         const raw = await page.snapshot(snapOpts);
         let text = typeof raw === 'string' ? L.formatSnapshot(raw, snapOpts) : JSON.stringify(raw, null, 2);
-        const key = `${this.id}:${opts.source ?? 'dom'}`;
+        const key = `${this.id}:${snapOpts.source}`;
         const prev = this.ctx.state.lastObserve.get(key);
         this.ctx.state.lastObserve.set(key, text);
-        if (opts.diff !== false && prev && prev !== text) {
+        const diffOn = opts.diff ?? this.ctx.rt.ablation.observeDiff !== false;
+        if (diffOn && prev && prev !== text) {
           const d = lineDiff(prev, text);
           if (d.changedRatio < 0.6) { out.diff = true; out.changed = { added: d.added, removed: d.removed }; text = d.text || '(no visible change)'; }
-        } else if (opts.diff !== false && prev === text) { out.diff = true; out.changed = { added: 0, removed: 0 }; text = '(unchanged since last observe)'; }
+        } else if (diffOn && prev === text) { out.diff = true; out.changed = { added: 0, removed: 0 }; text = '(unchanged since last observe)'; }
         out.state = text;
         this.ctx.state.trace.record({ kind: 'observe', mode: opts.source ?? 'dom', page: this.id, summary: meta.title ?? undefined });
       }
@@ -167,6 +169,19 @@ export class Tab {
     const { action } = opts;
     return this.use(async (page) => {
       const record = (ok: boolean, extra: Record<string, unknown> = {}) => this.ctx.state.trace.record({ kind: 'act', action, target: describeTarget(opts.target), targetRef: typeof extra.ref === 'string' ? extra.ref : undefined, value: opts.value, matchLevel: extra.match_level as string | undefined, ok, page: this.id });
+      // Runtime-edge path: one atomic command inside the extension (locate → wait → hit-test → real input → settle).
+      const EDGE = new Set(['click', 'dblclick', 'hover', 'focus', 'fill', 'type', 'press', 'check', 'uncheck', 'select']);
+      if (this.ctx.rt.ablation.actMode !== 'host' && this.ctx.rt.isExtensionPage(page) && EDGE.has(action) && opts.target) {
+        try {
+          const r = await page.act({ kind: action as ActKindEdge, target: opts.target as Record<string, unknown>, value: opts.value, timeoutMs: opts.timeoutMs, settleMs: opts.settleMs ?? this.ctx.rt.ablation.settleMs, cursor: this.ctx.rt.cursorEnabled });
+          record(true, { ...r, ref: r.ref ?? undefined });
+          return { action, target: describeTarget(opts.target), mode: 'extension', ...r, ok: true };
+        } catch (err) {
+          record(false);
+          const e = err as { code?: string; message?: string; hint?: string; data?: unknown };
+          throw new ActionError(e.code ?? 'action_failed', e.message ?? String(err), e.hint, e.data && typeof e.data === 'object' ? e.data as Record<string, unknown> : undefined);
+        }
+      }
       try {
         if (action === 'back' || action === 'forward' || action === 'reload') { await this[action](); record(true); return { ok: true, action }; }
         if (action === 'scroll' && !opts.target) { await page.scroll(opts.direction ?? 'down', opts.amount); record(true); return { ok: true, action, direction: opts.direction ?? 'down' }; }
@@ -370,7 +385,7 @@ export interface AgentApi {
   sites: Record<string, unknown> & { search(q: string, limit?: number): unknown; list(): unknown; enable(site: string, opts?: { write?: boolean }): { site: string; tools: string[] }; disable(site: string): boolean; run(site: string, name: string, args?: Record<string, unknown>): Promise<unknown> };
   recon: { discover(tab: Tab, opts?: Parameters<typeof discoverEndpoints>[1]): Promise<DiscoverResult> };
   tools: { define(def: ToolDefinition): Promise<{ file: string; site: string; name: string }>; compile(opts: Parameters<typeof compileFromTrace>[1]): ToolDefinition; list(): ReturnType<typeof listDefinedTools>; remove(site: string, name: string): boolean };
-  session: { id: string; name(n: string): Promise<void>; finalize(keep?: Array<{ tab: string | Tab; status: 'deliverable' | 'handoff' }>): Promise<unknown>; trace(): unknown[]; clearTrace(): void };
+  session: { id: string; name(n: string): Promise<void>; finalize(keep?: Array<{ tab: string | Tab; status: 'deliverable' | 'handoff' }>): Promise<unknown>; trace(): unknown[]; clearTrace(): void; runtimeAblation(): Record<string, unknown> };
 }
 
 export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
@@ -444,6 +459,8 @@ export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
       finalize: async (keep = []) => { const b = await getDefault(); return b.tabs.finalize({ keep }); },
       trace: () => state.trace.events,
       clearTrace: () => state.trace.clear(),
+      /** Ablation toggles (mutable at runtime for experiments): actMode, observeDiff, observeSource, settleMs, refRescue. */
+      runtimeAblation: () => rt.ablation as unknown as Record<string, unknown>,
     },
   };
 }

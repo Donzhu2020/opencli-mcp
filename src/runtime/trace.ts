@@ -1,7 +1,7 @@
 /** Session trace: the evidence stream that tools_compile turns into a tool draft, and that resources expose. */
 export type TraceEvent = { t: number; page?: string } & (
   | { kind: 'goto'; url: string }
-  | { kind: 'act'; action: string; target: string; targetSpec?: Record<string, unknown>; targetRef?: string; value?: string; matchLevel?: string; ok: boolean }
+  | { kind: 'act'; action: string; target: string; targetSpec?: Record<string, unknown>; targetSelector?: string; targetRef?: string; value?: string; matchLevel?: string; ok: boolean }
   | { kind: 'observe'; mode: string; summary?: string }
   | { kind: 'network'; url: string; method?: string; status?: number; contentType?: string; bodyBytes?: number }
   | { kind: 'evaluate'; code: string }

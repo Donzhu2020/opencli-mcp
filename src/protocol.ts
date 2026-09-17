@@ -34,6 +34,8 @@ export interface Command {
   /** Target page identity (targetId) for page-scoped commands. */
   page?: string;
   code?: string;
+  /** exec: evaluate in the page's main world (default) or in the engine's isolated world */
+  world?: 'main' | 'engine';
   url?: string;
   op?: 'list' | 'new' | 'close' | 'select';
   index?: number;
@@ -104,6 +106,11 @@ export interface ActResult {
   hit: 'target' | 'ancestor' | 'other';
   tag: string;
   waitedMs: number;
+  /** Playwright-generated selector for replay (tools_compile) */
+  selector?: string;
+  /** set when the action triggered a navigation that has now finished */
+  navigated?: boolean;
+  url?: string;
   filled?: boolean; verified?: boolean; actual?: string; checked?: boolean; changed?: boolean; key?: string;
 }
 

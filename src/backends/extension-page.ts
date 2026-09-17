@@ -187,6 +187,7 @@ function definePageClass(lib: Lib): any {
         if (!(err instanceof BrowserCommandError)) throw err; /* overlay is best-effort */
       }
     }
+    async engineEvaluate(js: string, timeoutMs?: number): Promise<unknown> { return (await this.send('exec', { code: js, world: 'engine', ...(timeoutMs && { timeoutMs }) })).data; }
     async act(spec: ActSpec): Promise<ActResult> { const budget = spec.timeoutMs ?? 3000; return (await this.send('act', { act: { ...spec, timeoutMs: budget }, timeoutMs: budget + 8000 })).data as ActResult; }
     async setVisibility(visible: boolean): Promise<void> { await this.bridge.send('visibility', { ...this.sessionOpts(), visible }); }
     async getVisibility(): Promise<boolean> { const r = await this.bridge.send('visibility', { ...this.sessionOpts() }); return Boolean((r.data as { visible?: boolean } | undefined)?.visible); }

@@ -28,4 +28,6 @@ export interface RuntimePage extends IPage {
   readonly surface: 'browser' | 'adapter';
   /** The interaction engine at this backend's edge (locate → wait → hit-test → real input → settle). */
   act(spec: ActSpec): Promise<ActResult>;
+  /** Evaluate in the engine's world (Playwright injected script available as globalThis.__opencliInjected). */
+  engineEvaluate(js: string, timeoutMs?: number): Promise<unknown>;
 }

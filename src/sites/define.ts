@@ -165,7 +165,8 @@ export function compileFromTrace(trace: TraceEvent[], opts: { site: string; name
         // Re-resolve the target the way the agent did: css directly, semantic locators via a page-side query that tags the element.
         const spec = e.targetSpec ?? {};
         let target: string;
-        if (spec.css) target = JSON.stringify(spec.css);
+        if (e.targetSelector && !e.targetSelector.startsWith('internal:')) target = JSON.stringify(e.targetSelector); // Playwright-generated stable selector
+        else if (spec.css) target = JSON.stringify(spec.css);
         else if (spec.role || spec.name || spec.label || spec.text || spec.testid) { body.push(`  await page.evaluate(${JSON.stringify(locateJs(spec))});`); target = JSON.stringify('[data-opencli-compiled]'); }
         else { body.push(`  // TODO: the agent used a snapshot ref (${e.target}); replace with a stable selector`); target = JSON.stringify(spec.css ?? 'body'); }
         if (e.action === 'click' || e.action === 'dblclick') body.push(`  await page.click(${target});`);

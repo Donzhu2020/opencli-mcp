@@ -11,6 +11,7 @@ import { executeWithJournal } from './journal';
 import { NativeHost } from './native';
 import { SessionManager, SessionError, type Session } from './sessions';
 import { performAct, ActError } from './act';
+import { evaluateInEngine, forgetTab as forgetEngineTab } from './world';
 
 const CDP_ALLOWLIST = new Set([
   'Accessibility.enable', 'Accessibility.getFullAXTree', 'Accessibility.getPartialAXTree',
@@ -28,6 +29,8 @@ const sessions = new SessionManager((e) => host.event(e));
 
 executor.registerListeners();
 executor.registerFrameTracking();
+chrome.tabs.onRemoved.addListener((tabId) => forgetEngineTab(tabId));
+chrome.webNavigation.onCommitted.addListener((d) => { if (d.frameId === 0) forgetEngineTab(d.tabId); });
 chrome.runtime.onInstalled.addListener(() => host.connect());
 chrome.runtime.onStartup.addListener(() => host.connect());
 host.connect();
@@ -147,6 +150,7 @@ async function handleExec(cmd: Command, s: Session): Promise<Result> {
   const tabId = await sessions.resolveTab(s, cmd.page);
   await ensureLoaded(tabId);
   const aggressive = s.surface === 'browser';
+  if (cmd.world === 'engine') return pageScoped(cmd.id, tabId, await evaluateInEngine(tabId, cmd.code, aggressive, commandTimeoutMs(cmd)));
   if (cmd.frameIndex != null) {
     const frames = enumerateCrossOriginFrames(await executor.getFrameTree(tabId));
     const f = frames[cmd.frameIndex];

@@ -14,6 +14,7 @@ import { Policy } from '../runtime/policy.js';
 import { discoverEndpoints, type DiscoverResult } from '../recon/discover.js';
 import { compileFromTrace, listDefinedTools, type ToolDefinition } from '../sites/define.js';
 import { buildInstructions, readDoc, type DocContext } from '../docs/manifest.js';
+import { ariaSnapshotJs } from '../shared/engine.js';
 
 export type Target =
   | { ref: number | string }
@@ -26,7 +27,7 @@ export type ActAction = 'click' | 'dblclick' | 'hover' | 'focus' | 'fill' | 'typ
 export interface ActOptions { target?: Target; action: ActAction; value?: string; files?: string[]; to?: Target; direction?: 'up' | 'down' | 'left' | 'right'; amount?: number; timeoutMs?: number; settleMs?: number; confirm?: boolean }
 const CONSEQUENTIAL_RE = /(submit|pay|purchase|buy|checkout|place order|delete|remove|send|post|publish|confirm|transfer|apply)/i;
 
-export interface ObserveOptions { mode?: 'state' | 'screenshot' | 'both'; source?: 'dom' | 'ax'; diff?: boolean; interactive?: boolean; compact?: boolean; maxDepth?: number; maxTextLength?: number; annotate?: boolean; fullPage?: boolean }
+export interface ObserveOptions { mode?: 'state' | 'screenshot' | 'both'; source?: 'dom' | 'ax' | 'aria'; diff?: boolean; interactive?: boolean; compact?: boolean; maxDepth?: number; maxTextLength?: number; annotate?: boolean; fullPage?: boolean }
 
 export interface ImageValue { __image: true; mimeType: string; base64: string }
 
@@ -101,9 +102,16 @@ export class Tab {
       const meta = await this.info(page);
       const out: { url: string | null; title: string | null; state?: string; diff?: boolean; changed?: { added: number; removed: number }; image?: ImageValue } = { ...meta };
       if (mode === 'state' || mode === 'both') {
-        const snapOpts = { interactive: opts.interactive, compact: opts.compact ?? true, maxDepth: opts.maxDepth, maxTextLength: opts.maxTextLength, source: opts.source ?? 'dom' };
-        const raw = await page.snapshot(snapOpts);
-        let text = typeof raw === 'string' ? L.formatSnapshot(raw, snapOpts) : JSON.stringify(raw, null, 2);
+        const source = opts.source ?? 'dom';
+        const snapOpts = { interactive: opts.interactive, compact: opts.compact ?? true, maxDepth: opts.maxDepth, maxTextLength: opts.maxTextLength, source: source === 'aria' ? 'dom' : source };
+        let text: string;
+        if (source === 'aria') {
+          // Playwright's agent-facing accessibility snapshot; its [ref=eN] refs are valid act targets ({ref:'e12'})
+          text = String(await page.engineEvaluate(ariaSnapshotJs()));
+        } else {
+          const raw = await page.snapshot(snapOpts);
+          text = typeof raw === 'string' ? L.formatSnapshot(raw, snapOpts) : JSON.stringify(raw, null, 2);
+        }
         const key = `${this.id}:${snapOpts.source}`;
         const prev = this.ctx.state.lastObserve.get(key);
         this.ctx.state.lastObserve.set(key, text);
@@ -113,7 +121,7 @@ export class Tab {
           if (d.changedRatio < 0.6) { out.diff = true; out.changed = { added: d.added, removed: d.removed }; text = d.text || '(no visible change)'; }
         } else if (diffOn && prev === text) { out.diff = true; out.changed = { added: 0, removed: 0 }; text = '(unchanged since last observe)'; }
         out.state = text;
-        this.ctx.state.trace.record({ kind: 'observe', mode: opts.source ?? 'dom', page: this.id, summary: meta.title ?? undefined });
+        this.ctx.state.trace.record({ kind: 'observe', mode: source, page: this.id, summary: meta.title ?? undefined });
       }
       if (mode === 'screenshot' || mode === 'both') out.image = await this.screenshot({ annotate: opts.annotate, fullPage: opts.fullPage });
       return out;
@@ -146,7 +154,7 @@ export class Tab {
   async act(opts: ActOptions): Promise<Record<string, unknown>> {
     const { action } = opts;
     return this.use(async (page) => {
-      const record = (ok: boolean, extra: Record<string, unknown> = {}) => this.ctx.state.trace.record({ kind: 'act', action, target: describeTarget(opts.target), targetSpec: opts.target as Record<string, unknown> | undefined, targetRef: typeof extra.ref === 'string' ? extra.ref : undefined, value: opts.value, matchLevel: extra.match_level as string | undefined, ok, page: this.id });
+      const record = (ok: boolean, extra: Record<string, unknown> = {}) => this.ctx.state.trace.record({ kind: 'act', action, target: describeTarget(opts.target), targetSpec: opts.target as Record<string, unknown> | undefined, targetSelector: typeof extra.selector === 'string' ? extra.selector : undefined, targetRef: typeof extra.ref === 'string' ? extra.ref : undefined, value: opts.value, matchLevel: extra.match_level as string | undefined, ok, page: this.id });
       if (this.ctx.rt.policy.confirmWrites && opts.target && CONSEQUENTIAL_RE.test(describeTarget(opts.target)) && (action === 'click' || action === 'dblclick' || action === 'press')) Policy.throwIfDenied(this.ctx.rt.policy.checkWrite(`${action} ${describeTarget(opts.target)}`, Boolean(opts.confirm)));
       try {
         if (action === 'back' || action === 'forward' || action === 'reload') { await this[action](); record(true); return { ok: true, action }; }

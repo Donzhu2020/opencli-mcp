@@ -57,7 +57,7 @@ const WRITE_KINDS = new Set(['click', 'dblclick', 'fill', 'type', 'press', 'chec
 const ALIGNMENTS = [{ block: 'center', inline: 'center' }, { block: 'end', inline: 'end' }, { block: 'start', inline: 'start' }];
 
 /** Page-side: locate + states + scroll + stable box + hit test. Returns {ok,…} or {error:{code,…}, retry?}. */
-function resolveJs(selector: string, fallback: string | null, spec: ActSpec, alignment: { block: string; inline: string }): string {
+export function resolveJs(selector: string, fallback: string | null, spec: ActSpec, alignment: { block: string; inline: string }): string {
   const strict = WRITE_KINDS.has(spec.kind);
   const states = spec.kind === 'hover' || spec.kind === 'focus' || spec.kind === 'scroll' ? ['visible'] : spec.kind === 'fill' || spec.kind === 'type' ? ['visible', 'enabled', 'editable'] : ['visible', 'enabled'];
   const frame = spec.target.frame;
@@ -103,6 +103,7 @@ function resolveJs(selector: string, fallback: string | null, spec: ActSpec, ali
     const lx = Math.max(0, box.left + box.width / 2), ly = Math.max(0, box.top + box.height / 2);
     const x = lx + offset.x, y = ly + offset.y;
     if (x > innerWidth || y > innerHeight) return { error: { code: 'not_visible', message: 'element is outside the viewport' }, retry: true };
+    const tag = el.tagName.toLowerCase();
     // Playwright's elementState throws for states that do not apply to the element (e.g. 'checked' on a text input); treat that as "not in this state"
     const state = (name) => { try { return injected.elementState(el, name).matches; } catch { return null; } };
     const checkable = tag === 'input' && (el.type === 'checkbox' || el.type === 'radio') || ['checkbox', 'radio', 'switch'].includes(el.getAttribute('role') || '');
@@ -111,7 +112,6 @@ function resolveJs(selector: string, fallback: string | null, spec: ActSpec, ali
     root.querySelectorAll('[data-opencli-act]').forEach((n) => n.removeAttribute('data-opencli-act'));
     el.setAttribute('data-opencli-act', '1');
     let selectorForReplay = null; try { selectorForReplay = injected.generateSelector(el, { testIdAttributeName: 'data-testid' }).selector; } catch {}
-    const tag = el.tagName.toLowerCase();
     return { ok: true, x, y, matches_n: matches.length, tag, hit: hit === 'done' ? 'target' : 'other', blocker: hit === 'done' ? null : (hit && hit.hitTargetDescription) || 'another element', editable: state('editable') === true, checkable: checkable, checked: checkable ? state('checked') === true : false, isSelect: tag === 'select', ref: el.getAttribute('data-opencli-ref'), selector: selectorForReplay, usedSelector: sel };
   })()`;
 }
@@ -295,5 +295,20 @@ export async function performAct(io: ActIO, spec: ActSpec): Promise<ActResult> {
 
 /** Aria snapshot (Playwright's agent-facing accessibility text with [ref=eN]); refs resolve via the `aria-ref=eN` engine. */
 export function ariaSnapshotJs(): string {
-  return `(() => { const injected = globalThis.${ENGINE_GLOBAL}; return injected.ariaSnapshot(document.body, { mode: 'ai' }); })()`;
+  // Credential fields (password/otp/email/username/phone by type, autocomplete, id, name, placeholder, label, title — the
+  // ChatGPT plugin's rule) never expose their value to the model: the rendered line keeps the field, drops the text.
+  return `(() => {
+    const injected = globalThis.${ENGINE_GLOBAL};
+    const text = injected.ariaSnapshot(document.body, { mode: 'ai' });
+    const info = injected._lastAriaSnapshotForQuery && injected._lastAriaSnapshotForQuery.info;
+    if (!info) return text;
+    const cred = /user[-_ ]?name|e[-_ ]?mail|one[-_ ]?time[-_ ]?code|password|passcode|passwd|\\botp\\b|\\b(?:2fa|mfa)\\b|phone|mobile|\\btel\\b|cvc|cvv|card[-_ ]?number|ssn/i;
+    const isCred = (el) => { if (!el || !(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return false; if (el.type === 'password') return true; const hay = ['type', 'autocomplete', 'id', 'name', 'placeholder', 'aria-label', 'title'].map((a) => el.getAttribute(a) || '').join(' '); return cred.test(hay); };
+    return text.split('\n').map((line) => {
+      const m = /\[ref=(e\d+)\](:.*)?$/.exec(line);
+      if (!m || !m[2]) return line;
+      const entry = info.get(m[1]);
+      return entry && isCred(entry.element) ? line.slice(0, line.length - m[2].length) + ': <redacted>' : line;
+    }).join('\n');
+  })()`;
 }

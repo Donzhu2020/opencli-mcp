@@ -8,7 +8,7 @@ import { BrowserCommandError } from '../host/bridge.js';
 import { importDist } from '../lib/opencli.js';
 import { buildEvaluateExpression } from '@jackwener/opencli/browser/utils';
 import type { RuntimePage } from './page-types.js';
-import type { Command, ActSpec, ActResult } from '../protocol.js';
+import type { Command, ActSpec, ActResult, DialogInfo } from '../protocol.js';
 
 export interface ExtensionPageOptions {
   session: string;
@@ -188,6 +188,7 @@ function definePageClass(lib: Lib): any {
       }
     }
     async engineEvaluate(js: string, timeoutMs?: number): Promise<unknown> { return (await this.send('exec', { code: js, world: 'engine', ...(timeoutMs && { timeoutMs }) })).data; }
+    async dialog(op: 'get' | 'accept' | 'dismiss', text?: string): Promise<{ dialog: DialogInfo | null; handled?: string }> { return (await this.send('dialog', { dialogOp: op, ...(text !== undefined && { text }), timeoutMs: 10_000 })).data as { dialog: DialogInfo | null; handled?: string }; }
     async act(spec: ActSpec): Promise<ActResult> { const budget = spec.timeoutMs ?? 3000; return (await this.send('act', { act: { ...spec, timeoutMs: budget }, timeoutMs: budget + 8000 })).data as ActResult; }
     async setVisibility(visible: boolean): Promise<void> { await this.bridge.send('visibility', { ...this.sessionOpts(), visible }); }
     async getVisibility(): Promise<boolean> { const r = await this.bridge.send('visibility', { ...this.sessionOpts() }); return Boolean((r.data as { visible?: boolean } | undefined)?.visible); }

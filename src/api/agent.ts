@@ -15,6 +15,7 @@ import { discoverEndpoints, type DiscoverResult } from '../recon/discover.js';
 import { compileFromTrace, listDefinedTools, type ToolDefinition } from '../sites/define.js';
 import { buildInstructions, readDoc, type DocContext } from '../docs/manifest.js';
 import { ariaSnapshotJs } from '../shared/engine.js';
+import type { DialogInfo } from '../protocol.js';
 
 export type Target = ({ frame?: string | number }) & (
   | { ref: number | string }
@@ -207,6 +208,13 @@ export class Tab {
     this.ctx.state.trace.record({ kind: 'evaluate', code: js.slice(0, 200), page: this.id });
     return this.use((page) => opts.frame !== undefined ? page.evaluateInFrame(js, opts.frame) : page.evaluate(js));
   }
+
+  /** Native alert/confirm/prompt dialogs block the page; commands fail with `dialog_open` until answered. */
+  readonly dialog = {
+    get: async (): Promise<DialogInfo | null> => this.use(async (p) => (await p.dialog('get')).dialog),
+    accept: async (text?: string): Promise<DialogInfo | null> => this.use(async (p) => { this.ctx.state.trace.record({ kind: 'note', text: `dialog accept${text !== undefined ? ' ' + JSON.stringify(text) : ''}`, page: this.id }); return (await p.dialog('accept', text)).dialog; }),
+    dismiss: async (): Promise<DialogInfo | null> => this.use(async (p) => { this.ctx.state.trace.record({ kind: 'note', text: 'dialog dismiss', page: this.id }); return (await p.dialog('dismiss')).dialog; }),
+  };
 
   readonly network = {
     start: async (pattern = ''): Promise<boolean> => this.use((p) => p.startNetworkCapture(pattern)),

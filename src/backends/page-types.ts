@@ -1,6 +1,6 @@
 /** The page surface the runtime relies on: OpenCLI's IPage plus the transport-level extras our backends provide. */
 import type { IPage, ScreenshotOptions, BrowserDownloadWaitResult } from '@jackwener/opencli/types';
-import type { ActSpec, ActResult } from '../protocol.js';
+import type { ActSpec, ActResult, DialogInfo } from '../protocol.js';
 
 export interface RuntimePage extends IPage {
   getActivePage(): string | undefined;
@@ -28,6 +28,8 @@ export interface RuntimePage extends IPage {
   readonly surface: 'browser' | 'adapter';
   /** The interaction engine at this backend's edge (locate → wait → hit-test → real input → settle). */
   act(spec: ActSpec): Promise<ActResult>;
+  /** Native JavaScript dialogs: read the pending one, or answer it (accept with optional prompt text / dismiss). */
+  dialog(op: 'get' | 'accept' | 'dismiss', text?: string): Promise<{ dialog: DialogInfo | null; handled?: string }>;
   /** Evaluate in the engine's world (Playwright injected script available as globalThis.__opencliInjected). */
   engineEvaluate(js: string, timeoutMs?: number): Promise<unknown>;
 }

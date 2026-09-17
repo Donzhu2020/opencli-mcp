@@ -18,6 +18,8 @@ export type Action =
   | 'wait-download' | 'cdp' | 'frames'
   // session & tab-lifecycle (Codex-style: name, claim, finalize)
   | 'session-name' | 'session-finalize' | 'user-tabs' | 'claim' | 'mark'
+  // native JavaScript dialogs (alert/confirm/prompt/beforeunload) block the page; the agent sees and answers them explicitly
+  | 'dialog'
   // atomic interaction at the runtime edge: locate → wait actionable → hit-test → real input → settle
   | 'act'
   // human visibility
@@ -38,6 +40,7 @@ export interface Command {
   world?: 'main' | 'engine';
   url?: string;
   op?: 'list' | 'new' | 'close' | 'select';
+  dialogOp?: 'get' | 'accept' | 'dismiss';
   index?: number;
   domain?: string;
   format?: 'png' | 'jpeg';
@@ -94,6 +97,9 @@ export interface ActSpec {
   /** drag */
   to?: ActTarget;
 }
+/** A native JavaScript dialog currently blocking a tab. */
+export interface DialogInfo { type: 'alert' | 'confirm' | 'prompt' | 'beforeunload'; message: string; defaultPrompt?: string; url?: string; openedAt: number }
+
 export interface ActResult {
   ok: true;
   kind: ActKind;

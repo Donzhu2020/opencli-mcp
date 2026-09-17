@@ -57,10 +57,10 @@ async function pageScoped(id: string, tabId: number, data: unknown): Promise<Res
 function errorResult(id: string, err: unknown): Result {
   if (err instanceof SessionError) return { id, ok: false, error: err.message, errorCode: err.code, errorHint: err.hint };
   if (err instanceof ActError) return { id, ok: false, error: err.message, errorCode: err.code, errorHint: err.hint, data: err.extra };
-  const e = err as { message?: string; code?: string; hint?: string };
+  const e = err as { message?: string; code?: string; hint?: string; dialog?: unknown };
   const message = e?.message ?? String(err);
   const code = e?.code ?? (/No tab with id|no longer exists/i.test(message) ? 'stale_page' : /Cannot access|chrome:\/\//i.test(message) ? 'not_debuggable' : 'command_failed');
-  return { id, ok: false, error: message, errorCode: code, errorHint: e?.hint };
+  return { id, ok: false, error: message, errorCode: code, errorHint: e?.hint, ...(e?.dialog ? { data: { dialog: e.dialog } } : {}) };
 }
 function enumerateCrossOriginFrames(tree: unknown): Array<{ index: number; frameId: string; url: string; name: string }> {
   const out: Array<{ index: number; frameId: string; url: string; name: string }> = [];
@@ -113,6 +113,14 @@ async function handleCommand(cmd: Command): Promise<Result> {
       case 'session-finalize': return { id: cmd.id, ok: true, data: await sessions.finalize(s, cmd.keep ?? []) };
       // ── human visibility ──
       case 'cursor': { if (typeof cmd.x !== 'number' || typeof cmd.y !== 'number') return { id: cmd.id, ok: false, error: 'Missing x/y' }; const tabId = await sessions.resolveTab(s, cmd.page); const arrived = await sessions.cursor(tabId, cmd.x, cmd.y, cmd.waitForArrival !== false, cmd.timeoutMs ?? 1200); return pageScoped(cmd.id, tabId, { arrived }); }
+      case 'dialog': {
+        const tabId = await sessions.resolveTab(s, cmd.page);
+        const op = cmd.dialogOp ?? 'get';
+        if (op === 'get') return pageScoped(cmd.id, tabId, { dialog: executor.getDialog(tabId) });
+        if (!executor.getDialog(tabId)) return { id: cmd.id, ok: false, error: 'No native dialog is open on this tab', errorCode: 'no_dialog', errorHint: 'Use dialog get to check; dialogs are tracked only while the debugger is attached.' };
+        const dialog = await executor.handleDialog(tabId, op === 'accept', cmd.text);
+        return pageScoped(cmd.id, tabId, { handled: op, dialog });
+      }
       case 'visibility': { if (typeof cmd.visible === 'boolean') await sessions.setVisibility(s, cmd.visible); return { id: cmd.id, ok: true, data: { visible: s.visible } }; }
       default: return { id: cmd.id, ok: false, error: `Unknown action: ${String(cmd.action)}`, errorCode: 'unknown_action' };
     }

@@ -61,6 +61,39 @@ export type DownloadWaitResult = {
 const networkCaptures = new Map<number, NetworkCaptureState>();
 
 /**
+ * Native JavaScript dialogs (alert/confirm/prompt/beforeunload) freeze the page: every
+ * Runtime/DOM command hangs until the dialog is answered. Track them from Page events
+ * so commands fail fast with `dialog_open` instead of timing out, and let the agent
+ * read and answer the dialog explicitly (the ChatGPT plugin surfaces dialogs as state).
+ */
+export interface PendingDialog { type: 'alert' | 'confirm' | 'prompt' | 'beforeunload'; message: string; defaultPrompt?: string; url?: string; openedAt: number }
+const dialogs = new Map<number, PendingDialog>();
+const dialogWaiters = new Map<number, Set<(d: PendingDialog) => void>>();
+
+export function getDialog(tabId: number): PendingDialog | null { return dialogs.get(tabId) ?? null; }
+
+function dialogOpenError(tabId: number, d: PendingDialog, method: string): Error {
+  return Object.assign(new Error(`${method} blocked: a native ${d.type} dialog is open ("${d.message.slice(0, 120)}")`), {
+    code: 'dialog_open',
+    hint: 'Read it with dialog get; answer it with dialog accept (optionally with prompt text) or dismiss, then retry.',
+    dialog: d,
+    tabId,
+  });
+}
+
+export async function handleDialog(tabId: number, accept: boolean, promptText?: string): Promise<PendingDialog | null> {
+  const d = dialogs.get(tabId) ?? null;
+  await sendDebuggerCommand({ tabId }, 'Page.handleJavaScriptDialog', { accept, ...(promptText !== undefined && { promptText }) }, 5_000);
+  dialogs.delete(tabId);
+  return d;
+}
+
+function noteDialog(tabId: number, d: PendingDialog | null): void {
+  if (d) { dialogs.set(tabId, d); for (const w of dialogWaiters.get(tabId) ?? []) w(d); }
+  else dialogs.delete(tabId);
+}
+
+/**
  * Default deadline for a single chrome.debugger command. chrome.debugger has
  * no timeout of its own: a page-blocking native dialog (alert/confirm/print/
  * beforeunload) makes Runtime.evaluate hang forever, wedging every later
@@ -83,6 +116,15 @@ export async function sendDebuggerCommand<T = unknown>(
   timeoutMs: number = CDP_COMMAND_TIMEOUT_MS,
 ): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const tabId = target.tabId;
+  const isDialogAnswer = method === 'Page.handleJavaScriptDialog';
+  if (tabId !== undefined && !isDialogAnswer) { const d = dialogs.get(tabId); if (d) throw dialogOpenError(tabId, d, method); }
+  let waiter: ((d: PendingDialog) => void) | undefined;
+  const dialogPromise = tabId === undefined || isDialogAnswer ? null : new Promise<never>((_, reject) => {
+    waiter = (d) => reject(dialogOpenError(tabId, d, method));
+    if (!dialogWaiters.has(tabId)) dialogWaiters.set(tabId, new Set());
+    dialogWaiters.get(tabId)!.add(waiter);
+  });
   const commandPromise = (params === undefined
     ? chrome.debugger.sendCommand(target, method)
     : chrome.debugger.sendCommand(target, method, params)) as Promise<T>;
@@ -93,6 +135,7 @@ export async function sendDebuggerCommand<T = unknown>(
   try {
     return await Promise.race([
       commandPromise,
+      ...(dialogPromise ? [dialogPromise] : []),
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error(
           `CDP command ${method} timed out after ${Math.round(timeoutMs / 1000)}s — the page may be blocked by a native dialog (alert/confirm/print)`,
@@ -101,6 +144,7 @@ export async function sendDebuggerCommand<T = unknown>(
     ]);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
+    if (waiter && tabId !== undefined) dialogWaiters.get(tabId)?.delete(waiter);
   }
 }
 
@@ -208,6 +252,8 @@ export async function ensureAttached(tabId: number, aggressiveRetry: boolean = f
   } catch {
     // Some pages may not need explicit enable
   }
+  // Page events carry javascriptDialogOpening/Closed (dialog tracking) — must be enabled per attach
+  await sendDebuggerCommand({ tabId }, 'Page.enable').catch(() => {});
 
   // Restore network capture that the re-attach (detach + onDetach) tore down.
   // The detach always disables the CDP Network domain, so re-enable it and put
@@ -811,7 +857,13 @@ export async function detach(tabId: number): Promise<void> {
 }
 
 export function registerListeners(): void {
+  chrome.debugger.onEvent.addListener((source, method, params: any) => {
+    if (!source.tabId || source.sessionId) return;
+    if (method === 'Page.javascriptDialogOpening') noteDialog(source.tabId, { type: params?.type ?? 'alert', message: String(params?.message ?? ''), defaultPrompt: params?.defaultPrompt, url: params?.url, openedAt: Date.now() });
+    else if (method === 'Page.javascriptDialogClosed') noteDialog(source.tabId, null);
+  });
   chrome.tabs.onRemoved.addListener((tabId) => {
+    dialogs.delete(tabId); dialogWaiters.delete(tabId);
     attached.delete(tabId);
     networkCaptures.delete(tabId);
     tabFrameContexts.delete(tabId);
@@ -819,6 +871,7 @@ export function registerListeners(): void {
   });
   chrome.debugger.onDetach.addListener((source) => {
     if (source.tabId) {
+      dialogs.delete(source.tabId);
       attached.delete(source.tabId);
       networkCaptures.delete(source.tabId);
       tabFrameContexts.delete(source.tabId);

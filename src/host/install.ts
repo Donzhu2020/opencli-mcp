@@ -14,9 +14,14 @@ import { OPENCLI_MCP_DIR } from './state.js';
 export const KEY_FILE = path.join(OPENCLI_MCP_DIR, 'extension-key.json');
 
 export function projectRoot(): string {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  // dist/src/host → root ; src/host → root
-  return fs.existsSync(path.join(here, '../../../package.json')) ? path.resolve(here, '../../..') : path.resolve(here, '../..');
+  // walk up from this file to the nearest package.json that is ours (works from src/ under tsx and from dist/src/)
+  let dir = path.dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 6; i++) {
+    const pkg = path.join(dir, 'package.json');
+    try { if ((JSON.parse(fs.readFileSync(pkg, 'utf8')) as { name?: string }).name === 'opencli-mcp') return dir; } catch { /* keep walking */ }
+    dir = path.dirname(dir);
+  }
+  throw new Error('opencli-mcp project root not found');
 }
 export function extensionDir(): string {
   const root = projectRoot();
@@ -81,14 +86,17 @@ export function writeLauncher(): string {
   const bin = path.join(OPENCLI_MCP_DIR, 'bin');
   fs.mkdirSync(bin, { recursive: true });
   const main = path.join(projectRoot(), 'dist', 'src', 'main.js');
-  const entry = fs.existsSync(main) ? main : path.join(projectRoot(), 'src', 'main.ts');
+  if (!fs.existsSync(main)) throw new Error('dist/src/main.js not found — run `npm run build` before `opencli-mcp install`');
+  const entry = main;
+  // Chrome spawns the host with its own environment; bake the settings the launcher relies on
+  const envLines = ['OPENCLI_MCP_HOME', 'OPENCLI_CDP_ENDPOINT'].filter((k) => process.env[k]).map((k) => process.platform === 'win32' ? `set ${k}=${process.env[k]}` : `export ${k}=${JSON.stringify(process.env[k])}`);
   if (process.platform === 'win32') {
     const file = path.join(bin, 'opencli-mcp-host.cmd');
-    fs.writeFileSync(file, `@echo off\r\n"${process.execPath}" ${entry.endsWith('.ts') ? '--import tsx ' : ''}"${entry}" host --native\r\n`);
+    fs.writeFileSync(file, `@echo off\r\n${envLines.map((l) => l + '\r\n').join('')}"${process.execPath}" "${entry}" host --native\r\n`);
     return file;
   }
   const file = path.join(bin, 'opencli-mcp-host');
-  fs.writeFileSync(file, `#!/bin/sh\nexec "${process.execPath}" ${entry.endsWith('.ts') ? '--import tsx ' : ''}"${entry}" host --native\n`, { mode: 0o755 });
+  fs.writeFileSync(file, `#!/bin/sh\n${envLines.map((l) => l + '\n').join('')}exec "${process.execPath}" "${entry}" host --native\n`, { mode: 0o755 });
   fs.chmodSync(file, 0o755);
   return file;
 }

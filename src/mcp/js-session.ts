@@ -38,9 +38,11 @@ export function transformCode(code: string): string {
   }
   const out = lines.map((line, idx) => {
     if (!topLevel[idx]) return line;
+    if (!/^(\s*)(const|let|var)\s+/.test(maskedLines[idx])) return line; // masked view: not inside a string/template/comment
     const m = /^(\s*)(const|let|var)\s+(.*)$/.exec(line);
     if (!m) return line;
     const rest = m[3];
+    if (!rest.includes('=')) return `${m[1]}${rest.replace(/;\s*$/, '').split(',').map((n) => `${n.trim()} = undefined`).join(', ')};`; // let a, b;
     if (/^[{[]/.test(rest)) {
       // destructuring: const {a, b} = expr;  →  ({a, b} = expr);
       const eq = rest.indexOf('=');
@@ -48,17 +50,21 @@ export function transformCode(code: string): string {
     }
     return `${m[1]}${rest}`;
   });
-  // last top-level non-empty line → return its value when it is an expression
-  for (let idx = out.length - 1; idx >= 0; idx--) {
-    const t = out[idx].trim();
-    if (!t) continue;
-    if (!topLevel[idx]) break;
-    if (STATEMENT_KEYWORDS.test(t) || t.endsWith('{') || t.startsWith('(') && maskedLines[idx].trim().startsWith('({')) break;
-    if (/^[A-Za-z_$][\w$]*\s*=[^=]/.test(t)) { // assignment: return the assigned value too
-      const name = t.split('=')[0].trim(); out.push(`return ${name};`); break;
+  // last top-level statement (may span lines) → return its value when it is an expression
+  let last = out.length - 1;
+  while (last >= 0 && !out[last].trim()) last--;
+  if (last >= 0) {
+    let start = last;
+    while (start > 0 && !topLevel[start]) start--; // back up to the line where this statement began (depth 0)
+    const stmt = out.slice(start, last + 1).join('\n');
+    const t = stmt.trim();
+    const maskedFirst = maskedLines[start].trim();
+    const isStatement = STATEMENT_KEYWORDS.test(t) || maskedFirst.startsWith('({') || /^[A-Za-z_$][\w$]*\s*=[^=]/.test(maskedFirst);
+    if (!isStatement && t) {
+      out.splice(start, last - start + 1, `return (${t.replace(/;\s*$/, '')});`);
+    } else if (/^[A-Za-z_$][\w$]*\s*=[^=]/.test(maskedFirst)) {
+      out.push(`return ${maskedFirst.split('=')[0].trim()};`);
     }
-    out[idx] = `return (${t.replace(/;\s*$/, '')});`;
-    break;
   }
   return out.join('\n');
 }
@@ -106,7 +112,8 @@ export class JsSession {
     let timer: NodeJS.Timeout | undefined;
     try {
       const script = new vm.Script(wrapped, { filename: `js-call-${++this.runs}.js` });
-      const promise = script.runInContext(this.context) as Promise<unknown>;
+      // `timeout` bounds the synchronous part (e.g. while(true){}); the race below bounds awaited work
+      const promise = script.runInContext(this.context, { timeout: Math.min(timeoutMs, 30_000) }) as Promise<unknown>;
       const value = await Promise.race([promise, new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error(`js call timed out after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs); })]);
       const images = [...this.images];
       let out = value;

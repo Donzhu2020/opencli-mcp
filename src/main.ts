@@ -14,8 +14,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const pkgPath = [path.resolve(here, '../../package.json'), path.resolve(here, '../package.json')].find((p) => fs.existsSync(p))!;
-const VERSION = (JSON.parse(fs.readFileSync(pkgPath, 'utf8')) as { version: string }).version;
+function findVersion(): string {
+  let dir = here;
+  for (let i = 0; i < 6; i++) { const pkg = path.join(dir, 'package.json'); try { const j = JSON.parse(fs.readFileSync(pkg, 'utf8')) as { name?: string; version?: string }; if (j.name === 'opencli-mcp' && j.version) return j.version; } catch { /* walk */ } dir = path.dirname(dir); }
+  return '0.0.0';
+}
+const VERSION = findVersion();
 
 const argv = process.argv.slice(2);
 const cmd = argv[0] ?? 'stdio';

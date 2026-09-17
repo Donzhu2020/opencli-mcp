@@ -54,7 +54,9 @@ export async function runSiteCommand(
   const started = Date.now();
   const key = `${cmd.site}/${cmd.name}`;
   try {
-    const { timeout, ...userArgs } = rawArgs;
+    const declaresTimeout = cmd.args.some((a) => a.name === 'timeout');
+    const { timeout, ...rest } = rawArgs;
+    const userArgs = declaresTimeout ? rawArgs : rest;
     const args = coerceArgs(cmd.args, userArgs);
     cmd.validateArgs?.(args);
     const timeoutMs = typeof timeout === 'number' ? timeout * 1000 : (opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
@@ -74,11 +76,12 @@ export async function runSiteCommand(
       const preNav = typeof cmd.navigateBefore === 'string' ? cmd.navigateBefore : undefined;
       const page = await provider.getAdapterPage(cmd.site, { siteSession, windowMode, navigateTo: preNav });
       if (preNav) {
+        // OpenCLI semantics: always pre-navigate, except a persistent site session already on the domain when the target is the domain root
         const current = await page.getCurrentUrl?.().catch(() => null);
         const want = urlHost(preNav);
-        if (!current || (want && urlHost(current) !== want && !urlHost(current)?.endsWith(`.${want.replace(/^www\./, '')}`))) {
-          await page.goto(preNav);
-        }
+        let isRoot = false; try { const u = new URL(preNav); isRoot = (u.pathname === '/' || u.pathname === '') && !u.search && !u.hash; } catch { /* not root */ }
+        const sameDomain = Boolean(current && want && (urlHost(current) === want || urlHost(current)?.endsWith(`.${want.replace(/^www\./, '')}`)));
+        if (!(siteSession === 'persistent' && isRoot && sameDomain)) await page.goto(preNav);
       }
       const run = cmd.func ? (cmd.func as (p: RuntimePage, a: Record<string, unknown>, d?: boolean) => Promise<unknown>)(page, args, opts.debug) : executePipeline(page, cmd.pipeline ?? [], { args, debug: opts.debug });
       result = await withTimeout(run, timeoutMs, key);

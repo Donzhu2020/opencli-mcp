@@ -5,6 +5,8 @@
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
+import { timingSafeEqual } from 'node:crypto';
 import type { Runtime } from '../runtime/runtime.js';
 import { createMcpServer, type SessionServer } from '../mcp/server.js';
 
@@ -26,8 +28,9 @@ export async function startHttpServer(rt: Runtime, opts: { port: number; host?: 
   const authorized = (req: http.IncomingMessage, url: URL): boolean => {
     if (opts.allowNoAuth) return true;
     const h = req.headers.authorization ?? '';
-    const bearer = h.startsWith('Bearer ') ? h.slice(7) : '';
-    return bearer === opts.token || url.searchParams.get('token') === opts.token;
+    const bearer = h.startsWith('Bearer ') ? h.slice(7) : (url.searchParams.get('token') ?? '');
+    const a = Buffer.from(bearer); const b = Buffer.from(opts.token);
+    return a.length === b.length && timingSafeEqual(a, b);
   };
 
   const server = http.createServer(async (req, res) => {
@@ -46,8 +49,10 @@ export async function startHttpServer(rt: Runtime, opts: { port: number; host?: 
         await sessions.get(sessionId)!.transport.handleRequest(req, res, body);
         return;
       }
-      if (req.method !== 'POST') { res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'missing or unknown mcp-session-id' })); return; }
-      const body = await readBody(req);
+      if (req.method !== 'POST') { res.writeHead(sessionId ? 404 : 400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: sessionId ? 'unknown mcp-session-id (host restarted?)' : 'missing mcp-session-id' })); return; }
+      let body: unknown;
+      try { body = await readBody(req); } catch { res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'invalid JSON body' })); return; }
+      if (!isInitializeRequest(body)) { res.writeHead(sessionId ? 404 : 400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: sessionId ? 'unknown mcp-session-id; re-initialize' : 'expected an initialize request' })); return; }
       const newId = randomUUID();
       const session = createMcpServer(rt, newId, { version: opts.version });
       const transport = new StreamableHTTPServerTransport({
@@ -58,6 +63,7 @@ export async function startHttpServer(rt: Runtime, opts: { port: number; host?: 
       transport.onclose = () => { if (sessions.has(newId)) { sessions.delete(newId); void session.close(); } };
       await session.server.connect(transport);
       await transport.handleRequest(req, res, body);
+      if (!sessions.has(newId)) { await session.close().catch(() => {}); }
     } catch (err) {
       rt.emit('log', `http error: ${(err as Error).stack ?? err}`);
       if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' }).end(JSON.stringify({ error: (err as Error).message }));

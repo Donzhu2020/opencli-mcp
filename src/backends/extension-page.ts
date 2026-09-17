@@ -91,7 +91,7 @@ function definePageClass(lib: Lib): any {
       try {
         return await this.bridge.send(action, { ...this.cmdOpts(), ...params });
       } catch (err) {
-        if (isStalePageIdentityError(err) && this._page !== undefined && action !== 'tabs') {
+        if (isStalePageIdentityError(err) && this._page !== undefined && action === 'navigate') {
           this._page = undefined;
           return this.bridge.send(action, { ...this.cmdOpts(), ...params });
         }
@@ -166,7 +166,7 @@ function definePageClass(lib: Lib): any {
     async setFileInput(files: string[], selector?: string): Promise<void> { await this.send('set-file-input', { files, selector }); }
     async insertText(text: string): Promise<void> { await this.send('insert-text', { text }); }
     async frames(): Promise<Array<{ index: number; frameId: string; url: string; name: string }>> { const r = await this.send('frames'); return Array.isArray(r.data) ? r.data as Array<{ index: number; frameId: string; url: string; name: string }> : []; }
-    async evaluateInFrame(js: string, frameIndex: number): Promise<unknown> { return (await this.send('exec', { code: js, frameIndex })).data; }
+    async evaluateInFrame(js: string, frameIndex: number): Promise<unknown> { return (await this.send('exec', { code: buildEvaluateExpression(js), frameIndex })).data; }
     async cdp(method: string, params?: Record<string, unknown>): Promise<unknown> { return (await this.send('cdp', { cdpMethod: method, cdpParams: params })).data; }
 
     // ── opencli-mcp extras ──

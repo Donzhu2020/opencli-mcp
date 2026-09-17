@@ -24,7 +24,8 @@ export type Target =
 export type ActAction = 'click' | 'dblclick' | 'hover' | 'focus' | 'fill' | 'type' | 'press' | 'select' | 'check' | 'uncheck' | 'upload' | 'drag' | 'scroll' | 'back' | 'forward' | 'reload';
 type ActKindEdge = 'click' | 'dblclick' | 'hover' | 'focus' | 'fill' | 'type' | 'press' | 'check' | 'uncheck' | 'select';
 
-export interface ActOptions { target?: Target; action: ActAction; value?: string; files?: string[]; to?: Target; direction?: 'up' | 'down' | 'left' | 'right'; amount?: number; timeoutMs?: number; settleMs?: number }
+export interface ActOptions { target?: Target; action: ActAction; value?: string; files?: string[]; to?: Target; direction?: 'up' | 'down' | 'left' | 'right'; amount?: number; timeoutMs?: number; settleMs?: number; confirm?: boolean }
+const CONSEQUENTIAL_RE = /(submit|pay|purchase|buy|checkout|place order|delete|remove|send|post|publish|confirm|transfer|apply)/i;
 
 export interface ObserveOptions { mode?: 'state' | 'screenshot' | 'both'; source?: 'dom' | 'ax'; diff?: boolean; interactive?: boolean; compact?: boolean; maxDepth?: number; maxTextLength?: number; annotate?: boolean; fullPage?: boolean }
 
@@ -61,11 +62,18 @@ const WRITE_EVAL_RE = /(\.click\s*\(|\.submit\s*\(|\blocation\s*(=|\.href\s*=|\.
 export class Tab {
   constructor(readonly id: string, private readonly ctx: SessionContext) {}
 
-  /** Run `fn` with this tab as the page's active identity. */
+  /** Run `fn` with this tab as the page's active identity. Serialized per session: one shared page object, one active identity at a time. */
   async use<T>(fn: (page: RuntimePage) => Promise<T>): Promise<T> {
-    const page = await this.ctx.rt.getBrowserPage(this.ctx.sessionId);
-    if (page.getActivePage() !== this.id) page.setActivePage(this.id);
-    return fn(page);
+    const state = this.ctx.state;
+    const prev = state.lock;
+    let release!: () => void;
+    state.lock = new Promise<void>((r) => { release = r; });
+    try {
+      await prev;
+      const page = await this.ctx.rt.getBrowserPage(this.ctx.sessionId);
+      if (page.getActivePage() !== this.id) page.setActivePage(this.id);
+      return await fn(page);
+    } finally { release(); }
   }
 
   async goto(url: string, opts: { waitUntil?: 'load' | 'none'; settleMs?: number } = {}): Promise<{ url: string | null; title: string | null }> {
@@ -168,7 +176,9 @@ export class Tab {
     const L = await lib();
     const { action } = opts;
     return this.use(async (page) => {
-      const record = (ok: boolean, extra: Record<string, unknown> = {}) => this.ctx.state.trace.record({ kind: 'act', action, target: describeTarget(opts.target), targetRef: typeof extra.ref === 'string' ? extra.ref : undefined, value: opts.value, matchLevel: extra.match_level as string | undefined, ok, page: this.id });
+      const record = (ok: boolean, extra: Record<string, unknown> = {}) => this.ctx.state.trace.record({ kind: 'act', action, target: describeTarget(opts.target), targetSpec: opts.target as Record<string, unknown> | undefined, targetRef: typeof extra.ref === 'string' ? extra.ref : undefined, value: opts.value, matchLevel: extra.match_level as string | undefined, ok, page: this.id });
+      // Consequential page actions (submit/pay/delete/send…) go through the write policy when confirmWrites is on.
+      if (this.ctx.rt.policy.confirmWrites && opts.target && CONSEQUENTIAL_RE.test(describeTarget(opts.target)) && (action === 'click' || action === 'dblclick' || action === 'press')) Policy.throwIfDenied(this.ctx.rt.policy.checkWrite(`${action} ${describeTarget(opts.target)}`, Boolean(opts.confirm)));
       // Runtime-edge path: one atomic command inside the extension (locate → wait → hit-test → real input → settle).
       const EDGE = new Set(['click', 'dblclick', 'hover', 'focus', 'fill', 'type', 'press', 'check', 'uncheck', 'select']);
       if (this.ctx.rt.ablation.actMode !== 'host' && this.ctx.rt.isExtensionPage(page) && EDGE.has(action) && opts.target) {
@@ -211,10 +221,11 @@ export class Tab {
           case 'check': case 'uncheck': result = await page.setChecked!(ref, action === 'check', ro) as unknown as Record<string, unknown>; break;
           case 'upload': result = await page.uploadFiles!(ref, opts.files ?? [], ro) as unknown as Record<string, unknown>; break;
           case 'select': {
-            const rs = await page.evaluate(L.resolveTargetJs(ref, ro)) as Record<string, unknown>;
-            if (rs && (rs as { error?: unknown }).error) { const e = (rs as { error: { code: string; message: string; hint?: string } }).error; throw new ActionError(e.code, e.message, e.hint); }
-            const sel = await page.evaluate(L.selectResolvedJs(opts.value ?? '')) as Record<string, unknown>;
-            if (sel && (sel as { error?: unknown }).error) { const e = (sel as { error: { code: string; message: string; hint?: string; available?: string[] } }).error; throw new ActionError(e.code, e.message, e.hint, e.available ? { available: e.available } : undefined); }
+            // host path (ablation baseline): OpenCLI resolver returns {ok:false,code,message,hint}; select returns {error:string, available}
+            const rs = await page.evaluate(L.resolveTargetJs(ref, ro)) as { ok?: boolean; code?: string; message?: string; hint?: string } & Record<string, unknown>;
+            if (rs && rs.ok === false) throw new ActionError(rs.code ?? 'not_found', rs.message ?? 'target not resolved', rs.hint);
+            const sel = await page.evaluate(L.selectResolvedJs(opts.value ?? '')) as { error?: string; available?: string[] } & Record<string, unknown>;
+            if (sel && typeof sel.error === 'string') throw new ActionError('option_not_found', sel.error, 'Pick one of the available options.', sel.available ? { available: sel.available } : undefined);
             result = { ...(rs ?? {}), ...(sel ?? {}) }; break;
           }
           case 'drag': {
@@ -252,7 +263,8 @@ export class Tab {
       const r = await p.evaluate(`(async () => { const mc = navigator.modelContext || document.modelContext; if (!mc || typeof mc.getTools !== 'function') return []; const tools = await mc.getTools(); return (tools || []).map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })); })()`);
       return Array.isArray(r) ? r as Array<{ name: string; description?: string; inputSchema?: unknown }> : [];
     }),
-    call: async (name: string, input: Record<string, unknown> = {}): Promise<unknown> => this.use(async (p) => {
+    call: async (name: string, input: Record<string, unknown> = {}, opts: { confirm?: boolean } = {}): Promise<unknown> => this.use(async (p) => {
+      if (this.ctx.rt.policy.confirmWrites) Policy.throwIfDenied(this.ctx.rt.policy.checkWrite(`webmcp ${name}`, Boolean(opts.confirm)));
       this.ctx.state.trace.record({ kind: 'note', text: `webmcp ${name}(${JSON.stringify(input).slice(0, 120)})`, page: this.id });
       return p.evaluateWithArgs(`(async () => { const mc = navigator.modelContext || document.modelContext; if (!mc) throw new Error('page exposes no modelContext'); if (typeof mc.executeTool === 'function') return await mc.executeTool(name, input); const tools = await mc.getTools(); const t = (tools || []).find(x => x.name === name); if (!t || typeof t.execute !== 'function') throw new Error('unknown page tool ' + name); return await t.execute(input); })()`, { name, input });
     }),
@@ -316,6 +328,7 @@ export class Browser {
       else { const id = await page.newTab(url); if (id) page.setActivePage(id); if (url) await page.wait({ time: 0.5 }).catch(() => {}); }
       const id = page.getActivePage();
       if (!id) throw new ActionError('tab_create_failed', 'Could not create a tab');
+      this.ctx.state.finalized = false; // new tabs after a finalize are the session's again
       this.ctx.state.trace.record({ kind: 'goto', url: url ?? 'about:blank', page: id });
       return new Tab(id, this.ctx);
     },
@@ -342,6 +355,7 @@ export class Browser {
       if (tab.url) Policy.throwIfDenied(this.ctx.rt.policy.checkOrigin(tab.url));
       const page = this.ext(await this.page());
       const r = await page.claim(tab);
+      this.ctx.state.finalized = false;
       this.ctx.state.trace.record({ kind: 'note', text: `claimed user tab ${tab.tabId} ${r.url ?? ''}` });
       return new Tab(r.page, this.ctx);
     },

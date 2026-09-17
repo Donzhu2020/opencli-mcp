@@ -42,8 +42,9 @@ export class Policy {
     if (!this.askNewOrigins || this.matches(this.allowed, host)) return { allowed: true };
     return { allowed: false, code: 'needs_origin_approval', message: `${host} has not been approved for this runtime`, hint: `Ask the user, then call origin_allow {host:"${host}"} (once, or persist:true for this site).`, retryable: true };
   }
-  allowHost(host: string, persist = false): void {
-    this.allowed.add(host.toLowerCase());
+  allowHost(hostRaw: string, persist = false): void {
+    const host = hostRaw.toLowerCase();
+    this.allowed.add(host);
     if (persist) {
       let list: string[] = [];
       try { list = JSON.parse(fs.readFileSync(ALLOWLIST_FILE, 'utf8')) as string[]; } catch { /* new */ }

@@ -37,6 +37,10 @@ export interface SessionState {
   createdAt: number;
   trace: TraceRecorder;
   browserPage?: RuntimePage;
+  browserPagePromise?: Promise<RuntimePage>;
+  cdpHandle?: CdpBackendHandle;
+  /** Serializes page operations: one shared page object per session, one active tab identity at a time. */
+  lock: Promise<void>;
   enabledSites: Map<string, { write: boolean }>;
   capabilities: Set<string>;
   docsRead: Set<string>;
@@ -108,7 +112,7 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
   session(id: string): SessionState {
     let s = this.sessions.get(id);
     if (!s) {
-      s = { id, createdAt: Date.now(), trace: new TraceRecorder(), enabledSites: new Map(), capabilities: new Set(), docsRead: new Set(), lastObserve: new Map(), finalized: false };
+      s = { id, createdAt: Date.now(), trace: new TraceRecorder(), lock: Promise.resolve(), enabledSites: new Map(), capabilities: new Set(), docsRead: new Set(), lastObserve: new Map(), finalized: false };
       this.sessions.set(id, s);
     }
     return s;
@@ -118,8 +122,10 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
   async getBrowserPage(sessionId: string): Promise<RuntimePage> {
     const s = this.session(sessionId);
     if (s.browserPage) return s.browserPage;
-    s.browserPage = await this.createPage({ session: `mcp:${sessionId}`, surface: 'browser', windowMode: 'background' });
-    return s.browserPage;
+    if (!s.browserPagePromise) {
+      s.browserPagePromise = this.createPage({ session: `mcp:${sessionId}`, surface: 'browser', windowMode: 'background' }).then((p) => { s.browserPage = p; return p; }).finally(() => { s.browserPagePromise = undefined; });
+    }
+    return s.browserPagePromise;
   }
 
   /** Background adapter page per site (shared by all MCP sessions), like OpenCLI's site sessions. */
@@ -140,6 +146,7 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
     if (backend === 'cdp' && this.cdpEndpoint) {
       const h = await connectCdpBackend({ endpoint: this.cdpEndpoint, session: opts.session, surface: opts.surface });
       this.cdpHandles.push(h);
+      if (opts.surface === 'browser') { const sid = opts.session.replace(/^mcp:/, ''); const st = this.sessions.get(sid); if (st) st.cdpHandle = h; }
       return h.page;
     }
     throw Object.assign(new Error('No browser backend is connected'), { code: 'browser_unavailable', hint: 'Run `opencli-mcp doctor`. Chrome with the opencli-mcp extension must be running, or set OPENCLI_CDP_ENDPOINT.' });
@@ -176,6 +183,7 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
         else await page.closeWindow();
       } catch (err) { this.emit('log', `finalize on close failed: ${(err as Error).message}`); }
     }
+    if (s.cdpHandle) { await s.cdpHandle.close().catch(() => {}); const i = this.cdpHandles.indexOf(s.cdpHandle); if (i >= 0) this.cdpHandles.splice(i, 1); }
     this.emit('session-closed', id);
   }
 

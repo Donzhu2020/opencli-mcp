@@ -41,9 +41,10 @@ export async function runNativeHost(opts: { version: string }): Promise<void> {
     clearHostState(process.pid);
     process.exit(0);
   };
+  channel.on('error', (err) => log(`channel error: ${err.message}`));
   channel.on('close', () => void shutdown('extension port closed'));
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
-  process.on('uncaughtException', (err) => log(`uncaught: ${err.stack ?? err}`));
+  process.on('uncaughtException', (err) => { log(`uncaught: ${err.stack ?? err}`); void shutdown('uncaught exception'); });
   process.on('unhandledRejection', (err) => log(`unhandled: ${(err as Error)?.stack ?? err}`));
 }

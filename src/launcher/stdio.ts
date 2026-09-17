@@ -32,7 +32,9 @@ export async function runStdio(opts: { version: string; forceEmbedded?: boolean 
   const session = createMcpServer(rt, 'stdio', { version: opts.version });
   const transport = new StdioServerTransport();
   await session.server.connect(transport);
-  transport.onclose = () => { void session.close().then(() => rt.shutdown()).finally(() => process.exit(0)); };
+  const bye = () => { void session.close().then(() => rt.shutdown()).finally(() => process.exit(0)); };
+  transport.onclose = bye;
+  process.stdin.once('end', bye);
 }
 
 async function proxyToHost(host: string, port: number, token: string, version: string, log: (m: string) => void): Promise<void> {
@@ -63,7 +65,10 @@ async function proxyToHost(host: string, port: number, token: string, version: s
   client.setNotificationHandler(PromptListChangedNotificationSchema, async () => { await server.sendPromptListChanged(); });
   client.setNotificationHandler(LoggingMessageNotificationSchema, async (n) => { await server.sendLoggingMessage(n.params); });
   const transport = new StdioServerTransport();
-  transport.onclose = () => { void client.close().finally(() => process.exit(0)); };
-  upstream.onclose = () => { log('host connection closed'); void transport.close().finally(() => process.exit(0)); };
+  const bye = (why: string) => { log(why); void client.close().catch(() => {}).finally(() => process.exit(0)); };
+  transport.onclose = () => bye('stdio closed');
+  process.stdin.once('end', () => bye('stdin ended'));
+  upstream.onclose = () => bye('host connection closed');
+  upstream.onerror = (err) => { if (/ECONNREFUSED|ECONNRESET|fetch failed/i.test(String(err))) bye(`host unreachable: ${err.message}`); else log(`upstream error: ${err.message}`); };
   await server.connect(transport);
 }

@@ -27,3 +27,15 @@ describe('js session', () => {
     expect(r.images).toHaveLength(1); expect(r.value).toMatchObject({ image: expect.stringContaining('image/png') });
   });
 });
+
+describe('js session transform edge cases', () => {
+  it('does not rewrite declarations inside template literals and returns multi-line last statements', async () => {
+    const s = new JsSession({ tab: { act: async (o: unknown) => ({ ok: true, o }) } });
+    const r1 = await s.run("const js = `\nconst x = document.title;\nreturn x;`;\njs");
+    expect(r1.value).toBe('\nconst x = document.title;\nreturn x;');
+    const r2 = await s.run('await tab.act({\n  action: "click",\n  target: { text: "x" },\n});');
+    expect(r2.value).toMatchObject({ ok: true });
+    const r3 = await s.run('let a, b;\na = 1; b = 2;\na + b');
+    expect(r3.value).toBe(3);
+  });
+});

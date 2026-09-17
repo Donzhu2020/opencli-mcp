@@ -17,7 +17,8 @@ export function argToZod(arg: Arg): ZodTypeAny {
 export function argsToShape(args: Arg[], extra: Record<string, ZodTypeAny> = {}): Record<string, ZodTypeAny> {
   const shape: Record<string, ZodTypeAny> = {};
   for (const a of args) shape[a.name] = argToZod(a);
-  return { ...shape, ...extra };
+  for (const [k, v] of Object.entries(extra)) if (!(k in shape)) shape[k] = v; // a command's own arg (e.g. timeout) wins
+  return shape;
 }
 
 /** Coerce + validate kwargs against Arg[] the way OpenCLI's executor does (kept local: not a public export). */

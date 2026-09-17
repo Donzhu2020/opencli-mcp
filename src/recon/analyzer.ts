@@ -259,6 +259,11 @@ export class JsAnalyzer {
       push({ ...base, url, method: HTTP_METHODS.has(method) ? method : 'GET', type: 'fetch', bodyParams: this.bodyParams(opts.get('body')), headers: Object.keys(headers).length ? headers : undefined, contentType: headers['Content-Type'] ?? headers['content-type'] });
       return;
     }
+    if ((fn === 'window.open' || fn === 'open' || fn.endsWith('.location.assign') || fn.endsWith('.location.replace') || fn === 'location.assign' || fn === 'location.replace') && a[0]) {
+      const url = this.resolve(a[0]);
+      if (maybeUrl(url) || url.includes(EXPR)) push({ ...base, url, method: 'GET', type: 'windowOpen' });
+      return;
+    }
     if (fn.endsWith('.open') && a.length >= 2) {
       const method = decodeString(a[0].text).toUpperCase();
       if (!HTTP_METHODS.has(method)) return;
@@ -294,17 +299,14 @@ export class JsAnalyzer {
       }
       return;
     }
-    const client = /\.(get|post|put|patch|delete|request)$/.exec(fn);
-    if (client && a[0] && (a[0].type === 'string' || a[0].type === 'template_string' || a[0].type === 'binary_expression')) {
+    const client = /(?:^|\.)([A-Za-z_$][\w$]*)\.(get|post|put|patch|delete|request)$/.exec(fn);
+    const receiver = client?.[1]?.toLowerCase() ?? '';
+    const looksLikeClient = /^(api|apis|client|http|https|axios|instance|request|req|fetcher|service|svc|\$http|got|ky|superagent|agent|backend|rest|graphql|gql|sdk|ajax|xhr|net|transport|remote)/.test(receiver) || /(api|client|http|service|fetcher|request)$/.test(receiver);
+    if (client && looksLikeClient && a[0] && (a[0].type === 'string' || a[0].type === 'template_string' || a[0].type === 'binary_expression')) {
       const url = this.resolve(a[0]);
       if (!(url.startsWith('/') || /^https?:\/\//.test(url) || url.startsWith(EXPR + '/'))) return;
-      const method = client[1] === 'request' ? 'GET' : client[1].toUpperCase();
+      const method = client[2] === 'request' ? 'GET' : client[2].toUpperCase();
       push({ ...base, url, method, type: 'httpClient', bodyParams: method === 'GET' ? [] : this.bodyParams(a[1]) });
-      return;
-    }
-    if (fn === 'window.open' || fn === 'open' || fn === 'location.assign' || fn === 'location.replace' || fn.endsWith('.location.assign') || fn.endsWith('.location.replace')) {
-      const url = this.resolve(a[0] ?? null);
-      if (maybeUrl(url) || url.includes(EXPR)) push({ ...base, url, method: 'GET', type: 'windowOpen' });
       return;
     }
     if (fn === 'navigator.sendBeacon' || fn.endsWith('.sendBeacon')) {

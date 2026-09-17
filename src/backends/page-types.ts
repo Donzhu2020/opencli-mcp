@@ -1,5 +1,6 @@
 /** The page surface the runtime relies on: OpenCLI's IPage plus the transport-level extras our backends provide. */
 import type { IPage, ScreenshotOptions, BrowserDownloadWaitResult } from '@jackwener/opencli/types';
+import type { ActSpec, ActResult } from '../protocol.js';
 
 export interface RuntimePage extends IPage {
   getActivePage(): string | undefined;
@@ -25,4 +26,6 @@ export interface RuntimePage extends IPage {
   /** opencli-mcp extras */
   readonly session: string;
   readonly surface: 'browser' | 'adapter';
+  /** The interaction engine at this backend's edge (locate → wait → hit-test → real input → settle). */
+  act(spec: ActSpec): Promise<ActResult>;
 }

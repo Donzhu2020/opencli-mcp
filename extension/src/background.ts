@@ -101,7 +101,6 @@ async function handleCommand(cmd: Command): Promise<Result> {
       case 'network-capture-start': { const tabId = await sessions.resolveTab(s, cmd.page); await executor.startNetworkCapture(tabId, cmd.pattern); return pageScoped(cmd.id, tabId, { started: true }); }
       case 'network-capture-read': { const tabId = await sessions.resolveTab(s, cmd.page); return pageScoped(cmd.id, tabId, await executor.readNetworkCapture(tabId)); }
       case 'wait-download': return { id: cmd.id, ok: true, data: await executor.waitForDownload(cmd.pattern ?? '', cmd.timeoutMs ?? 30_000) };
-      case 'close-window': { const r = await sessions.finalize(s, []); return { id: cmd.id, ok: true, data: { released: true, closedTabs: r.closed, keptTabs: r.kept } }; }
       // ── session & tab lifecycle ──
       case 'session-name': { if (!cmd.name) return { id: cmd.id, ok: false, error: 'Missing name' }; await sessions.nameSession(s, cmd.name); return { id: cmd.id, ok: true, data: { name: cmd.name } }; }
       case 'user-tabs': return { id: cmd.id, ok: true, data: await sessions.listUserTabs() };

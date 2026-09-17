@@ -31,8 +31,6 @@ export interface ExtensionPageExtras {
   cursor(x: number, y: number, opts?: { waitForArrival?: boolean }): Promise<void>;
   setVisibility(visible: boolean): Promise<void>;
   getVisibility(): Promise<boolean>;
-  /** Atomic locate→wait→hit-test→input→settle inside the extension. */
-  act(spec: ActSpec): Promise<ActResult>;
 }
 
 export type ExtensionRuntimePage = RuntimePage & ExtensionPageExtras;
@@ -133,7 +131,7 @@ function definePageClass(lib: Lib): any {
       return Array.isArray(r.data) ? r.data : [];
     }
     async closeWindow(): Promise<void> {
-      try { await this.bridge.send('close-window', { ...this.sessionOpts() }); } catch { /* ignore */ }
+      try { await this.bridge.send('session-finalize', { ...this.sessionOpts(), keep: [] }); } catch { /* ignore */ }
       this._page = undefined; this._lastUrl = null;
     }
     async tabs(): Promise<unknown[]> { const r = await this.bridge.send('tabs', { op: 'list', ...this.sessionOpts() }); return Array.isArray(r.data) ? r.data : []; }

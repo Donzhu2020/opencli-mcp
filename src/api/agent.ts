@@ -22,7 +22,6 @@ export type Target =
   | { x: number; y: number };
 
 export type ActAction = 'click' | 'dblclick' | 'hover' | 'focus' | 'fill' | 'type' | 'press' | 'select' | 'check' | 'uncheck' | 'upload' | 'drag' | 'scroll' | 'back' | 'forward' | 'reload';
-type ActKindEdge = 'click' | 'dblclick' | 'hover' | 'focus' | 'fill' | 'type' | 'press' | 'check' | 'uncheck' | 'select';
 
 export interface ActOptions { target?: Target; action: ActAction; value?: string; files?: string[]; to?: Target; direction?: 'up' | 'down' | 'left' | 'right'; amount?: number; timeoutMs?: number; settleMs?: number; confirm?: boolean }
 const CONSEQUENTIAL_RE = /(submit|pay|purchase|buy|checkout|place order|delete|remove|send|post|publish|confirm|transfer|apply)/i;
@@ -37,13 +36,11 @@ type Lib = {
   buildSemanticFindJs: (opts: Record<string, unknown>) => string;
   buildFindJs: (selector: string, opts?: Record<string, unknown>) => string;
   isFindError: (r: unknown) => r is { error: { code: string; message: string; hint?: string } };
-  resolveTargetJs: (ref: string, opts?: Record<string, unknown>) => string;
-  selectResolvedJs: (option: string) => string;
 };
 let libPromise: Promise<Lib> | null = null;
 function lib(): Promise<Lib> {
-  if (!libPromise) libPromise = Promise.all([importDist('snapshotFormatter.js'), importDist('browser/find.js'), importDist('browser/target-resolver.js'), importDist('browser/dom-helpers.js')])
-    .then(([sf, fd, tr, dh]) => ({ waitForDomStableJs: dh.waitForDomStableJs, formatSnapshot: sf.formatSnapshot, buildSemanticFindJs: fd.buildSemanticFindJs, buildFindJs: fd.buildFindJs, isFindError: fd.isFindError, resolveTargetJs: tr.resolveTargetJs, selectResolvedJs: tr.selectResolvedJs }));
+  if (!libPromise) libPromise = Promise.all([importDist('snapshotFormatter.js'), importDist('browser/find.js'), importDist('browser/dom-helpers.js')])
+    .then(([sf, fd, dh]) => ({ waitForDomStableJs: dh.waitForDomStableJs, formatSnapshot: sf.formatSnapshot, buildSemanticFindJs: fd.buildSemanticFindJs, buildFindJs: fd.buildFindJs, isFindError: fd.isFindError }));
   return libPromise;
 }
 
@@ -104,13 +101,13 @@ export class Tab {
       const meta = await this.info(page);
       const out: { url: string | null; title: string | null; state?: string; diff?: boolean; changed?: { added: number; removed: number }; image?: ImageValue } = { ...meta };
       if (mode === 'state' || mode === 'both') {
-        const snapOpts = { interactive: opts.interactive, compact: opts.compact ?? true, maxDepth: opts.maxDepth, maxTextLength: opts.maxTextLength, source: opts.source ?? this.ctx.rt.ablation.observeSource ?? 'dom' };
+        const snapOpts = { interactive: opts.interactive, compact: opts.compact ?? true, maxDepth: opts.maxDepth, maxTextLength: opts.maxTextLength, source: opts.source ?? 'dom' };
         const raw = await page.snapshot(snapOpts);
         let text = typeof raw === 'string' ? L.formatSnapshot(raw, snapOpts) : JSON.stringify(raw, null, 2);
         const key = `${this.id}:${snapOpts.source}`;
         const prev = this.ctx.state.lastObserve.get(key);
         this.ctx.state.lastObserve.set(key, text);
-        const diffOn = opts.diff ?? this.ctx.rt.ablation.observeDiff !== false;
+        const diffOn = opts.diff !== false;
         if (diffOn && prev && prev !== text) {
           const d = lineDiff(prev, text);
           if (d.changedRatio < 0.6) { out.diff = true; out.changed = { added: d.added, removed: d.removed }; text = d.text || '(no visible change)'; }
@@ -140,121 +137,30 @@ export class Tab {
     });
   }
 
-  private async resolveRef(target: Target, page: RuntimePage): Promise<{ ref: string; nth?: number; point?: { x: number; y: number } }> {
-    const L = await lib();
-    if ('x' in target) return { ref: '', point: { x: target.x, y: target.y } };
-    if ('ref' in target) return { ref: String(target.ref) };
-    if ('css' in target) return { ref: target.css, nth: target.nth };
-    const js = L.buildSemanticFindJs({ role: target.role, name: target.name, label: target.label, text: target.text, testid: target.testid, limit: 20 });
-    const r = await page.evaluate(js);
-    if (L.isFindError(r)) throw new ActionError(r.error.code === 'semantic_not_found' ? 'not_found' : r.error.code, r.error.message, r.error.hint ?? 'Observe the page and pick a ref, or loosen the locator.');
-    const { entries } = r as { matches_n: number; entries: FindEntry[] };
-    const cands = entries.slice(0, 10).map((e) => ({ nth: e.nth, ref: e.ref, tag: e.tag, role: e.role, text: e.text, visible: e.visible }));
-    if (target.nth !== undefined) {
-      const e = entries[target.nth];
-      if (!e) throw new ActionError('selector_nth_out_of_range', `nth=${target.nth} but only ${entries.length} matches`, undefined, { candidates: cands });
-      return { ref: String(e.ref) };
-    }
-    const visible = entries.filter((e) => e.visible);
-    if (visible.length === 1) return { ref: String(visible[0].ref) };
-    if (entries.length === 1) return { ref: String(entries[0].ref) };
-    if (visible.length === 0) throw new ActionError('not_visible', `${entries.length} matches but none visible`, 'Scroll or open the containing control, then retry.', { candidates: cands });
-    throw new ActionError('selector_ambiguous', `${visible.length} visible matches for ${describeTarget(target)}`, 'Add nth, or use a ref from the candidates.', { candidates: cands });
-  }
-
-  private async moveCursorTo(page: RuntimePage, ref: string, nth?: number): Promise<void> {
-    if (!this.ctx.rt.cursorEnabled || !this.ctx.rt.isExtensionPage(page)) return;
-    try {
-      const sel = /^\d+$/.test(ref) ? `[data-opencli-ref="${ref}"]` : ref;
-      const pt = await page.evaluateWithArgs(`(() => { const els = document.querySelectorAll(sel); const el = els[nth] || els[0]; if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`, { sel, nth: nth ?? 0 }) as { x: number; y: number } | null;
-      if (pt) await (page as ExtensionRuntimePage).cursor(pt.x, pt.y);
-    } catch { /* overlay is best-effort */ }
-  }
-
-  /** wait + act in one call; real input events; branchable error codes. */
+  /** wait + act in one call at the runtime edge: locate → wait actionable → hit-test → real input → settle. */
   async act(opts: ActOptions): Promise<Record<string, unknown>> {
-    const L = await lib();
     const { action } = opts;
     return this.use(async (page) => {
       const record = (ok: boolean, extra: Record<string, unknown> = {}) => this.ctx.state.trace.record({ kind: 'act', action, target: describeTarget(opts.target), targetSpec: opts.target as Record<string, unknown> | undefined, targetRef: typeof extra.ref === 'string' ? extra.ref : undefined, value: opts.value, matchLevel: extra.match_level as string | undefined, ok, page: this.id });
-      // Consequential page actions (submit/pay/delete/send…) go through the write policy when confirmWrites is on.
       if (this.ctx.rt.policy.confirmWrites && opts.target && CONSEQUENTIAL_RE.test(describeTarget(opts.target)) && (action === 'click' || action === 'dblclick' || action === 'press')) Policy.throwIfDenied(this.ctx.rt.policy.checkWrite(`${action} ${describeTarget(opts.target)}`, Boolean(opts.confirm)));
-      // Runtime-edge path: one atomic command inside the extension (locate → wait → hit-test → real input → settle).
-      const EDGE = new Set(['click', 'dblclick', 'hover', 'focus', 'fill', 'type', 'press', 'check', 'uncheck', 'select']);
-      if (this.ctx.rt.ablation.actMode !== 'host' && this.ctx.rt.isExtensionPage(page) && EDGE.has(action) && opts.target) {
-        try {
-          const r = await page.act({ kind: action as ActKindEdge, target: opts.target as Record<string, unknown>, value: opts.value, timeoutMs: opts.timeoutMs, settleMs: opts.settleMs ?? this.ctx.rt.ablation.settleMs, cursor: this.ctx.rt.cursorEnabled });
-          record(true, { ...r, ref: r.ref ?? undefined });
-          return { action, target: describeTarget(opts.target), mode: 'extension', ...r, ok: true };
-        } catch (err) {
-          record(false);
-          const e = err as { code?: string; message?: string; hint?: string; data?: unknown };
-          throw new ActionError(e.code ?? 'action_failed', e.message ?? String(err), e.hint, e.data && typeof e.data === 'object' ? e.data as Record<string, unknown> : undefined);
-        }
-      }
       try {
         if (action === 'back' || action === 'forward' || action === 'reload') { await this[action](); record(true); return { ok: true, action }; }
-        if (action === 'scroll' && !opts.target) { await page.scroll(opts.direction ?? 'down', opts.amount); record(true); return { ok: true, action, direction: opts.direction ?? 'down' }; }
+        if (action === 'scroll' && !opts.target) {
+          // no target: wheel at the viewport centre
+          const vp = await page.evaluate<{ x: number; y: number }>('({ x: innerWidth / 2, y: innerHeight / 2 })');
+          opts = { ...opts, target: { x: vp.x, y: vp.y } };
+        }
         if (!opts.target) throw new ActionError('missing_target', `action "${action}" needs a target`);
-        const resolved = await this.resolveRef(opts.target, page);
-        if (resolved.point) {
-          if (this.ctx.rt.isExtensionPage(page)) await page.cursor(resolved.point.x, resolved.point.y).catch(() => {});
-          if (action === 'click') await page.nativeClick(resolved.point.x, resolved.point.y);
-          else if (action === 'hover') await (page as unknown as { tryNativeMouseMove?: (x: number, y: number) => Promise<boolean> }).tryNativeMouseMove?.(resolved.point.x, resolved.point.y);
-          else throw new ActionError('unsupported_target', `action "${action}" does not support point targets`);
-          record(true, { ref: 'point' });
-          await this.settle(page, opts.settleMs);
-          return { ok: true, action, point: resolved.point, method: 'cdp' };
-        }
-        const { ref, nth } = resolved;
-        const ro = nth !== undefined ? { nth } : undefined;
-        await this.moveCursorTo(page, ref, nth);
-        let result: Record<string, unknown>;
-        switch (action) {
-          case 'click': result = await page.click(ref, ro) as Record<string, unknown>; break;
-          case 'dblclick': result = await page.dblClick!(ref, ro) as Record<string, unknown>; break;
-          case 'hover': result = await page.hover!(ref, ro) as Record<string, unknown>; break;
-          case 'focus': result = await page.focus!(ref, ro) as Record<string, unknown>; break;
-          case 'fill': result = await page.fillText(ref, opts.value ?? '', ro) as unknown as Record<string, unknown>; break;
-          case 'type': result = await page.typeText(ref, opts.value ?? '', ro) as Record<string, unknown>; break;
-          case 'press': { const f = await page.focus!(ref, ro); await page.pressKey(opts.value ?? 'Enter'); result = { ...(f as Record<string, unknown>), key: opts.value ?? 'Enter' }; break; }
-          case 'check': case 'uncheck': result = await page.setChecked!(ref, action === 'check', ro) as unknown as Record<string, unknown>; break;
-          case 'upload': result = await page.uploadFiles!(ref, opts.files ?? [], ro) as unknown as Record<string, unknown>; break;
-          case 'select': {
-            // host path (ablation baseline): OpenCLI resolver returns {ok:false,code,message,hint}; select returns {error:string, available}
-            const rs = await page.evaluate(L.resolveTargetJs(ref, ro)) as { ok?: boolean; code?: string; message?: string; hint?: string } & Record<string, unknown>;
-            if (rs && rs.ok === false) throw new ActionError(rs.code ?? 'not_found', rs.message ?? 'target not resolved', rs.hint);
-            const sel = await page.evaluate(L.selectResolvedJs(opts.value ?? '')) as { error?: string; available?: string[] } & Record<string, unknown>;
-            if (sel && typeof sel.error === 'string') throw new ActionError('option_not_found', sel.error, 'Pick one of the available options.', sel.available ? { available: sel.available } : undefined);
-            result = { ...(rs ?? {}), ...(sel ?? {}) }; break;
-          }
-          case 'drag': {
-            if (!opts.to) throw new ActionError('missing_target', 'drag needs `to`');
-            const to = await this.resolveRef(opts.to, page);
-            result = await page.drag!(ref, to.ref, { from: ro, to: to.nth !== undefined ? { nth: to.nth } : undefined }) as unknown as Record<string, unknown>; break;
-          }
-          case 'scroll': result = (await page.scrollTo(ref, ro) as Record<string, unknown>) ?? {}; break;
-          default: throw new ActionError('unsupported_action', `unknown action "${String(action)}"`);
-        }
-        record(true, { ...result, ref });
-        await this.settle(page, opts.settleMs);
-        return { ok: true, action, target: describeTarget(opts.target), ref, ...result };
+        const r = await page.act({ kind: action, target: opts.target as Record<string, unknown>, value: opts.value, files: opts.files, to: opts.to as Record<string, unknown> | undefined, direction: opts.direction, amount: opts.amount, timeoutMs: opts.timeoutMs, settleMs: opts.settleMs ?? 600, cursor: this.ctx.rt.cursorEnabled });
+        record(true, { ...r, ref: r.ref ?? undefined });
+        return { action, target: describeTarget(opts.target), ...r, ok: true };
       } catch (err) {
         record(false);
         if (err instanceof ActionError) throw err;
-        const e = err as { message?: string; code?: string; hint?: string };
-        const msg = e.message ?? String(err);
-        const code = e.code ?? (/not found|no element/i.test(msg) ? 'not_found' : /stale/i.test(msg) ? 'stale_ref' : /ambiguous|multiple/i.test(msg) ? 'selector_ambiguous' : /intercept|covered|obscur/i.test(msg) ? 'intercepted' : /timed? ?out/i.test(msg) ? 'timeout' : 'action_failed');
-        throw new ActionError(code, msg, e.hint);
+        const e = err as { code?: string; message?: string; hint?: string; data?: unknown };
+        throw new ActionError(e.code ?? 'action_failed', e.message ?? String(err), e.hint, e.data && typeof e.data === 'object' ? e.data as Record<string, unknown> : undefined);
       }
     });
-  }
-
-  /** After an action, wait briefly until the DOM stops mutating (Codex-style auto-wait) so the next observe is current. */
-  private async settle(page: RuntimePage, settleMs = 600): Promise<void> {
-    if (settleMs <= 0) return;
-    const L = await lib();
-    try { await page.evaluate(L.waitForDomStableJs(settleMs, Math.min(200, settleMs))); } catch { /* navigation in flight — fine */ }
   }
 
   /** WebMCP: tools the page itself registers via navigator.modelContext (page-provided tool source). */
@@ -399,7 +305,7 @@ export interface AgentApi {
   sites: Record<string, unknown> & { search(q: string, limit?: number): unknown; list(): unknown; enable(site: string, opts?: { write?: boolean }): { site: string; tools: string[] }; disable(site: string): boolean; run(site: string, name: string, args?: Record<string, unknown>): Promise<unknown> };
   recon: { discover(tab: Tab, opts?: Parameters<typeof discoverEndpoints>[1]): Promise<DiscoverResult> };
   tools: { define(def: ToolDefinition): Promise<{ file: string; site: string; name: string }>; compile(opts: Parameters<typeof compileFromTrace>[1]): ToolDefinition; list(): ReturnType<typeof listDefinedTools>; remove(site: string, name: string): boolean };
-  session: { id: string; name(n: string): Promise<void>; finalize(keep?: Array<{ tab: string | Tab; status: 'deliverable' | 'handoff' }>): Promise<unknown>; trace(): unknown[]; clearTrace(): void; runtimeAblation(): Record<string, unknown> };
+  session: { id: string; name(n: string): Promise<void>; finalize(keep?: Array<{ tab: string | Tab; status: 'deliverable' | 'handoff' }>): Promise<unknown>; trace(): unknown[]; clearTrace(): void; };
 }
 
 export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
@@ -473,8 +379,6 @@ export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
       finalize: async (keep = []) => { const b = await getDefault(); return b.tabs.finalize({ keep }); },
       trace: () => state.trace.events,
       clearTrace: () => state.trace.clear(),
-      /** Ablation toggles (mutable at runtime for experiments): actMode, observeDiff, observeSource, settleMs, refRescue. */
-      runtimeAblation: () => rt.ablation as unknown as Record<string, unknown>,
     },
   };
 }

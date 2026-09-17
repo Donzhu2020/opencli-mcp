@@ -13,7 +13,7 @@
 
 export type Action =
   // page control (superset of OpenCLI's bridge actions so the page semantics port cleanly)
-  | 'exec' | 'navigate' | 'tabs' | 'cookies' | 'screenshot' | 'close-window'
+  | 'exec' | 'navigate' | 'tabs' | 'cookies' | 'screenshot'
   | 'set-file-input' | 'insert-text' | 'network-capture-start' | 'network-capture-read'
   | 'wait-download' | 'cdp' | 'frames'
   // session & tab-lifecycle (Codex-style: name, claim, finalize)
@@ -74,7 +74,7 @@ export interface Command {
   act?: ActSpec;
 }
 
-export type ActKind = 'click' | 'dblclick' | 'hover' | 'focus' | 'fill' | 'type' | 'press' | 'check' | 'uncheck' | 'select';
+export type ActKind = 'click' | 'dblclick' | 'hover' | 'focus' | 'fill' | 'type' | 'press' | 'check' | 'uncheck' | 'select' | 'scroll' | 'upload' | 'drag';
 export interface ActTarget { ref?: number | string; css?: string; nth?: number; role?: string; name?: string; label?: string; text?: string; testid?: string; x?: number; y?: number }
 export interface ActSpec {
   kind: ActKind;
@@ -84,6 +84,13 @@ export interface ActSpec {
   settleMs?: number;
   cursor?: boolean;
   force?: boolean;
+  /** scroll */
+  direction?: 'up' | 'down' | 'left' | 'right';
+  amount?: number;
+  /** upload */
+  files?: string[];
+  /** drag */
+  to?: ActTarget;
 }
 export interface ActResult {
   ok: true;

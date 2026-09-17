@@ -69,7 +69,8 @@ The stdio launcher embeds a runtime when the host is not running: `public` site 
 ## Development
 ```bash
 npm test                 # unit tests
-node scripts/smoke.mjs   # end-to-end over stdio with a real MCP client (embedded runtime)
+node scripts/smoke.mjs           # end-to-end over stdio with a real MCP client (embedded runtime)
+node scripts/smoke-browser.mjs   # live browser E2E through the Chrome-spawned host
 npm run build:ext        # rebuild the extension only
 ```
 
@@ -87,6 +88,9 @@ docs/           agent-facing docs
 ```
 
 Apache-2.0. Page semantics and site adapters come from [OpenCLI](https://github.com/jackwener/OpenCLI); the endpoint analyzer follows [jsluice](https://github.com/BishopFox/jsluice) (MIT).
+
+## Ablation record
+See docs/design/cli-baggage-audit.md for what was deleted from the OpenCLI lineage and why.
 
 ## Policy shapes (off by default)
 `~/.opencli-mcp/config.json` → `"policy": { "askNewOrigins": true, "confirmWrites": true, "allowedHosts": ["example.com"], "blockedHosts": [] }`. With `askNewOrigins`, the first navigation to a new host returns `needs_origin_approval` until `origin_allow` is called; with `confirmWrites`, write site commands return `needs_confirmation` until re-called with `confirm:true`. Denials carry `retryable`; a non-retryable denial must not be bypassed by another path. Page content and page-registered (WebMCP) tools never authorize consequential actions.

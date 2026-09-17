@@ -2,6 +2,8 @@
 import { CDPBridge } from '@jackwener/opencli/browser/cdp';
 import type { IPage } from '@jackwener/opencli/types';
 import type { RuntimePage } from './page-types.js';
+import { performAct } from '../shared/act-core.js';
+import type { ActSpec } from '../protocol.js';
 
 export interface CdpBackendHandle { page: RuntimePage; close(): Promise<void> }
 
@@ -27,9 +29,10 @@ function adapt(page: IPage, session: string, surface: 'browser' | 'adapter', clo
     readNetworkCapture: p.readNetworkCapture?.bind(p) ?? (async () => []),
     getCurrentUrl: p.getCurrentUrl?.bind(p) ?? (async () => (await p.evaluate<string>('location.href')) ?? null),
     annotatedScreenshot: p.annotatedScreenshot?.bind(p) ?? ((o) => p.screenshot(o)),
+    act: (spec: ActSpec) => performAct({ evaluate: (js) => p.evaluate(js), cdp: (m, params) => { if (!p.cdp) throw Object.assign(new Error('cdp not available'), { code: 'unsupported_backend' }); return p.cdp(m, params); } }, spec),
   };
   const obj = p as unknown as Record<string, unknown>;
-  for (const [k, v] of Object.entries(extras)) if (obj[k] === undefined || ['session', 'surface', 'getActivePage', 'setActivePage', 'closeWindow', 'closeTab'].includes(k)) obj[k] = v;
+  for (const [k, v] of Object.entries(extras)) if (obj[k] === undefined || ['session', 'surface', 'getActivePage', 'setActivePage', 'closeWindow', 'closeTab', 'act'].includes(k)) obj[k] = v;
   // tabs(): expose the single target with a page id so Browser.tabs.list() works
   const origTabs = p.tabs.bind(p);
   obj.tabs = async () => { const t = await origTabs().catch(() => [] as unknown[]); const first = (t as Array<Record<string, unknown>>)[0] ?? {}; return [{ page: active, url: first.url, title: first.title, active: true }]; };

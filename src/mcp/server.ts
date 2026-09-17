@@ -127,7 +127,6 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     title: 'Finalize session tabs', description: 'End-of-task cleanup. Agent-created tabs not listed in keep are closed; deliverable tabs leave the group and stay open; handoff tabs stay in the group for a later turn. Claimed user tabs are only released.',
     inputSchema: { keep: z.array(z.object({ tab: z.string().describe('tab id'), status: z.enum(['deliverable', 'handoff']) })).default([]) },
   }, async ({ keep }) => run(async () => ok(await api.session.finalize(keep))));
-  server.registerTool('session_trace', { title: 'Session trace', description: 'Recorded steps of this session (goto/act/observe/network/site) — the evidence tools_compile uses.', inputSchema: { limit: z.number().int().min(1).max(2000).default(200) }, annotations: { readOnlyHint: true } }, async ({ limit }) => run(async () => ok({ events: api.session.trace().slice(-limit) })));
 
   // ── tabs ──
   server.registerTool('tab_open', {
@@ -183,7 +182,6 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
 
   // ── sites ──
   server.registerTool('sites_search', { title: 'Search sites & commands', description: 'Find site commands by keyword or domain across the adapter corpus (170+ sites). Then sites_enable the site or call site_run directly.', inputSchema: { query: z.string(), limit: z.number().int().max(100).default(20) }, annotations: { readOnlyHint: true } }, async ({ query, limit }) => run(async () => ok({ results: api.sites.search(query, limit) })));
-  server.registerTool('sites_list', { title: 'List sites', description: 'All sites with command counts, strategies and domains.', inputSchema: {}, annotations: { readOnlyHint: true } }, async () => run(async () => ok({ sites: api.sites.list() })));
   server.registerTool('sites_enable', { title: 'Enable a site', description: 'Load a site’s commands as typed tools named <site>_<command>. Read-only commands by default; write:true adds commands that change the user’s account.', inputSchema: { site: z.string(), write: z.boolean().default(false) } }, async ({ site, write }) => run(async () => ok(api.sites.enable(site, { write }))));
   server.registerTool('sites_disable', { title: 'Disable a site', description: 'Remove a site’s tools from this session.', inputSchema: { site: z.string() } }, async ({ site }) => run(async () => ok({ site, disabled: api.sites.disable(site) })));
   server.registerTool('site_run', { title: 'Run a site command', description: 'Run any site command without enabling it as a tool (args as an object; see sites_search for names). Write commands may return needs_confirmation → re-call with args.confirm:true after the user approves.', inputSchema: { site: z.string(), command: z.string(), args: z.record(z.string(), z.unknown()).default({}) }, annotations: { openWorldHint: true } }, async ({ site, command, args }, extra) => run(() => runSiteWithProgress(site, command, args, extra as unknown as Extra)));

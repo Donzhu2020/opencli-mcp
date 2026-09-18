@@ -128,7 +128,8 @@ export function listDefinedTools(): Array<{ site: string; name: string; file: st
  * page (cookies included). Otherwise the UI steps (goto/act/observe) become an explicit function.
  * Values equal to an input are replaced by `args.<input>`.
  */
-export type CompileInput = string | { sample: string; description?: string; type?: 'string' | 'int' | 'number' | 'boolean'; required?: boolean };
+/** `mode` is the agent's explicit declaration of where the sample may be replaced: 'exact' (default) only whole literals equal to the sample; 'within' also inside longer literals (typed values, expectation texts/urls). */
+export type CompileInput = string | { sample: string; description?: string; type?: 'string' | 'int' | 'number' | 'boolean'; required?: boolean; mode?: 'exact' | 'within' };
 
 /**
  * Compile a recorded session trace into a tool draft.
@@ -139,12 +140,14 @@ export type CompileInput = string | { sample: string; description?: string; type
  * sample value become `args.<name>`.
  */
 export function compileFromTrace(trace: TraceEvent[], opts: { site: string; name: string; description: string; access?: 'read' | 'write'; inputs?: Record<string, CompileInput>; domain?: string }): ToolDefinition {
-  const inputs = Object.entries(opts.inputs ?? {}).map(([name, v]) => (typeof v === 'string' ? { name, sample: v, type: 'string' as const, required: true } : { name, sample: v.sample, type: v.type ?? 'string', required: v.required ?? true, help: v.description }));
+  const inputs = Object.entries(opts.inputs ?? {}).map(([name, v]) => (typeof v === 'string' ? { name, sample: v, type: 'string' as const, required: true, mode: 'exact' as const } : { name, sample: v.sample, type: v.type ?? 'string', required: v.required ?? true, help: v.description, mode: v.mode ?? 'exact' as const }));
   const argDefs: ArgDef[] = inputs.map((i) => ({ name: i.name, type: i.type, required: i.required, help: i.help ?? `example: ${i.sample}` }));
+  // exact by default: a literal becomes an argument only when it IS the sample; 'within' inputs are the agent's explicit
+  // permission to also parameterize longer literals that contain the sample (values typed, checkpoint texts and urls)
   const sub = (v: string): string => {
     for (const i of inputs) if (i.sample && v === i.sample) return `\${args.${i.name}}`;
     let out = v;
-    for (const i of inputs) if (i.sample && out.includes(i.sample)) out = out.split(i.sample).join(`\${args.${i.name}}`);
+    for (const i of inputs) if (i.mode === 'within' && i.sample && out.includes(i.sample)) out = out.split(i.sample).join(`\${args.${i.name}}`);
     return out;
   };
   const lit = (v: string): string => { const s = sub(v); return s.includes('${') ? '`' + s.replace(/`/g, '\\`') + '`' : JSON.stringify(s); };
@@ -176,6 +179,8 @@ export function compileFromTrace(trace: TraceEvent[], opts: { site: string; name
       } else if (e.kind === 'expect') {
         if (!e.ok) continue;
         const what = Object.fromEntries(Object.entries(e.what).map(([k, v]) => [k, typeof v === 'string' ? sub(v) : v]));
+        const parameterized = Object.entries(what).filter(([, v]) => typeof v === 'string' && v.includes('${args.')).map(([k]) => k);
+        if (parameterized.length) body.push(`  // checkpoint ${parameterized.join('/')} follows the input (declared mode "within"); it checks the page reflects the argument, not a fixed value`);
         const literal = JSON.stringify(what).replace(/"\$\{args\.([a-zA-Z_$][\w$]*)\}"/g, 'args.$1').replace(/"([^"]*\$\{args\.[^"]*)"/g, (_m, inner: string) => '`' + inner.replace(/`/g, '\\`') + '`');
         push(`expect ${Object.keys(e.what).join(',')}`, `page.expect(${literal})`);
       } else if (e.kind === 'observe') body.push(`  // observed: ${e.mode}${e.summary ? ' — ' + e.summary.slice(0, 80) : ''}`);

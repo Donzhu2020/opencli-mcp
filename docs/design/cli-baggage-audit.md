@@ -25,7 +25,7 @@ runtime that replaces it is the design in the essence report: a resident object 
 |---|---|
 | Adapter contract `cli({site,name,args,columns,access,strategy,func|pipeline})` and the 179-site corpus | Protocol-agnostic description of what a site needs; the value of the project |
 | Pipeline engine for data-shaped commands | Simplest expression of fetch → map → filter |
-| `data-opencli-ref` numeric refs in the budgeted text snapshot | Refs must survive between *tool calls* regardless of process model; observation is a read |
+| ~~`data-opencli-ref` numeric refs in the budgeted text snapshot~~ | Deleted 2026-09-18 (8ba92d9): observation converged on the aria snapshot and its eN refs — one ref space for observe, find and act |
 | Command journal in the extension | Protects writes across a service-worker restart; unrelated to CLI |
 | Strategy / navigateBefore / siteSession on adapters | Runtime semantics of a site, not rendering |
 | Stealth JS on navigation | Anti-bot behaviour sites require |

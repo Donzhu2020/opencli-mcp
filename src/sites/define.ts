@@ -145,6 +145,11 @@ export type CompileInput = string | { sample: string; description?: string; type
  * sample value become `args.<name>`.
  */
 function hostOf(url: string): string | undefined { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return undefined; } }
+
+/** Cookie names a csrf/xsrf-family header is commonly mirrored from — so a frozen tool can re-read the token at replay. */
+function csrfCookieCandidates(header: string): string[] {
+  return /csrf|xsrf|ct0/i.test(header) ? ['ct0', 'csrftoken', 'csrf-token', 'XSRF-TOKEN', 'xsrf-token', '_csrf'] : [];
+}
 const NOISE = /(googletagmanager|google-analytics|doubleclick|facebook\.net|hotjar|sentry|segment\.com|intercom|crazyegg|clarity\.ms|cloudflareinsights|hcaptcha|recaptcha|amazon-adsystem|newrelic|datadoghq|\/collect\b|\/beacon\b|\/telemetry\b|\/analytics\b|\/log\b)/i;
 /** Words worth matching: what the agent saw (observe state) or extracted (evaluate result) — long enough to be specific. */
 function evidenceTokens(trace: TraceEvent[]): Set<string> {
@@ -235,17 +240,36 @@ export function compileFromTrace(trace: TraceEvent[], net: NetworkEvidence[], op
     // contract (x-*, content-type, accept…), the body — with the declared inputs parameterized where they occurred
     const init: string[] = [];
     if (e.method && e.method !== 'GET') init.push(`method: ${JSON.stringify(e.method)}`);
-    // contract headers travel with the tool; a header whose value looks like a token or a signature (long, high-entropy)
-    // is computed per request/session by the page and must not be frozen — it is named so the author can fetch it at run time
-    const headers: Record<string, string> = {}; const tokenLike: string[] = [];
+    // Contract headers travel with the tool. A header whose value looks like a token or signature (long, high-entropy)
+    // is computed per request/session by the page and must not be frozen — instead we replay it: csrf/xsrf-family tokens
+    // are re-read from the cookie at run time, and other computed values get a signer-hook scaffold the author completes.
+    const headers: Record<string, string> = {};   // frozen contract headers
+    const dynHeaders: string[] = [];               // "H": <var> resolved at replay
+    const preLines: string[] = [];                 // run-time token resolutions, emitted before fetchJson
+    const cookieBacked: string[] = []; const computed: string[] = [];
     for (const [k, v] of Object.entries(e.requestHeaders ?? {})) {
       if (!/^(content-type|accept|x-.*|apikey|api-key|client-id)$/i.test(k)) continue;
-      if (/^x-(csrf|xsrf|client-transaction|signature|sign|nonce|timestamp|token|auth|session|guest-token|ct0)/i.test(k) || (v.length >= 32 && /^[A-Za-z0-9+/=_%.-]+$/.test(v) && !/^(application|text|multipart)\//.test(v))) { tokenLike.push(k); continue; }
-      headers[k] = v;
+      const isToken = /^x-(csrf|xsrf|client-transaction|signature|sign|nonce|timestamp|token|auth|session|guest-token|ct0)/i.test(k) || (v.length >= 32 && /^[A-Za-z0-9+/=_%.-]+$/.test(v) && !/^(application|text|multipart)\//.test(v));
+      if (!isToken) { headers[k] = v; continue; }
+      const cookies = csrfCookieCandidates(k);
+      if (cookies.length) {
+        const varName = `__tok${cookieBacked.length}`;
+        preLines.push(`  const ${varName} = ${cookies.map((c) => `await tab.cookie(${JSON.stringify(c)})`).join(' || ')}; // ${k}: re-read the per-request token from the cookie at replay`);
+        dynHeaders.push(`${JSON.stringify(k)}: ${varName}`);
+        cookieBacked.push(k);
+      } else computed.push(k);
     }
-    if (Object.keys(headers).length) init.push(`headers: ${JSON.stringify(headers)}`);
-    if (tokenLike.length) warnings.push(`request header(s) ${tokenLike.join(', ')} look like per-request tokens/signatures computed by the page and are not frozen; if the endpoint needs them, read them in the tool at run time (cookie, page state or a page function) before tab.fetchJson`);
+    const headerEntries = [...Object.entries(headers).map(([k, val]) => `${JSON.stringify(k)}: ${JSON.stringify(val)}`), ...dynHeaders];
+    if (headerEntries.length) init.push(`headers: { ${headerEntries.join(', ')} }`);
+    if (computed.length) {
+      preLines.push(`  // SIGNER HOOK: header(s) ${computed.join(', ')} are computed by the page per request (a signature/nonce/transaction id).`);
+      preLines.push(`  // Recompute them at replay by calling the site's own signer on the page, then add them to the headers below:`);
+      preLines.push(`  //   const sig = await tab.evaluate('(${computed.map((c) => `${JSON.stringify(c)}: /* call the page signer */ ""`).join(', ')})'); // then spread ...sig into headers`);
+    }
+    if (cookieBacked.length) warnings.push(`header(s) ${cookieBacked.join(', ')} are re-read from the cookie at run time (tab.cookie); verify the cookie name matches this site with tab.fetchJson`);
+    if (computed.length) warnings.push(`header(s) ${computed.join(', ')} are computed by the page per request and are NOT frozen — complete the SIGNER HOOK in the tool (call the page's signer via tab.evaluate, or read the value from page state) and add them to headers before tab.fetchJson`);
     if (e.postData) init.push(`body: ${bodyLit(e.postData, e.requestHeaders?.['content-type'], lit)}`);
+    for (const l of preLines) body.push(l);
     body.push(`  const data = await tab.fetchJson(${urlLit(e.url, inputs, lit)}${init.length ? `, { ${init.join(', ')} }` : ''});`);
     body.push(`  return data;`);
     if (e.auth) warnings.push(`the captured request carried an Authorization header, which is not frozen (it is a credential the page computes); the tool will fail unless the endpoint also accepts the cookie session — prefer a cookie-authenticated endpoint or read the header from the page at run time`);

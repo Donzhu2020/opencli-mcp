@@ -76,11 +76,31 @@ describe('tools_compile: frozen flows run on the agent engine with checkpoints',
     ];
     const def = compileFromTrace(trace, net, { site: 'shop', name: 'search', description: 'Search', inputs: { term: 'red shoes' } });
     const f = def.func!;
-    expect(f).toContain('tab.fetchJson("https://shop.example/graphql", { method: "POST", headers: {"content-type":"application/json","accept":"*/*"}, body: JSON.stringify({"query":"q","variables":{"term":args.term}}) })'); // the CSRF token is per-session: named, not frozen
-    expect(def.warnings?.some((w) => /x-csrf-token/.test(w) && /not frozen/.test(w))).toBe(true);
+    expect(f).toContain('const __tok0 = await tab.cookie("ct0")'); // the per-session CSRF token is re-read from the cookie at replay, not frozen
+    expect(f).toContain('"x-csrf-token": __tok0'); // …and put back into the request headers
+    expect(f).toContain('tab.fetchJson("https://shop.example/graphql", { method: "POST"'); // the endpoint that carried the data
+    expect(f).toContain('body: JSON.stringify({"query":"q","variables":{"term":args.term}})'); // body parameterized on the declared input
+    expect(def.warnings?.some((w) => /x-csrf-token/.test(w) && /cookie/.test(w))).toBe(true);
     expect(f).not.toContain('telemetry'); // the biggest response is not the answer; the one carrying the extracted values is
     expect(def.warnings?.some((w) => /matched 4 word/.test(w))).toBe(true);
     expect(def.warnings?.some((w) => /Authorization header/.test(w))).toBe(true);
+    expect(() => new Function(`return (${f});`)).not.toThrow();
+  });
+
+  it('emits a signer hook for a computed signature header (not cookie-backed) instead of freezing it', () => {
+    const trace: TraceEvent[] = [
+      t({ kind: 'goto', url: 'https://xhs.example/explore' }),
+      t({ kind: 'evaluate', code: 'x', result: '["Note A","Note B"]' }),
+    ];
+    const net = [
+      n({ url: 'https://xhs.example/api/feed', method: 'GET', contentType: 'application/json', status: 200, bodyBytes: 3000, resourceType: 'Fetch', requestHeaders: { accept: '*/*', 'x-s': 'XYZsignature0123456789abcdef0123456789', 'x-t': '1717000000000' }, responseSample: '{"data":{"items":[{"title":"Note A"},{"title":"Note B"}]}}' }),
+    ];
+    const def = compileFromTrace(trace, net, { site: 'xhs', name: 'feed', description: 'Feed', inputs: {} });
+    const f = def.func!;
+    expect(f).toContain('SIGNER HOOK'); // the scaffold is emitted so the author recomputes the signature at replay
+    expect(f).toContain('x-s'); // the header is named in the hook
+    expect(f).not.toMatch(/"x-s":\s*"XYZ/); // …but its captured value is NOT frozen into headers
+    expect(def.warnings?.some((w) => /x-s/.test(w) && /computed/.test(w) && /SIGNER HOOK/.test(w))).toBe(true);
     expect(() => new Function(`return (${f});`)).not.toThrow();
   });
 });

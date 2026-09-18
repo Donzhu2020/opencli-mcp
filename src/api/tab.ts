@@ -292,6 +292,16 @@ export class Tab {
     return winner as EndpointCandidate[] | null;
   }
   async cookies(domain: string): Promise<unknown[]> { return this.use((p) => p.getCookies({ domain })); }
+  /**
+   * Read one cookie's value at run time — the replay hook for per-request tokens a frozen tool needs (csrf/ct0/
+   * csrftoken/XSRF-TOKEN). Defaults to the current page's host. Returns undefined when the cookie is absent.
+   */
+  async cookie(name: string, opts: { domain?: string } = {}): Promise<string | undefined> {
+    let domain = opts.domain;
+    if (!domain) { const u = await this.url().catch(() => null); try { domain = u ? new URL(u).hostname : undefined; } catch { domain = undefined; } }
+    const list = await this.use((p) => p.getCookies(domain ? { domain } : {})) as Array<{ name?: string; value?: string }>;
+    return list.find((c) => c?.name === name)?.value;
+  }
   /** Fetch JSON through the page (its cookies, its origin) — the network-first way to freeze a site: find the endpoint, call it directly. */
   async fetchJson(url: string, opts: Record<string, unknown> = {}): Promise<unknown> { this.ctx.state.trace.record({ kind: 'note', text: `fetchJson ${url.slice(0, 160)}`, page: this.id }); return this.use((p) => p.fetchJson(url, opts as never)); }
   async frames(): Promise<Array<{ index: number; frameId: string; url: string; name: string; crossOrigin?: boolean; oopif?: boolean }>> { return this.use((p) => p.frames()); }

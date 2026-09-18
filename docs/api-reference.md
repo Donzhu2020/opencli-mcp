@@ -77,6 +77,7 @@ class Tab {
     read(opts?: { pattern?: string; limit?: number; includeStatic?: boolean; afterSequence?: number; }): Promise<{ cursor: number; entries: Array<unknown>; hasMore: boolean; candidates?: Array<EndpointCandidate>; candidatesPending?: boolean; }>; // Cursor-paged read: pass `afterSequence` from the previous result to get only new requests.
   };
   cookies(domain: string): Promise<Array<unknown>>;
+  cookie(name: string, opts?: { domain?: string; }): Promise<string | undefined>; // Read one cookie's value at run time — the replay hook for per-request tokens a frozen tool needs (csrf/ct0/ csrftoken/XSRF-TOKEN). Defaults to the current page's host. Returns undefined when the cookie is absent.
   fetchJson(url: string, opts?: Record<string, unknown>): Promise<unknown>; // Fetch JSON through the page (its cookies, its origin) — the network-first way to freeze a site: find the endpoint, call it directly.
   frames(): Promise<Array<{ index: number; frameId: string; url: string; name: string; crossOrigin?: boolean; oopif?: boolean; }>>;
   download(pattern?: string, timeoutMs?: number): Promise<unknown>;

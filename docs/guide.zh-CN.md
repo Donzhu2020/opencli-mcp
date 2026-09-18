@@ -23,7 +23,7 @@
 Chrome ──connectNative──► opencli-mcp host   （Native Messaging ⇄ 扩展；MCP over 本机回环 HTTP，bearer token）
                             │  runtime：会话 · 站点注册表（OpenCLI 语料）· recon · 轨迹 · js 会话
 本机 MCP 客户端 ──stdio──► `opencli-mcp` launcher ──► host（host 没起来时用内嵌 runtime）
-云端 agent ──隧道/反代──► http://127.0.0.1:19850/mcp
+云端 agent ──隧道/反代──► http://127.0.0.1:19991/mcp
 ```
 
 四个部件：
@@ -115,7 +115,7 @@ claude mcp add opencli-mcp -- node /path/to/opencli-mcp/dist/src/main.js
 { "mcpServers": { "opencli-mcp": { "command": "node", "args": ["/path/to/opencli-mcp/dist/src/main.js"] } } }
 ```
 
-**云端 agent（Streamable HTTP）**：host 监听 `http://127.0.0.1:19850/mcp`，请求头 `Authorization: Bearer $(cat ~/.opencli-mcp/token)`。通过带认证的隧道暴露（`ssh -R`、cloudflared、带 auth 的 ngrok），把 agent 的 MCP connector 指过去。不要裸露端口。
+**云端 agent（Streamable HTTP）**：host 监听 `http://127.0.0.1:19991/mcp`，请求头 `Authorization: Bearer $(cat ~/.opencli-mcp/token)`。通过带认证的隧道暴露（`ssh -R`、cloudflared、带 auth 的 ngrok），把 agent 的 MCP connector 指过去。不要裸露端口。
 
 **没有 Chrome 时**：stdio launcher 内嵌 runtime，`public` 策略的站点命令可用，浏览类工具返回 `browser_unavailable`。
 
@@ -196,7 +196,7 @@ OpenCLI 的适配器语料作为库依赖（`@jackwener/opencli`）随包而来�
 
 ```json
 {
-  "port": 19850,
+  "port": 19991,
   "cursor": true,
   "sites": ["hackernews", "reddit"],
   "sitesWrite": [],

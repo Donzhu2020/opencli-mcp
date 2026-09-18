@@ -10,7 +10,7 @@ export const RUN_DIR = path.join(OPENCLI_MCP_DIR, 'run');
 export const HOST_STATE_FILE = path.join(RUN_DIR, 'host.json');
 export const TOKEN_FILE = path.join(OPENCLI_MCP_DIR, 'token');
 export const CONFIG_FILE = path.join(OPENCLI_MCP_DIR, 'config.json');
-export const DEFAULT_PORT = 19850;
+export const DEFAULT_PORT = 19991;
 
 export interface HostState { pid: number; port: number; host: string; token: string; startedAt: number; extensionVersion?: string | null; contextId?: string; version: string }
 export interface Config { port?: number; cursor?: boolean; sites?: string[]; sitesWrite?: string[]; policy?: { askNewOrigins?: boolean; confirmWrites?: boolean; allowedHosts?: string[]; blockedHosts?: string[] } }

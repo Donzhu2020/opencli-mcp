@@ -6,7 +6,7 @@
 Chrome ──connectNative──► opencli-mcp host (Native Messaging ⇄ extension · MCP over loopback HTTP, bearer token)
                             │   runtime: sessions · site registry (OpenCLI adapters) · recon · traces · js sessions
 local MCP host ──stdio──► `opencli-mcp` launcher ──► host (or embedded runtime when Chrome is closed)
-cloud agent ──tunnel/reverse proxy──► http://127.0.0.1:19850/mcp
+cloud agent ──tunnel/reverse proxy──► http://127.0.0.1:19991/mcp
 ```
 
 ## Why a runtime, not a CLI
@@ -56,14 +56,14 @@ claude mcp add opencli-mcp -- node /path/to/opencli-mcp/dist/src/main.js
 { "mcpServers": { "opencli-mcp": { "command": "node", "args": ["/path/to/opencli-mcp/dist/src/main.js"] } } }
 ```
 ### Cloud agents (Streamable HTTP)
-The host listens on `http://127.0.0.1:19850/mcp` with `Authorization: Bearer $(cat ~/.opencli-mcp/token)`. Expose it through an authenticated tunnel (`ssh -R`, cloudflared, ngrok with auth) and point the agent's MCP connector at it. Never expose the port unauthenticated.
+The host listens on `http://127.0.0.1:19991/mcp` with `Authorization: Bearer $(cat ~/.opencli-mcp/token)`. Expose it through an authenticated tunnel (`ssh -R`, cloudflared, ngrok with auth) and point the agent's MCP connector at it. Never expose the port unauthenticated.
 
 ### Without Chrome
 The stdio launcher embeds a runtime when the host is not running: `public` site commands work; browsing needs Chrome with the extension.
 
 ## Configuration (`~/.opencli-mcp/config.json`)
 ```json
-{ "port": 19850, "cursor": true, "sites": ["hackernews", "reddit"], "sitesWrite": [] }
+{ "port": 19991, "cursor": true, "sites": ["hackernews", "reddit"], "sitesWrite": [] }
 ```
 
 ## Development

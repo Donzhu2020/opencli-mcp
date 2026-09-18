@@ -34,6 +34,8 @@ export interface RuntimePage extends IPage {
   history(op: 'reload' | 'back' | 'forward'): Promise<{ url?: string; title?: string; timedOut?: boolean }>;
   dialog(op: 'get' | 'accept' | 'dismiss', text?: string): Promise<{ dialog: DialogInfo | null; handled?: string }>;
   /** Evaluate in the engine's world (Playwright injected script available as globalThis.__opencliInjected). */
+  /** Accessibility snapshot text — the one observation, also for adapters and compiled tools. */
+  aria(opts?: { viewport?: boolean }): Promise<string>;
   /** Call one function of the page-side module (extension/src/page) in the tab's main frame world. */
   pageCall(fn: string, args?: unknown, timeoutMs?: number): Promise<unknown>;
 }

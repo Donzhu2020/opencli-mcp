@@ -1,7 +1,8 @@
 /**
- * ExtensionPage — OpenCLI's page semantics (snapshot, refs, fingerprint rescue, click/fill/wait…)
- * on top of the opencli-mcp extension bridge. Mirrors OpenCLI's daemon-backed Page, plus the
- * session/tab-lifecycle and human-visibility commands our extension adds.
+ * ExtensionPage — the one page object over the extension bridge. It keeps OpenCLI's adapter contract (goto, evaluate,
+ * fetchJson, wait, click/fillText/typeText/setChecked…) but every interaction method delegates to the act engine:
+ * adapters, compiled tools and the agent drive the page through exactly the same locate → wait → hit-test → real-input
+ * path. Plus the session/tab-lifecycle and human-visibility commands our extension adds.
  */
 import type { ExtensionBridge } from '../host/bridge.js';
 import { BrowserCommandError } from '../host/bridge.js';
@@ -9,7 +10,7 @@ import { importDist } from '../lib/opencli.js';
 import { buildEvaluateExpression } from '@jackwener/opencli/browser/utils';
 import type { RuntimePage } from './page-types.js';
 import type { Command, ActSpec, ActResult, DialogInfo } from '../protocol.js';
-import { pageCallJs } from '../shared/engine.js';
+import { pageCallJs, refToTarget, parseKey } from '../shared/engine.js';
 
 export interface ExtensionPageOptions {
   session: string;
@@ -204,6 +205,46 @@ function definePageClass(lib: Lib): any {
       return r;
     }
     async setVisibility(visible: boolean): Promise<void> { await this.bridge.send('visibility', { ...this.sessionOpts(), visible }); }
+
+    // ── OpenCLI adapter contract, served by the act engine (no second locator engine) ──
+    /** Accessibility snapshot text (the agent's observation) for adapters and compiled tools. */
+    async aria(opts: { viewport?: boolean } = {}): Promise<string> { return String(await this.pageCall('aria', { viewport: Boolean(opts.viewport) })); }
+    async click(ref: string, opts: { nth?: number; firstOnMulti?: boolean } = {}): Promise<{ ref: string; matches_n: number; match_level: 'exact'; click_method: string; hit: string }> {
+      const r = await this.act({ kind: 'click', target: refToTarget(ref, opts) });
+      return { ref, matches_n: r.matches_n, match_level: 'exact', click_method: r.method, hit: r.hit };
+    }
+    async hover(ref: string, opts: { nth?: number; firstOnMulti?: boolean } = {}): Promise<{ matches_n: number; match_level: 'exact' }> { const r = await this.act({ kind: 'hover', target: refToTarget(ref, opts) }); return { matches_n: r.matches_n, match_level: 'exact' }; }
+    async focus(ref: string, opts: { nth?: number; firstOnMulti?: boolean } = {}): Promise<{ focused: boolean; matches_n: number; match_level: 'exact' }> { const r = await this.act({ kind: 'focus', target: refToTarget(ref, opts) }); return { focused: true, matches_n: r.matches_n, match_level: 'exact' }; }
+    async typeText(ref: string, text: string, opts: { nth?: number; firstOnMulti?: boolean } = {}): Promise<{ matches_n: number; match_level: 'exact' }> { const r = await this.act({ kind: 'type', target: refToTarget(ref, opts), value: text }); return { matches_n: r.matches_n, match_level: 'exact' }; }
+    async fillText(ref: string, text: string, opts: { nth?: number; firstOnMulti?: boolean } = {}): Promise<{ filled: boolean; verified: boolean; expected: string; actual: string; length: number; matches_n: number; match_level: 'exact' }> {
+      const r = await this.act({ kind: 'fill', target: refToTarget(ref, opts), value: text });
+      return { filled: Boolean(r.filled), verified: Boolean(r.verified), expected: text, actual: r.actual ?? '', length: text.length, matches_n: r.matches_n, match_level: 'exact' };
+    }
+    async setChecked(ref: string, checked: boolean, opts: { nth?: number; firstOnMulti?: boolean } = {}): Promise<{ checked: boolean; changed: boolean; matches_n: number; match_level: 'exact' }> {
+      const r = await this.act({ kind: checked ? 'check' : 'uncheck', target: refToTarget(ref, opts) });
+      return { checked: Boolean(r.checked), changed: Boolean(r.changed), matches_n: r.matches_n, match_level: 'exact' };
+    }
+    async uploadFiles(ref: string, files: string[], opts: { nth?: number; firstOnMulti?: boolean } = {}): Promise<{ uploaded: boolean; files: number; file_names: string[]; target: string; matches_n: number; match_level: 'exact' }> {
+      const r = await this.act({ kind: 'upload', target: refToTarget(ref, opts), files });
+      return { uploaded: true, files: files.length, file_names: files.map((f) => f.split('/').pop() ?? f), target: ref, matches_n: r.matches_n, match_level: 'exact' };
+    }
+    async drag(source: string, target: string, opts: { from?: { nth?: number; firstOnMulti?: boolean }; to?: { nth?: number; firstOnMulti?: boolean } } = {}): Promise<{ dragged: boolean; source: string; target: string; source_matches_n: number; target_matches_n: number; source_match_level: 'exact'; target_match_level: 'exact' }> {
+      const r = await this.act({ kind: 'drag', target: refToTarget(source, opts.from), to: refToTarget(target, opts.to) });
+      return { dragged: true, source, target, source_matches_n: r.matches_n, target_matches_n: 1, source_match_level: 'exact', target_match_level: 'exact' };
+    }
+    async scrollTo(ref: string, opts: { nth?: number; firstOnMulti?: boolean } = {}): Promise<{ matches_n: number }> { const r = await this.act({ kind: 'hover', target: refToTarget(ref, opts) }); return { matches_n: r.matches_n }; }
+    async pressKey(key: string): Promise<void> {
+      const { def, modifiers } = parseKey(key);
+      await this.cdp('Input.dispatchKeyEvent', { type: def.text ? 'keyDown' : 'rawKeyDown', key: def.key, code: def.code, windowsVirtualKeyCode: def.keyCode, nativeVirtualKeyCode: def.keyCode, modifiers, ...(def.text && { text: def.text, unmodifiedText: def.text }) });
+      await this.cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: def.key, code: def.code, windowsVirtualKeyCode: def.keyCode, nativeVirtualKeyCode: def.keyCode, modifiers });
+    }
+    async scroll(direction = 'down', amount = 600): Promise<void> {
+      const vp = await this.evaluate('({ x: innerWidth / 2, y: innerHeight / 2 })') as { x: number; y: number };
+      await this.act({ kind: 'scroll', target: { x: vp.x, y: vp.y }, direction: direction as 'up' | 'down' | 'left' | 'right', amount });
+    }
+    async nativeClick(x: number, y: number): Promise<void> { await this.act({ kind: 'click', target: { x, y } }); }
+    async nativeType(text: string): Promise<void> { await this.insertText(text); }
+    async nativeKeyPress(key: string, modifiers: string[] = []): Promise<void> { await this.pressKey([...modifiers, key].join('+')); }
     async getVisibility(): Promise<boolean> { const r = await this.bridge.send('visibility', { ...this.sessionOpts() }); return Boolean((r.data as { visible?: boolean } | undefined)?.visible); }
   };
 }

@@ -35,3 +35,13 @@ describe('page calls and frame steps', () => {
     expect(frameSteps(['#a', 1])).toEqual(['#a', 1]);
   });
 });
+
+describe('adapter contract → act target', () => {
+  it('maps OpenCLI refs to the single engine', async () => {
+    const { refToTarget } = await import('../src/shared/engine.js');
+    expect(refToTarget('@button.submit', { nth: 2 })).toEqual({ css: 'button.submit', nth: 2 });
+    expect(refToTarget('e12')).toEqual({ ref: 'e12' });
+    expect(refToTarget('#q', { firstOnMulti: true })).toEqual({ css: '#q', nth: 0 });
+    expect(() => refToTarget('7')).toThrow(/numeric snapshot refs are gone/);
+  });
+});

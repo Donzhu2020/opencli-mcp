@@ -128,17 +128,6 @@ export function listDefinedTools(): Array<{ site: string; name: string; file: st
  * page (cookies included). Otherwise the UI steps (goto/act/observe) become an explicit function.
  * Values equal to an input are replaced by `args.<input>`.
  */
-/** Page-side locator used by compiled tools: tags the best semantic match with data-opencli-compiled. */
-function locateJs(spec: { role?: string; name?: string; label?: string; text?: string; testid?: string; nth?: number }): string {
-  return `(() => { const spec = ${JSON.stringify(spec)}; const norm = (s) => String(s || '').replace(/\\s+/g, ' ').trim().toLowerCase(); const m = (h, n) => n ? (norm(h) === norm(n) || norm(h).includes(norm(n))) : true;
-    const role = (el) => el.getAttribute('role') || ({ a: el.hasAttribute('href') ? 'link' : '', button: 'button', input: ['button','submit'].includes(el.type) ? 'button' : el.type === 'checkbox' ? 'checkbox' : 'textbox', textarea: 'textbox', select: 'combobox' })[el.tagName.toLowerCase()] || '';
-    const name = (el) => el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('title') || el.value || el.innerText || el.textContent || '';
-    document.querySelectorAll('[data-opencli-compiled]').forEach((n) => n.removeAttribute('data-opencli-compiled'));
-    let c = [...document.querySelectorAll('body *')].filter((el) => (!spec.role || role(el) === spec.role) && (!spec.testid || el.getAttribute('data-testid') === spec.testid) && m(name(el), spec.name) && m(name(el), spec.label) && m(el.innerText || el.textContent, spec.text) && el.getClientRects().length);
-    c = c.filter((el) => !c.some((o) => o !== el && el.contains(o)));
-    const el = c[spec.nth ?? 0]; if (!el) throw new Error('compiled locator found nothing: ' + JSON.stringify(spec)); el.setAttribute('data-opencli-compiled', '1'); return c.length; })()`;
-}
-
 export function compileFromTrace(trace: TraceEvent[], opts: { site: string; name: string; description: string; access?: 'read' | 'write'; inputs?: Record<string, string>; domain?: string }): ToolDefinition {
   const inputs = opts.inputs ?? {};
   const argDefs: ArgDef[] = Object.entries(inputs).map(([name, sample]) => ({ name, type: 'string', required: true, help: `example: ${sample}` }));
@@ -162,22 +151,18 @@ export function compileFromTrace(trace: TraceEvent[], opts: { site: string; name
     for (const e of trace) {
       if (e.kind === 'goto') body.push(`  await page.goto(${lit(e.url)});`);
       else if (e.kind === 'act') {
-        // Re-resolve the target the way the agent did: css directly, semantic locators via a page-side query that tags the element.
-        const spec = e.targetSpec ?? {};
-        let target: string;
-        if (e.targetSelector && !e.targetSelector.startsWith('internal:')) target = JSON.stringify(e.targetSelector); // Playwright-generated stable selector
-        else if (spec.css) target = JSON.stringify(spec.css);
-        else if (spec.role || spec.name || spec.label || spec.text || spec.testid) { body.push(`  await page.evaluate(${JSON.stringify(locateJs(spec))});`); target = JSON.stringify('[data-opencli-compiled]'); }
-        else { body.push(`  // TODO: the agent used a snapshot ref (${e.target}); replace with a stable selector`); target = JSON.stringify(spec.css ?? 'body'); }
-        if (e.action === 'click' || e.action === 'dblclick') body.push(`  await page.click(${target});`);
-        else if (e.action === 'fill' || e.action === 'type') body.push(`  await page.fillText(${target}, ${lit(String(e.value ?? ''))});`);
-        else if (e.action === 'press') body.push(`  await page.pressKey(${JSON.stringify(String(e.value ?? 'Enter'))});`);
-        else if (e.action === 'select') body.push(`  await page.evaluate(${JSON.stringify(`(() => { const el = document.querySelector(${target.replace(/"/g, "'")}); if (el) { el.value = ${JSON.stringify(String(e.value ?? ''))}; el.dispatchEvent(new Event('change', { bubbles: true })); } })()`)});`);
-        else if (e.action === 'check' || e.action === 'uncheck') body.push(`  await page.setChecked(${target}, ${e.action === 'check'});`);
-        body.push(`  await page.wait({ time: 1 });`);
+        // Replay through the same engine the agent used: the Playwright-generated selector recorded at act time, else the agent's own locator
+        const spec = (e.targetSpec ?? {}) as Record<string, unknown>;
+        const { frame, ...loc } = spec;
+        const target: Record<string, unknown> = e.targetSelector ? { selector: e.targetSelector } : { ...loc };
+        if (frame !== undefined) target.frame = frame;
+        if (!e.targetSelector && typeof loc.ref === 'string') body.push(`  // the agent acted on aria ref ${loc.ref} and no replay selector was recorded — replace with a stable locator`);
+        const kind = e.action;
+        const valued = ['fill', 'type', 'press', 'select'].includes(kind);
+        body.push(`  await page.act({ kind: ${JSON.stringify(kind)}, target: ${JSON.stringify(target)}${valued ? `, value: ${lit(String(e.value ?? (kind === 'press' ? 'Enter' : '')))}` : ''} });`);
       } else if (e.kind === 'observe') body.push(`  // observed: ${e.mode}${e.summary ? ' — ' + e.summary.slice(0, 80) : ''}`);
     }
-    body.push(`  return await page.snapshot({ compact: true, interactive: false });`);
+    body.push(`  return await page.aria();`);
   }
   const func = `async (page, args) => {\n${body.join('\n')}\n}`;
   return { site: opts.site, name: opts.name, description: opts.description, access: opts.access ?? 'read', strategy: 'cookie', domain: opts.domain, args: argDefs, func, siteSession: 'persistent' };

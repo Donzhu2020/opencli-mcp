@@ -244,3 +244,15 @@ export async function performAct(io: ActIO, spec: ActSpec): Promise<ActResult> {
   try { await io.call('clearActMark', undefined, 1000); } catch { /* page changed */ }
   return base;
 }
+
+/**
+ * OpenCLI adapter contract → act target. Adapters and compiled tools call `page.click(ref)` etc. with a css selector
+ * (optionally `@`-prefixed) or an aria ref (eN); there is no second locator engine behind those methods any more.
+ */
+export function refToTarget(ref: string, opts: { nth?: number; firstOnMulti?: boolean } = {}): ActTarget {
+  const r = String(ref).replace(/^@/, '').trim();
+  if (/^e\d+$/.test(r) || /^f\d+e\d+$/.test(r)) return { ref: r };
+  if (/^\d+$/.test(r)) throw new ActError('invalid_target', `numeric snapshot refs are gone; "${r}" is not a locator`, 'Use a css selector, or an eN ref from the aria snapshot.');
+  const nth = typeof opts.nth === 'number' ? opts.nth : opts.firstOnMulti ? 0 : undefined;
+  return { css: r, ...(nth !== undefined && { nth }) };
+}

@@ -68,7 +68,7 @@ The two surfaces are the same MCP server whether reached over local stdio or rem
 
 ### Freezing flows into tools
 
-- **API first.** Every session tab is captured from the moment it attaches; `tab.network.read()` is a paged log of the requests your steps triggered, plus endpoint `candidates` the page's own scripts call.
+- **API first.** Every session tab is captured from the moment it attaches; `tab.network.read()` is a paged log of the requests your steps triggered; endpoint candidates come from `recon.discover(tab)`.
 - **`recon.discover(tab)`** parses the scripts a page loaded with a JavaScript port of [jsluice](https://github.com/BishopFox/jsluice)'s ideas on web-tree-sitter (fetch/XHR/jQuery/axios/WebSocket/location usage, string concatenation resolved, unknown parts marked `EXPR`), and merges the static candidates with captured network requests into a ranked ledger.
 - **`tools_compile`** drafts a tool from the session's recorded steps — network-first (a captured JSON endpoint becomes one `tab.fetchJson` call), otherwise linear `tab.goto` / `tab.act` / `tab.expect` steps that freeze the *intent* you acted with, not the element the engine happened to resolve. **`tools_define`** writes it to `~/.opencli-mcp/tools/<site>/<name>.js` and registers it live (`tools/list_changed`), no restart. See [`docs/define-tools.md`](docs/define-tools.md).
 
@@ -215,14 +215,14 @@ The first `js` call returns the generated API reference. Model-facing discipline
   "cursor": true,
   "sites": ["hackernews", "reddit"],
   "sitesWrite": [],
-  "policy": { "askNewOrigins": false, "confirmWrites": false, "allowedHosts": [], "blockedHosts": [] }
+  "policy": { "askNewOrigins": false, "confirmWrites": false, "allowedHosts": [] }
 }
 ```
 
 - `port` — the loopback HTTP port the host serves MCP on (default `19991`).
 - `cursor` — whether the cursor overlay is shown.
 - `sites` / `sitesWrite` — sites enabled at startup (read-only / including write commands).
-- `policy` (off by default) — `askNewOrigins` makes the first navigation to a new host return `needs_origin_approval` until `session.allowOrigin(host)` is called in `js`; `confirmWrites` gates write commands and consequential clicks: the typed tools ask the user through the client (a multi-round-trip approval prompt, no confirm flag), while inside `js` the call throws `needs_confirmation` and you re-run it with `{ confirm: true }` after approval; `allowedHosts` / `blockedHosts` are allow/deny lists.
+- `policy` (off by default) — `askNewOrigins` makes the first navigation to a new host return `needs_origin_approval` until `session.allowOrigin(host)` is called in `js`; `confirmWrites` gates write commands and consequential clicks: the typed tools ask the user through the client (a multi-round-trip approval prompt, no confirm flag), while inside `js` the call throws `needs_confirmation` and you re-run it with `{ confirm: true }` after approval; `allowedHosts` pre-approves hosts (in memory, for the run).
 
 The state directory `~/.opencli-mcp/` also holds `token` (the HTTP bearer), `run/host.json` (the running host), `tools/<site>/<name>.js` (agent-defined tools), and the launcher script Chrome spawns. There are no environment-variable overrides — one way to do each thing.
 

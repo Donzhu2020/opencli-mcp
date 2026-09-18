@@ -63,6 +63,30 @@ const networkCaptures = new Map<number, NetworkCaptureState>();
 export interface PendingDialog { type: 'alert' | 'confirm' | 'prompt' | 'beforeunload'; message: string; defaultPrompt?: string; url?: string; openedAt: number; /** CDP session that reported it (an OOPIF child session); undefined = root */ sessionId?: string }
 const dialogs = new Map<number, PendingDialog>();
 const dialogWaiters = new Map<number, Set<(d: PendingDialog) => void>>();
+
+/** Console messages + uncaught exceptions per tab (ring buffer), captured from Runtime events while attached. */
+interface ConsoleEntry { seq: number; level: 'debug' | 'info' | 'log' | 'warn' | 'error'; message: string; timestamp: string; url?: string; line?: number }
+const consoleLogs = new Map<number, { seq: number; entries: ConsoleEntry[] }>();
+const CONSOLE_CAP = 500;
+function noteConsole(tabId: number, level: ConsoleEntry['level'], message: string, url?: string, line?: number): void {
+  let log = consoleLogs.get(tabId);
+  if (!log) { log = { seq: 0, entries: [] }; consoleLogs.set(tabId, log); }
+  log.entries.push({ seq: ++log.seq, level, message: message.slice(0, 4000), timestamp: new Date().toISOString(), url, line });
+  if (log.entries.length > CONSOLE_CAP) log.entries.splice(0, log.entries.length - CONSOLE_CAP);
+}
+function describeRemoteObject(o: { type?: string; value?: unknown; description?: string; unserializableValue?: string }): string {
+  if (o.value !== undefined) return typeof o.value === 'string' ? o.value : JSON.stringify(o.value);
+  return o.unserializableValue ?? o.description ?? String(o.type ?? '');
+}
+export function readConsole(tabId: number, opts: { afterSequence?: number; limit?: number; levels?: string[]; filter?: string } = {}): { cursor: number; entries: ConsoleEntry[]; hasMore: boolean } {
+  const log = consoleLogs.get(tabId);
+  const after = opts.afterSequence ?? 0;
+  const levels = opts.levels?.length ? new Set(opts.levels.map((l) => (l === 'warning' ? 'warn' : l))) : null;
+  const all = (log?.entries ?? []).filter((e) => e.seq > after && (!levels || levels.has(e.level)) && (!opts.filter || e.message.includes(opts.filter)));
+  const limit = Math.max(1, Math.min(opts.limit ?? 100, 500));
+  const page = all.slice(0, limit);
+  return { cursor: page.length ? page[page.length - 1].seq : after, entries: page, hasMore: all.length > limit };
+}
 const dialogClosedWaiters = new Map<number, Set<() => void>>();
 export function getDialog(tabId: number): PendingDialog | null { return dialogs.get(tabId) ?? null; }
 
@@ -810,10 +834,22 @@ export function registerListeners(): void {
   chrome.debugger.onEvent.addListener((source, method, params: any) => {
     if (!source.tabId) return;
     if (method.startsWith('Target.')) { trackOopifs(source, method, params); return; }
+    if (method === 'Runtime.consoleAPICalled') {
+      const t = String(params?.type ?? 'log'); const level = (t === 'warning' ? 'warn' : ['debug', 'info', 'log', 'warn', 'error'].includes(t) ? t : 'log') as ConsoleEntry['level'];
+      const frame = params?.stackTrace?.callFrames?.[0];
+      noteConsole(source.tabId, level, ((params?.args ?? []) as Array<{ type?: string; value?: unknown; description?: string }>).map(describeRemoteObject).join(' '), frame?.url, frame?.lineNumber);
+      return;
+    }
+    if (method === 'Runtime.exceptionThrown') {
+      const d = params?.exceptionDetails ?? {};
+      noteConsole(source.tabId, 'error', `Uncaught ${d.exception?.description ?? d.text ?? 'exception'}`, d.url, d.lineNumber);
+      return;
+    }
     if (method === 'Page.javascriptDialogOpening') { if (!dialogs.has(source.tabId)) noteDialog(source.tabId, { type: params?.type ?? 'alert', message: String(params?.message ?? ''), defaultPrompt: params?.defaultPrompt, url: params?.url, openedAt: Date.now(), sessionId: source.sessionId }); }
     else if (method === 'Page.javascriptDialogClosed') noteDialog(source.tabId, null);
   });
   chrome.tabs.onRemoved.addListener((tabId) => {
+    consoleLogs.delete(tabId);
     dialogs.delete(tabId); dialogWaiters.delete(tabId); dialogClosedWaiters.delete(tabId);
     attached.delete(tabId);
     networkCaptures.delete(tabId);

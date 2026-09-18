@@ -209,6 +209,11 @@ export class Tab {
     dismiss: async (): Promise<DialogInfo | null> => this.use(async (p) => { this.ctx.state.trace.record({ kind: 'note', text: 'dialog dismiss', page: this.id }); return (await p.dialog('dismiss')).dialog; }),
   };
 
+  /** Console messages and uncaught exceptions since the tab was attached (the plugin's tab.dev.logs); cursor-paged like network.read. */
+  readonly console = {
+    read: async (opts: { afterSequence?: number; limit?: number; levels?: Array<'debug' | 'info' | 'log' | 'warn' | 'error'>; filter?: string } = {}) => this.use((p) => p.consoleLogs(opts)),
+  };
+
   readonly network = {
     start: async (pattern = ''): Promise<boolean> => this.use((p) => p.startNetworkCapture(pattern)),
     /** Cursor-paged read: pass `afterSequence` from the previous result to get only new requests. */

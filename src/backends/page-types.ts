@@ -1,6 +1,6 @@
 /** The page surface the runtime relies on: OpenCLI's IPage plus the transport-level extras our backends provide. */
 import type { IPage, ScreenshotOptions, BrowserDownloadWaitResult } from '@jackwener/opencli/types';
-import type { ActSpec, ActResult, DialogInfo } from '../protocol.js';
+import type { ActSpec, ActResult, DialogInfo, ConsoleEntry } from '../protocol.js';
 import type { Expectation, CheckResult } from '../shared/page-contract.js';
 
 export interface RuntimePage extends IPage {
@@ -31,6 +31,8 @@ export interface RuntimePage extends IPage {
   /** The interaction engine at this backend's edge (locate → wait → hit-test → real input → settle). */
   act(spec: ActSpec): Promise<ActResult>;
   /** Native JavaScript dialogs: read the pending one, or answer it (accept with optional prompt text / dismiss). */
+  /** Console messages and uncaught exceptions captured while attached (cursor-paged). */
+  consoleLogs(opts?: { afterSequence?: number; limit?: number; levels?: string[]; filter?: string }): Promise<{ cursor: number; entries: ConsoleEntry[]; hasMore: boolean }>;
   /** Browser-driven reload / back / forward with a bounded load wait. */
   history(op: 'reload' | 'back' | 'forward'): Promise<{ url?: string; title?: string; timedOut?: boolean }>;
   dialog(op: 'get' | 'accept' | 'dismiss', text?: string): Promise<{ dialog: DialogInfo | null; handled?: string }>;

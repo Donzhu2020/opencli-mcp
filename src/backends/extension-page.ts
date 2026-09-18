@@ -9,7 +9,7 @@ import { BrowserCommandError } from '../host/bridge.js';
 import { importDist } from '../lib/opencli.js';
 import { buildEvaluateExpression } from '@jackwener/opencli/browser/utils';
 import type { RuntimePage } from './page-types.js';
-import type { Command, ActSpec, ActResult, DialogInfo } from '../protocol.js';
+import type { Command, ActSpec, ActResult, DialogInfo, ConsoleEntry } from '../protocol.js';
 import { pageCallJs, refToTarget, parseKey, ActError } from '../shared/engine.js';
 import type { Expectation, CheckResult } from '../shared/page-contract.js';
 
@@ -196,6 +196,7 @@ function definePageClass(lib: Lib): any {
       try { const u = await this.evaluate('location.href') as unknown; if (typeof u === 'string' && u) { this._lastUrl = u; return u; } } catch { /* mid-navigation */ }
       return this._lastUrl ?? null;
     }
+    async consoleLogs(opts: { afterSequence?: number; limit?: number; levels?: string[]; filter?: string } = {}): Promise<{ cursor: number; entries: ConsoleEntry[]; hasMore: boolean }> { return (await this.send('console', { afterSequence: opts.afterSequence, limit: opts.limit, levels: opts.levels, filter: opts.filter })).data as { cursor: number; entries: ConsoleEntry[]; hasMore: boolean }; }
     async history(op: 'reload' | 'back' | 'forward'): Promise<{ url?: string; title?: string; timedOut?: boolean }> { const r = (await this.send('history', { historyOp: op, timeoutMs: 20_000 })).data as { url?: string; title?: string; timedOut?: boolean }; this._lastUrl = r.url ?? null; return r; }
     async dialog(op: 'get' | 'accept' | 'dismiss', text?: string): Promise<{ dialog: DialogInfo | null; handled?: string }> { return (await this.send('dialog', { dialogOp: op, ...(text !== undefined && { text }), timeoutMs: 10_000 })).data as { dialog: DialogInfo | null; handled?: string }; }
     async act(spec: ActSpec): Promise<ActResult> {

@@ -22,6 +22,8 @@ export type Action =
   | 'dialog'
   // reload/back/forward driven by the browser (evaluating location.reload() never returns: the context dies mid-call)
   | 'history'
+  // console messages and uncaught exceptions of the tab, captured while attached (the plugin's tab.dev.logs)
+  | 'console'
   // atomic interaction at the runtime edge: locate → wait actionable → hit-test → real input → settle
   | 'act'
   // human visibility
@@ -44,6 +46,11 @@ export interface Command {
   op?: 'list' | 'new' | 'close' | 'select';
   dialogOp?: 'get' | 'accept' | 'dismiss';
   historyOp?: 'reload' | 'back' | 'forward';
+  /** console read: cursor paging */
+  afterSequence?: number;
+  limit?: number;
+  levels?: string[];
+  filter?: string;
   index?: number;
   domain?: string;
   format?: 'png' | 'jpeg';
@@ -103,6 +110,8 @@ export interface ActSpec {
 }
 /** A native JavaScript dialog currently blocking a tab. */
 export interface DialogInfo { type: 'alert' | 'confirm' | 'prompt' | 'beforeunload'; message: string; defaultPrompt?: string; url?: string; openedAt: number }
+
+export interface ConsoleEntry { seq: number; level: 'debug' | 'info' | 'log' | 'warn' | 'error'; message: string; timestamp: string; url?: string; line?: number }
 
 export interface ActResult {
   ok: true;

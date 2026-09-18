@@ -106,6 +106,7 @@ async function handleCommand(cmd: Command): Promise<Result> {
         const dialog = await executor.handleDialog(tabId, op === 'accept', cmd.text);
         return pageScoped(cmd.id, tabId, { handled: op, dialog });
       }
+      case 'console': { const tabId = await sessions.resolveTab(s, cmd.page); await executor.ensureAttached(tabId, s.surface === 'browser'); return pageScoped(cmd.id, tabId, executor.readConsole(tabId, { afterSequence: cmd.afterSequence, limit: cmd.limit, levels: cmd.levels, filter: cmd.filter })); }
       case 'history': {
         const tabId = await sessions.resolveTab(s, cmd.page);
         const op = cmd.historyOp ?? 'reload';

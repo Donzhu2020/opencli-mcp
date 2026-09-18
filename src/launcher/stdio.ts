@@ -1,16 +1,11 @@
 /**
- * stdio launcher for local MCP hosts (Claude Code, Cursor, …).
+ * stdio launcher for local MCP hosts (Claude Code, Cursor, Codex, …).
  * If the Chrome-spawned host is running, proxy to it (shared browser runtime). Otherwise embed a
  * runtime in-process: site commands with strategy `public` work; browsing needs Chrome + the extension.
  */
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import {
-  CallToolRequestSchema, GetPromptRequestSchema, ListPromptsRequestSchema, ListResourceTemplatesRequestSchema, ListResourcesRequestSchema, ListToolsRequestSchema, ReadResourceRequestSchema,
-  ToolListChangedNotificationSchema, ResourceListChangedNotificationSchema, PromptListChangedNotificationSchema, LoggingMessageNotificationSchema,
-} from '@modelcontextprotocol/sdk/types.js';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import { Server } from '@modelcontextprotocol/server';
+import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { Runtime } from '../runtime/runtime.js';
 import { createMcpServer } from '../mcp/server.js';
 import { hostHealth, readConfig, readHostState } from '../host/state.js';
@@ -32,7 +27,7 @@ export async function runStdio(opts: { version: string; forceEmbedded?: boolean 
   const transport = new StdioServerTransport();
   await session.server.connect(transport);
   let closing = false;
-  const bye = () => { if (closing) return; closing = true; void session.close().catch(() => {}).then(() => rt.shutdown()).catch(() => {}).finally(() => process.exit(0)); };
+  const bye = (): void => { if (closing) return; closing = true; void session.close().catch(() => {}).then(() => rt.shutdown()).catch(() => {}).finally(() => process.exit(0)); };
   transport.onclose = bye;
   process.stdin.once('end', bye);
 }
@@ -45,37 +40,29 @@ async function proxyToHost(host: string, port: number, token: string, version: s
     capabilities: { tools: { listChanged: true }, resources: { listChanged: true }, prompts: { listChanged: true }, logging: {} },
     instructions: client.getInstructions(),
   });
-  server.setRequestHandler(ListToolsRequestSchema, async (r) => client.listTools(r.params));
-  server.setRequestHandler(CallToolRequestSchema, async (r, extra) => {
-    const token = r.params._meta?.progressToken;
-    return client.callTool(r.params, undefined, {
-      signal: extra.signal,
-      timeout: 1_800_000,
-      resetTimeoutOnProgress: true,
-      ...(token !== undefined && { onprogress: (p) => { void extra.sendNotification({ method: 'notifications/progress', params: { ...p, progressToken: token } }).catch(() => {}); } }),
-    }) as Promise<Record<string, unknown>>;
-  });
-  server.setRequestHandler(ListResourcesRequestSchema, async (r) => client.listResources(r.params));
-  server.setRequestHandler(ListResourceTemplatesRequestSchema, async (r) => client.listResourceTemplates(r.params));
-  server.setRequestHandler(ReadResourceRequestSchema, async (r) => client.readResource(r.params));
-  server.setRequestHandler(ListPromptsRequestSchema, async (r) => client.listPrompts(r.params));
-  server.setRequestHandler(GetPromptRequestSchema, async (r) => client.getPrompt(r.params));
-  client.setNotificationHandler(ToolListChangedNotificationSchema, async () => { await server.sendToolListChanged(); });
-  client.setNotificationHandler(ResourceListChangedNotificationSchema, async () => { await server.sendResourceListChanged(); });
-  client.setNotificationHandler(PromptListChangedNotificationSchema, async () => { await server.sendPromptListChanged(); });
-  client.setNotificationHandler(LoggingMessageNotificationSchema, async (n) => { await server.sendLoggingMessage(n.params); });
+  server.setRequestHandler('tools/list', async (r) => client.listTools(r.params));
+  // long browser ops can run up to 30 min; progress/cancellation forwarding is handled by the transport in 2026-07-28
+  server.setRequestHandler('tools/call', async (r) => client.callTool(r.params, { timeout: 1_800_000, resetTimeoutOnProgress: true }));
+  server.setRequestHandler('resources/list', async (r) => client.listResources(r.params));
+  server.setRequestHandler('resources/templates/list', async (r) => client.listResourceTemplates(r.params));
+  server.setRequestHandler('resources/read', async (r) => client.readResource(r.params));
+  server.setRequestHandler('prompts/list', async (r) => client.listPrompts(r.params));
+  server.setRequestHandler('prompts/get', async (r) => client.getPrompt(r.params));
+  client.setNotificationHandler('notifications/tools/list_changed', async () => { await server.sendToolListChanged(); });
+  client.setNotificationHandler('notifications/resources/list_changed', async () => { await server.sendResourceListChanged(); });
+  client.setNotificationHandler('notifications/prompts/list_changed', async () => { await server.sendPromptListChanged(); });
+  client.setNotificationHandler('notifications/message', async (n) => { await server.sendLoggingMessage(n.params); });
   const transport = new StdioServerTransport();
   let closing = false;
-  const bye = (why: string) => {
+  const bye = (why: string): void => {
     if (closing) return; closing = true;
     log(why);
-    // detach the close callbacks first: client.close() closes the transport, which would re-enter bye()
     upstream.onclose = undefined; upstream.onerror = undefined; transport.onclose = undefined;
     void client.close().catch(() => {}).finally(() => process.exit(0));
   };
   transport.onclose = () => bye('stdio closed');
   process.stdin.once('end', () => bye('stdin ended'));
   upstream.onclose = () => bye('host connection closed');
-  upstream.onerror = (err) => { if (/ECONNREFUSED|ECONNRESET|fetch failed/i.test(String(err))) bye(`host unreachable: ${err.message}`); else log(`upstream error: ${err.message}`); };
+  upstream.onerror = (err: Error) => { if (/ECONNREFUSED|ECONNRESET|fetch failed/i.test(String(err))) bye(`host unreachable: ${err.message}`); else log(`upstream error: ${err.message}`); };
   await server.connect(transport);
 }

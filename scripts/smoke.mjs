@@ -1,6 +1,6 @@
 // End-to-end smoke test against the embedded stdio server (no browser needed for public site commands).
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { Client } from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
 const useDist = process.argv.includes('--dist');
 const transport = new StdioClientTransport(useDist

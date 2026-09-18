@@ -1,6 +1,6 @@
 // Live-browser end-to-end: goes through the stdio launcher, which proxies to the Chrome-spawned host.
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { Client } from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
 const transport = new StdioClientTransport({ command: 'node', args: ['dist/src/main.js', 'stdio'], stderr: 'pipe' });
 transport.stderr?.on('data', (d) => process.stderr.write(`  [launcher] ${d}`));

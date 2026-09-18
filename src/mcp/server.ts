@@ -2,7 +2,7 @@
  * MCP server per session: typed core tools, dynamic site tools, the `js` code-mode tool,
  * resources (docs, sites, tabs, trace) and prompts — all backed by the same object model.
  */
-import { McpServer, ResourceTemplate, type RegisteredTool } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, ResourceTemplate, type RegisteredTool } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Runtime } from '../runtime/runtime.js';
 import { createAgentApi, Tab, type AgentApi, type Target, type ActAction } from '../api/agent.js';
@@ -63,7 +63,8 @@ function stripImage<T extends Record<string, unknown>>(o: T): { data: Record<str
 
 export interface SessionServer { server: McpServer; api: AgentApi; close(): Promise<void> }
 
-export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?: string } = {}): SessionServer {
+export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?: string; persistent?: boolean } = {}): SessionServer {
+  const persistent = opts.persistent !== false; // stateless HTTP creates a fresh server per request: no long-lived rt listeners, and close() must not finalize the shared runtime session
   const api = createAgentApi(rt, sessionId);
   const state = rt.session(sessionId);
   const docCtx = (): DocContext => ({ backend: rt.backend(), capabilities: [...state.capabilities] });
@@ -231,16 +232,16 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     if (server.isConnected()) server.sendToolListChanged();
   };
   const onToolsChanged = (): void => { try { syncSiteTools(); } catch (err) { rt.emit('log', `syncSiteTools failed: ${(err as Error).message}`); } };
-  rt.on('tools-changed', onToolsChanged);
+  if (persistent) rt.on('tools-changed', onToolsChanged);
   const onLog = (msg: string): void => { if (server.isConnected()) void server.sendLoggingMessage({ level: 'info', logger: 'opencli-mcp', data: msg }).catch(() => {}); };
-  rt.on('log', onLog);
+  if (persistent) rt.on('log', onLog);
   const onBrowserEvent = (e: { kind: string; session?: string }): void => {
     if (!server.isConnected()) return;
     if (e.session && e.session !== `mcp:${sessionId}`) return;
     if (e.kind === 'tab_created' || e.kind === 'tab_acquired' || e.kind === 'tab_closed' || e.kind === 'session_released') server.sendResourceListChanged();
     void server.sendLoggingMessage({ level: 'info', logger: 'browser', data: e }).catch(() => {});
   };
-  rt.on('browser-event', onBrowserEvent);
+  if (persistent) rt.on('browser-event', onBrowserEvent);
   // sites pre-enabled by config apply to every session
   for (const site of rt.configSites) if (rt.registry.has(site)) state.enabledSites.set(site, { write: rt.configSitesWrite.includes(site) });
   if (state.enabledSites.size) queueMicrotask(onToolsChanged);
@@ -260,6 +261,6 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
 
   return {
     server, api,
-    close: async () => { rt.off('tools-changed', onToolsChanged); rt.off('log', onLog); rt.off('browser-event', onBrowserEvent); await rt.closeSession(sessionId); },
+    close: async () => { if (!persistent) return; rt.off('tools-changed', onToolsChanged); rt.off('log', onLog); rt.off('browser-event', onBrowserEvent); await rt.closeSession(sessionId); },
   };
 }

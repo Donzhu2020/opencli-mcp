@@ -1,29 +1,27 @@
 /**
- * Streamable HTTP MCP endpoint on loopback, bearer-token authenticated. One McpServer per MCP
- * session; the runtime is shared. Local launchers and cloud agents (via a tunnel) use the same endpoint.
+ * MCP over loopback HTTP (MCP 2026-07-28, stateless). The v2 `createMcpHandler` serves each request with a fresh
+ * McpServer from the factory over the shared runtime; a thin node wrapper adds the bearer-token gate and /health.
+ * Local launchers proxy here; cloud agents reach the same endpoint through an authenticated tunnel.
  */
 import http from 'node:http';
-import { randomUUID } from 'node:crypto';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { timingSafeEqual } from 'node:crypto';
+import { createMcpHandler } from '@modelcontextprotocol/server';
+import { toNodeHandler } from '@modelcontextprotocol/node';
 import type { Runtime } from '../runtime/runtime.js';
-import { createMcpServer, type SessionServer } from '../mcp/server.js';
+import { createMcpServer } from '../mcp/server.js';
 
 export interface HttpServerHandle { port: number; host: string; close(): Promise<void> }
 
-function readBody(req: http.IncomingMessage): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    req.on('data', (c: Buffer) => chunks.push(c));
-    req.on('end', () => { const raw = Buffer.concat(chunks).toString('utf8'); if (!raw) return resolve(undefined); try { resolve(JSON.parse(raw)); } catch (err) { reject(err); } });
-    req.on('error', reject);
-  });
-}
+/** All HTTP requests share one runtime session (the endpoint is single-user, local); the per-request McpServer is stateless. */
+const HTTP_SESSION = 'http';
 
 export async function startHttpServer(rt: Runtime, opts: { port: number; host?: string; token: string; version: string; allowNoAuth?: boolean }): Promise<HttpServerHandle> {
   const host = opts.host ?? '127.0.0.1';
-  const sessions = new Map<string, { transport: StreamableHTTPServerTransport; session: SessionServer }>();
+  const handler = createMcpHandler(
+    () => createMcpServer(rt, HTTP_SESSION, { version: opts.version, persistent: false }).server,
+    { onerror: (e) => rt.emit('log', `http error: ${e.message}`) },
+  );
+  const mcp = toNodeHandler(handler);
 
   const authorized = (req: http.IncomingMessage, url: URL): boolean => {
     if (opts.allowNoAuth) return true;
@@ -42,28 +40,7 @@ export async function startHttpServer(rt: Runtime, opts: { port: number; host?: 
         return;
       }
       if (url.pathname !== '/mcp') { res.writeHead(404).end(); return; }
-      const sid = req.headers['mcp-session-id'];
-      const sessionId = Array.isArray(sid) ? sid[0] : sid;
-      if (sessionId && sessions.has(sessionId)) {
-        const body = req.method === 'POST' ? await readBody(req) : undefined;
-        await sessions.get(sessionId)!.transport.handleRequest(req, res, body);
-        return;
-      }
-      if (req.method !== 'POST') { res.writeHead(sessionId ? 404 : 400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: sessionId ? 'unknown mcp-session-id (host restarted?)' : 'missing mcp-session-id' })); return; }
-      let body: unknown;
-      try { body = await readBody(req); } catch { res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'invalid JSON body' })); return; }
-      if (!isInitializeRequest(body)) { res.writeHead(sessionId ? 404 : 400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: sessionId ? 'unknown mcp-session-id; re-initialize' : 'expected an initialize request' })); return; }
-      const newId = randomUUID();
-      const session = createMcpServer(rt, newId, { version: opts.version });
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => newId,
-        onsessioninitialized: (id) => { sessions.set(id, { transport, session }); },
-        onsessionclosed: async (id) => { const s = sessions.get(id); sessions.delete(id); await s?.session.close(); },
-      });
-      transport.onclose = () => { if (sessions.has(newId)) { sessions.delete(newId); void session.close(); } };
-      await session.server.connect(transport);
-      await transport.handleRequest(req, res, body);
-      if (!sessions.has(newId)) { await session.close().catch(() => {}); }
+      await mcp(req, res);
     } catch (err) {
       rt.emit('log', `http error: ${(err as Error).stack ?? err}`);
       if (!res.headersSent) res.writeHead(500, { 'content-type': 'application/json' }).end(JSON.stringify({ error: (err as Error).message }));
@@ -76,6 +53,6 @@ export async function startHttpServer(rt: Runtime, opts: { port: number; host?: 
   });
   return {
     port, host,
-    close: async () => { for (const s of sessions.values()) { await s.transport.close().catch(() => {}); await s.session.close().catch(() => {}); } await new Promise<void>((r) => server.close(() => r())); },
+    close: async () => { await handler.close().catch(() => {}); await new Promise<void>((r) => server.close(() => r())); },
   };
 }

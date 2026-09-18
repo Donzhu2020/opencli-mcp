@@ -42,3 +42,5 @@ runtime that replaces it is the design in the essence report: a resident object 
 - 2026-09-18 (owner directive in #mcp:89f2a6cf) — Direct CDP backend (Electron apps / remote Chrome via OPENCLI_CDP_ENDPOINT)
   and every hub/passthrough remnant deleted. The product is two things: Codex-grade step-by-step browser operation through
   the Chrome extension, and freezing explored flows into tools. One browser path means one engine, one lifecycle.
+- 2026-09-18 c904d64 — Electron desktop-app adapters (OpenCLI electron-apps list + user apps.yaml) excluded from the
+  registry: without the CDP backend they cannot run, and a site the runtime cannot drive must not be searchable.

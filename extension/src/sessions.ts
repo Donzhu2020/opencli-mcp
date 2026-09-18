@@ -155,7 +155,7 @@ export class SessionManager {
     let createdId = -1; let loaded = false; let navError: string | null = null;
     const loadedP = new Promise<void>((resolve) => {
       const done = () => { chrome.tabs.onUpdated.removeListener(listener); chrome.webNavigation.onErrorOccurred.removeListener(onErr); resolve(); };
-      const listener = (id: number, info: chrome.tabs.OnUpdatedInfo) => { if (id === createdId && info.status === 'complete') { loaded = true; done(); } };
+      const listener = (id: number, info: chrome.tabs.OnUpdatedInfo, tabInfo: chrome.tabs.Tab) => { if (id === createdId && info.status === 'complete' && tabInfo.url && tabInfo.url !== 'about:blank') { loaded = true; done(); } };
       const onErr = (d: chrome.webNavigation.WebNavigationFramedErrorCallbackDetails) => { if (d.tabId === createdId && d.frameId === 0) { navError = d.error; done(); } };
       chrome.tabs.onUpdated.addListener(listener);
       chrome.webNavigation.onErrorOccurred.addListener(onErr);
@@ -170,8 +170,7 @@ export class SessionManager {
     if (target !== 'about:blank') {
       await executor.ensureAttached(createdId, s.surface === 'browser').catch(() => { /* attach on first command instead */ });
       await chrome.tabs.update(createdId, { url: target }).catch(() => {});
-      const t = await chrome.tabs.get(createdId).catch(() => null);
-      if (t?.status === 'complete' && t.url) loaded = true; else await loadedP;
+      await loadedP; // the load watcher only resolves once the target (not the initial about:blank) reaches 'complete'
       tab = await chrome.tabs.get(createdId).catch(() => tab);
       if (navError) throw new SessionError('page_not_loaded', `navigation to ${target} failed: ${navError}`, 'The browser blocked or could not reach the URL (policy, offline, DNS, or an extension). Check chrome://policy and the network.');
       if (!loaded) console.warn(`[opencli-mcp] tab ${createdId} did not finish loading ${target} within 15s (url=${tab.url ?? ''})`);

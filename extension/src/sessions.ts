@@ -1,8 +1,9 @@
 /**
  * Sessions & tab leases — tabs are the user's property.
  * A session ⇄ one named Chrome tab group. Agent-created tabs (and popups they spawn) join the
- * group in the background, muted until looked at. User tabs are claimed fail-closed
- * (tabId + title + url) and never moved or closed. finalize() decides what the user keeps.
+ * group in the background, muted until looked at. User tabs are claimed by id (or a unique
+ * url/title match; extra matchers are fail-closed guards) and never moved or closed.
+ * finalize() decides what the user keeps.
  */
 import type { BrowserEvent } from '../../src/protocol.js';
 import * as executor from './cdp';

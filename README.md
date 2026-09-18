@@ -24,11 +24,11 @@ A CLI process cannot keep a debugger attached, keep refs alive between calls, pu
 
 ## Tabs are the user's property
 
-Agent tabs open in the background inside a Chrome tab group named after the session (`session_name`), muted until looked at. `tab_claim` takes over a tab the user already has open only when `tabId + title + url` match exactly; claimed tabs are never moved or closed. `session_finalize` keeps only `deliverable` (leaves the group, green badge) or `handoff` (stays in the group, yellow badge) tabs and closes the rest. A cursor overlay glides to the point of each action on visible tabs.
+Agent tabs open in the background inside a Chrome tab group named after the session (`session_name`), muted until looked at. `tab_claim` takes over a tab the user already has open by `tabId`, or by a `url` prefix / `title` substring that matches exactly one tab (given together with a `tabId` they are guards that fail closed); claimed tabs are never moved or closed. `session_finalize` keeps only `deliverable` (leaves the group, green badge) or `handoff` (stays in the group, yellow badge) tabs and closes the rest. A cursor overlay glides to the point of each action on visible tabs.
 
 ## Sites as capabilities
 
-The OpenCLI adapter corpus ships as a library dependency (`@jackwener/opencli`): 160+ sites, ~1200 commands (Bilibili, Zhihu, Xiaohongshu, Twitter/X, Reddit, HackerNews, LinkedIn, YouTube, Amazon, GitHub, Notion, ChatGPT/Gemini/Claude web…). Adapters for Electron desktop apps are excluded — this runtime drives Chrome only. They are not 1300 tools: `sites_search` finds them, `sites_enable` loads one site's commands as typed tools (read-only by default; `write:true` adds account-changing commands), `site_run` calls any command directly, and `sites.<site>.<command>()` works inside `js`.
+The OpenCLI adapter corpus ships as a library dependency (`@jackwener/opencli`): 160+ sites, ~1200 commands (Bilibili, Zhihu, Xiaohongshu, Twitter/X, Reddit, HackerNews, LinkedIn, YouTube, Amazon, GitHub, Notion, ChatGPT/Gemini/Claude web…). Adapters for Electron desktop apps are excluded — this runtime drives Chrome only. They are not 1200 tools: `sites_search` finds them, `sites_enable` loads one site's commands as typed tools (read-only by default; `write:true` adds account-changing commands), `site_run` calls any command directly, and `sites.<site>.<command>()` works inside `js`.
 
 ## Recon and freezing flows into tools
 

@@ -62,15 +62,17 @@ function errorResult(id: string, err: unknown): Result {
   const code = e?.code ?? (/No tab with id|no longer exists/i.test(message) ? 'stale_page' : /Cannot access|chrome:\/\//i.test(message) ? 'not_debuggable' : 'command_failed');
   return { id, ok: false, error: message, errorCode: code, errorHint: e?.hint, ...(e?.dialog ? { data: { dialog: e.dialog } } : {}) };
 }
-function enumerateCrossOriginFrames(tree: unknown): Array<{ index: number; frameId: string; url: string; name: string }> {
-  const out: Array<{ index: number; frameId: string; url: string; name: string }> = [];
+/** Every child frame of the tab (in document order), flagged cross-origin when its origin differs from the top document's. Opaque origins (data:, sandboxed) count as cross-origin. */
+function enumerateCrossOriginFrames(tree: unknown): Array<{ index: number; frameId: string; url: string; name: string; crossOrigin: boolean }> {
+  const out: Array<{ index: number; frameId: string; url: string; name: string; crossOrigin: boolean }> = [];
   const root = (tree as { frameTree?: { frame: { url: string }; childFrames?: unknown[] } })?.frameTree;
   if (!root) return out;
   const origin = (u: string) => { try { return new URL(u).origin; } catch { return null; } };
   const top = origin(root.frame.url);
   const walk = (node: { frame: { id: string; url: string; name?: string }; childFrames?: unknown[] }) => {
     for (const child of (node.childFrames ?? []) as Array<{ frame: { id: string; url: string; name?: string }; childFrames?: unknown[] }>) {
-      if (origin(child.frame.url) !== top) out.push({ index: out.length, frameId: child.frame.id, url: child.frame.url, name: child.frame.name ?? '' });
+      const o = origin(child.frame.url);
+      out.push({ index: out.length, frameId: child.frame.id, url: child.frame.url, name: child.frame.name ?? '', crossOrigin: o === null || o === 'null' || o !== top });
       walk(child);
     }
   };

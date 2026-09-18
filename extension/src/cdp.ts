@@ -66,33 +66,10 @@ const networkCaptures = new Map<number, NetworkCaptureState>();
  * so commands fail fast with `dialog_open` instead of timing out, and let the agent
  * read and answer the dialog explicitly (the ChatGPT plugin surfaces dialogs as state).
  */
-export interface PendingDialog { type: 'alert' | 'confirm' | 'prompt' | 'beforeunload'; message: string; defaultPrompt?: string; url?: string; openedAt: number; /** CDP session that reported it (an OOPIF child session, or the auxiliary session); undefined = root */ sessionId?: string }
+export interface PendingDialog { type: 'alert' | 'confirm' | 'prompt' | 'beforeunload'; message: string; defaultPrompt?: string; url?: string; openedAt: number; /** CDP session that reported it (an OOPIF child session); undefined = root */ sessionId?: string }
 const dialogs = new Map<number, PendingDialog>();
 const dialogWaiters = new Map<number, Set<(d: PendingDialog) => void>>();
 const dialogClosedWaiters = new Map<number, Set<() => void>>();
-/**
- * Answering a dialog on the tab's root session does not work in practice: the input command whose handler opened the
- * dialog is still in flight and chrome.debugger queues later commands behind it (~5s until Chrome gives up on the ack).
- * A second, flat child session on the same page target is independent, so the answer goes through immediately.
- */
-const dialogSessions = new Map<number, string>();
-
-async function ensureDialogSession(tabId: number): Promise<string | null> {
-  const cached = dialogSessions.get(tabId);
-  if (cached) return cached;
-  try {
-    const { targetInfo } = await sendDebuggerCommand({ tabId }, 'Target.getTargetInfo', undefined, 3_000) as { targetInfo: { targetId: string } };
-    const { sessionId } = await sendDebuggerCommand({ tabId }, 'Target.attachToTarget', { targetId: targetInfo.targetId, flatten: true }, 3_000) as { sessionId: string };
-    // Chromium hands a dialog only to sessions whose Page domain was enabled when it opened — enable now, not at answer time
-    await sendDebuggerCommand({ tabId, sessionId } as chrome.debugger.Debuggee, 'Page.enable', undefined, 3_000);
-    dialogSessions.set(tabId, sessionId);
-    return sessionId;
-  } catch (e) {
-    console.warn(`[opencli-mcp] no auxiliary session for tab ${tabId}: ${e instanceof Error ? e.message : String(e)}`);
-    return null;
-  }
-}
-
 export function getDialog(tabId: number): PendingDialog | null { return dialogs.get(tabId) ?? null; }
 
 function dialogOpenError(tabId: number, d: PendingDialog, method: string): Error {
@@ -107,8 +84,10 @@ function dialogOpenError(tabId: number, d: PendingDialog, method: string): Error
 /**
  * Answer the dialog the way the ChatGPT plugin does: send Page.handleJavaScriptDialog and treat the
  * Page.javascriptDialogClosed event as the confirmation — the command's own response may be delayed or lost while the
- * renderer sits in the dialog's nested loop. The answer is tried on every session that could own the dialog: the one
- * that reported it, the pre-attached auxiliary session, and the root session.
+ * renderer sits in the dialog's nested loop. Tried on the session that reported the dialog (an OOPIF child) and on the
+ * root session. chrome.debugger refuses Target.attachToTarget on the page ("Not allowed"), so there is no side channel;
+ * what matters is that the root session is never detached while the dialog is open (see ensureAttached) because
+ * Chromium keeps the dialog's pending callback in that session's PageHandler.
  */
 export async function handleDialog(tabId: number, accept: boolean, promptText?: string): Promise<PendingDialog | null> {
   const d = dialogs.get(tabId) ?? null;
@@ -119,7 +98,7 @@ export async function handleDialog(tabId: number, accept: boolean, promptText?: 
     if (!dialogClosedWaiters.has(tabId)) dialogClosedWaiters.set(tabId, new Set());
     dialogClosedWaiters.get(tabId)!.add(onClosed);
   });
-  const sessions = new Set<string | undefined>([d?.sessionId, dialogSessions.get(tabId), undefined]);
+  const sessions = new Set<string | undefined>([d?.sessionId, undefined]);
   const attempts = [...sessions].map((sessionId) => {
     const target = (sessionId ? { tabId, sessionId } : { tabId }) as chrome.debugger.Debuggee;
     return sendDebuggerCommand(target, 'Page.handleJavaScriptDialog', params, 5_000).then(() => 'ok' as const, (e: unknown) => (e instanceof Error ? e.message : String(e)));
@@ -220,13 +199,17 @@ export async function ensureAttached(tabId: number, aggressiveRetry: boolean = f
   }
 
   if (attached.has(tabId)) {
+    // A native dialog blocks the renderer, not the attachment. Re-attaching here would detach the session that owns
+    // the dialog's pending callback (Chromium: PageHandler::pending_dialog_) and no later session could answer it.
+    if (dialogs.has(tabId)) return;
     // Verify the debugger is still actually attached by sending a harmless command
     try {
       await sendDebuggerCommand({ tabId }, 'Runtime.evaluate', {
         expression: '1', returnByValue: true,
       }, CDP_PROBE_TIMEOUT_MS);
       return; // Still attached and working
-    } catch {
+    } catch (e) {
+      if ((e as { code?: string }).code === 'dialog_open') return;
       // Stale cache entry — need to re-attach
       attached.delete(tabId);
     }
@@ -305,8 +288,6 @@ export async function ensureAttached(tabId: number, aggressiveRetry: boolean = f
   await sendDebuggerCommand({ tabId }, 'Page.enable').catch(() => {});
   // like the ChatGPT plugin: pages gate on document.hasFocus() even when the tab is not the active one
   await sendDebuggerCommand({ tabId }, 'Emulation.setFocusEmulationEnabled', { enabled: true }, 3_000).catch(() => {});
-  // pre-open the auxiliary session now: once a dialog blocks the root session it cannot be created any more
-  await ensureDialogSession(tabId);
 
   // Restore network capture that the re-attach (detach + onDetach) tore down.
   // The detach always disables the CDP Network domain, so re-enable it and put
@@ -921,7 +902,7 @@ export function registerListeners(): void {
     else if (method === 'Page.javascriptDialogClosed') noteDialog(source.tabId, null);
   });
   chrome.tabs.onRemoved.addListener((tabId) => {
-    dialogs.delete(tabId); dialogWaiters.delete(tabId); dialogClosedWaiters.delete(tabId); dialogSessions.delete(tabId);
+    dialogs.delete(tabId); dialogWaiters.delete(tabId); dialogClosedWaiters.delete(tabId);
     attached.delete(tabId);
     networkCaptures.delete(tabId);
     tabFrameContexts.delete(tabId);
@@ -929,7 +910,7 @@ export function registerListeners(): void {
   });
   chrome.debugger.onDetach.addListener((source) => {
     if (source.tabId) {
-      dialogs.delete(source.tabId); dialogSessions.delete(source.tabId);
+      dialogs.delete(source.tabId);
       attached.delete(source.tabId);
       networkCaptures.delete(source.tabId);
       tabFrameContexts.delete(source.tabId);

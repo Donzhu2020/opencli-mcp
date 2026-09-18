@@ -16,7 +16,8 @@ export interface RuntimePage extends IPage {
   waitForDownload(pattern?: string, timeoutMs?: number): Promise<BrowserDownloadWaitResult>;
   setFileInput(files: string[], selector?: string): Promise<void>;
   insertText(text: string): Promise<void>;
-  frames(): Promise<Array<{ index: number; frameId: string; url: string; name: string }>>;
+  /** Child frames in document order; crossOrigin marks frames whose origin differs from the top document (data:/sandboxed count as cross-origin). */
+  frames(): Promise<Array<{ index: number; frameId: string; url: string; name: string; crossOrigin?: boolean }>>;
   evaluateInFrame(js: string, frameIndex: number): Promise<unknown>;
   nativeClick(x: number, y: number): Promise<void>;
   nativeType(text: string): Promise<void>;

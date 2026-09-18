@@ -17,7 +17,8 @@ type Content = Array<{ type: 'text'; text: string } | { type: 'image'; data: str
 type ToolResult = { content: Content; structuredContent?: Record<string, unknown>; isError?: boolean };
 
 const targetSchema = z.object({
-  ref: z.union([z.number(), z.string()]).optional().describe('numeric [N] ref from tab_observe/tab_find'),
+  ref: z.union([z.number(), z.string()]).optional().describe('numeric [N] ref from tab_observe/tab_find, or eN from an aria observe'),
+  selector: z.string().optional().describe('raw Playwright selector, e.g. the selector returned by tab_find'),
   css: z.string().optional().describe('CSS selector; add nth for multiple matches'),
   nth: z.number().int().optional(),
   role: z.string().optional().describe('ARIA role, e.g. button, link, textbox'),
@@ -33,6 +34,7 @@ const targetSchema = z.object({
 function pickTarget(t: z.infer<typeof targetSchema> | undefined): Target | undefined {
   if (!t) return undefined;
   if (t.ref !== undefined) return { ref: t.ref, frame: t.frame };
+  if (t.selector) return { selector: t.selector, nth: t.nth, frame: t.frame };
   if (t.css) return { css: t.css, nth: t.nth, frame: t.frame };
   if (t.x !== undefined && t.y !== undefined) return { x: t.x, y: t.y };
   if (t.role || t.name || t.label || t.text || t.testid) return { role: t.role, name: t.name, label: t.label, text: t.text, testid: t.testid, nth: t.nth, frame: t.frame };
@@ -159,7 +161,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     inputSchema: { tab: z.string().optional(), mode: z.enum(['state', 'screenshot', 'both']).default('state'), source: z.enum(['dom', 'ax', 'aria']).default('dom').describe('dom: budgeted text with [N] refs; ax: accessibility tree; aria: Playwright aria snapshot with [ref=eN] refs usable as act targets'), diff: z.boolean().default(true), interactive: z.boolean().optional().describe('only interactive elements'), viewport: z.boolean().optional().describe('dom source: only elements on screen right now (matches the screenshot); default also includes 800px around the viewport'), maxTextLength: z.number().int().optional(), maxDepth: z.number().int().optional(), annotate: z.boolean().default(false).describe('overlay [N] labels on the screenshot'), fullPage: z.boolean().default(false) },
     annotations: { readOnlyHint: true },
   }, async ({ tab, ...o }) => run(async () => { const t = await tabOf(tab); const { data, images } = stripImage({ tab: t.id, ...(await t.observe(o)) }); return ok(data, images); }));
-  server.registerTool('tab_find', { title: 'Find elements', description: 'Query elements by css or semantic locator (role/name/label/text/testid), or describe the element under a point {x,y} (screenshot coordinates). Returns entries with refs for tab_act.', inputSchema: { tab: z.string().optional(), target: targetSchema, limit: z.number().int().max(100).default(20) }, annotations: { readOnlyHint: true } }, async ({ tab, target, limit }) => run(async () => {
+  server.registerTool('tab_find', { title: 'Find elements', description: 'Query elements with the same engine and locator semantics tab_act uses (css, selector, ref, role/name/label/text/testid), or describe the element under a point {x,y} (screenshot coordinates). Each entry has a replayable selector: pass it to tab_act as {selector}.', inputSchema: { tab: z.string().optional(), target: targetSchema, limit: z.number().int().max(100).default(20) }, annotations: { readOnlyHint: true } }, async ({ tab, target, limit }) => run(async () => {
     const t = await tabOf(tab); const tg = pickTarget(target); if (!tg) throw new ActionError('invalid_target', 'find needs css, a semantic locator, or a point {x,y}');
     return ok(await t.find({ ...tg, limit }));
   }));

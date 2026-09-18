@@ -37,6 +37,7 @@ export function targetToSelector(t: ActTarget): string | null {
     if (/^e\d+$/.test(r) || /^f\d+e\d+$/.test(r)) return `aria-ref=${r}`; // aria snapshot refs
     return `[data-opencli-ref="${r.replace(/"/g, '')}"]`; // DOM snapshot refs
   }
+  if (t.selector) return `${t.selector}${nth}`;
   if (t.css) return `${t.css}${nth}`;
   if (t.role) return `internal:role=${t.role}${t.name ? `[name=${q(t.name)}]` : ''}${nth}`;
   if (t.testid) return `internal:testid=[data-testid=${q(t.testid, true)}]${nth}`;
@@ -151,6 +152,35 @@ export interface ActIO {
   waitForNavigation?(classifyMs: number, timeoutMs: number): Promise<{ navigated: boolean; url?: string }>;
   /** When `evaluate` runs inside an out-of-process iframe, the iframe's position in the top viewport: input events are dispatched on the tab, so resolved points are shifted by this. */
   pointOffset?: { x: number; y: number };
+}
+
+/**
+ * Query the same engine act uses (same selector compilation, same fallback, same visibility judgement) and describe
+ * every match. Each entry carries a replayable `selector` (Playwright generateSelector) that act accepts as
+ * `{selector}`, so find → act never changes locator semantics.
+ */
+export function findJs(selector: string, fallback: string | null, limit: number): string {
+  return `(() => {
+    const injected = globalThis.${ENGINE_GLOBAL};
+    const u = injected.utils || {};
+    let usedSelector = ${JSON.stringify(selector)};
+    let matches = injected.querySelectorAll(injected.parseSelector(usedSelector), document);
+    const fallback = ${JSON.stringify(fallback)};
+    if (!matches.length && fallback) { usedSelector = fallback; matches = injected.querySelectorAll(injected.parseSelector(fallback), document); }
+    const state = (el, name) => { try { return injected.elementState(el, name).matches === true; } catch { return null; } };
+    const desc = (el, i) => {
+      const r = el.getBoundingClientRect();
+      let role = '', name = '', selector = null;
+      try { role = (u.getAriaRole && u.getAriaRole(el)) || el.getAttribute('role') || ''; } catch { role = el.getAttribute('role') || ''; }
+      try { name = u.getElementAccessibleNameText ? String(u.getElementAccessibleNameText(el, false) || '') : ''; } catch {}
+      try { selector = injected.generateSelector(el, { testIdAttributeName: 'data-testid' }).selector; } catch {}
+      const ref = el.getAttribute('data-opencli-ref');
+      const attrs = {}; for (const a of ['id', 'name', 'type', 'placeholder', 'aria-label', 'title', 'href', 'data-testid', 'value']) { const v = el.getAttribute(a); if (v) attrs[a] = a === 'value' && (el.type === 'password') ? '<redacted>' : v.slice(0, 200); }
+      return { nth: i, ref: ref ? Number(ref) : null, selector, tag: el.tagName.toLowerCase(), role, name: name.slice(0, 120), text: (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120), attrs, visible: state(el, 'visible') === true, enabled: state(el, 'enabled'), editable: state(el, 'editable'), box: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) } };
+    };
+    const visible_n = matches.filter((m) => state(m, 'visible') === true).length;
+    return { matches_n: matches.length, visible_n, selector: usedSelector, entries: matches.slice(0, ${Math.max(1, Math.min(limit, 100))}).map(desc) };
+  })()`;
 }
 
 /** Marker the edge sets on an <iframe> element it is about to route into (cross-origin frames need their own debugger target). */

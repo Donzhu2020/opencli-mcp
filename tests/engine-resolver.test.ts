@@ -95,3 +95,28 @@ describe('aria snapshot generator', () => {
     expect(out.split("\n")).toEqual(['- textbox "Name" [ref=e1]: Alice', '- textbox "Password" [ref=e2]: <redacted>', '- textbox "Email" [ref=e3]: <redacted>', '- button "Go" [ref=e4]', '- textbox "Card" [ref=e5]: <redacted>']);
   });
 });
+
+describe('find shares the act engine', () => {
+  it('compiles a raw selector target unchanged', async () => {
+    const { targetToSelector } = await import('../src/shared/engine.js');
+    expect(targetToSelector({ selector: 'internal:role=button[name="Go"i]', nth: 1 })).toBe('internal:role=button[name="Go"i] >> nth=1');
+  });
+  it('lists matches with replayable selectors and the same visibility judgement', async () => {
+    const { findJs } = await import('../src/shared/engine.js');
+    const btn = stubElement('button');
+    const hidden = { ...stubElement('button'), hiddenFlag: true };
+    const injected = {
+      parseSelector: (s: string) => s, querySelectorAll: (sel: string) => (sel === 'internal:label="Nope"i' ? [] : [btn, hidden]),
+      elementState: (el: { hiddenFlag?: boolean }, st: string) => ({ matches: !(st === 'visible' && el.hiddenFlag) }),
+      generateSelector: () => ({ selector: 'internal:role=button[name="Click me"i]' }),
+      utils: { getAriaRole: () => 'button', getElementAccessibleNameText: () => 'Click me' },
+    };
+    const ctx = vm.createContext({ [ENGINE_GLOBAL]: injected, document: {} });
+    const r = vm.runInContext(findJs('internal:label="Nope"i', 'internal:attr=[placeholder="Nope"i]', 20), ctx) as { matches_n: number; visible_n: number; selector: string; entries: Array<Record<string, unknown>> };
+    expect(r.matches_n).toBe(2);
+    expect(r.visible_n).toBe(1);
+    expect(r.selector).toBe('internal:attr=[placeholder="Nope"i]');
+    expect(r.entries[0]).toMatchObject({ nth: 0, role: 'button', name: 'Click me', visible: true, selector: 'internal:role=button[name="Click me"i]' });
+    expect(r.entries[1].visible).toBe(false);
+  });
+});

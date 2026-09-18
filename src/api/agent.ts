@@ -14,11 +14,12 @@ import { Policy } from '../runtime/policy.js';
 import { discoverEndpoints, type DiscoverResult } from '../recon/discover.js';
 import { compileFromTrace, listDefinedTools, type ToolDefinition } from '../sites/define.js';
 import { buildInstructions, readDoc, type DocContext } from '../docs/manifest.js';
-import { ariaSnapshotJs } from '../shared/engine.js';
+import { ariaSnapshotJs, findJs, targetToSelector, fallbackSelector } from '../shared/engine.js';
 import type { DialogInfo } from '../protocol.js';
 
 export type Target = ({ frame?: string | number }) & (
   | { ref: number | string }
+  | { selector: string; nth?: number }
   | { css: string; nth?: number }
   | { role?: string; name?: string; label?: string; text?: string; testid?: string; nth?: number }
   | { x: number; y: number });
@@ -46,7 +47,7 @@ function lib(): Promise<Lib> {
   return libPromise;
 }
 
-interface FindEntry { nth: number; ref: number; tag: string; role: string; text: string; attrs: Record<string, string>; visible: boolean; compound?: unknown }
+interface FindEntry { nth: number; ref: number | null; selector?: string | null; tag: string; role: string; name?: string; text: string; attrs: Record<string, string>; visible: boolean; enabled?: boolean | null; editable?: boolean | null; box?: { x: number; y: number; w: number; h: number } }
 
 function describeTarget(t: Target | undefined): string {
   if (!t) return '';
@@ -136,18 +137,19 @@ export class Tab {
     });
   }
 
-  async find(target: Target & { limit?: number }): Promise<{ matches_n: number; entries: FindEntry[] }> {
-    const L = await lib();
+  async find(target: Target & { limit?: number }): Promise<{ matches_n: number; visible_n?: number; selector?: string; entries: FindEntry[] }> {
     return this.use(async (page) => {
       if ('x' in target) {
         // element at a viewport point (screenshot coordinates) → locator-oriented description, like Codex's elementInfo
         const r = await page.evaluateWithArgs(`(() => { const el = document.elementFromPoint(x, y); if (!el) return { matches_n: 0, entries: [] }; const chain = []; let n = el; while (n && n !== document.body && chain.length < 4) { chain.push(n); n = n.parentElement; } const desc = (e, i) => { const r = e.getBoundingClientRect(); return { nth: i, ref: Number(e.getAttribute('data-opencli-ref')) || 0, tag: e.tagName.toLowerCase(), role: e.getAttribute('role') || '', text: (e.innerText || e.textContent || '').trim().slice(0, 120), attrs: Object.fromEntries(['id','class','name','type','placeholder','aria-label','title','href','data-testid'].filter((a) => e.getAttribute(a)).map((a) => [a, e.getAttribute(a)])), visible: r.width > 0 && r.height > 0, box: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) } }; }; return { matches_n: chain.length, entries: chain.map(desc) }; })()`, { x: target.x, y: target.y }) as { matches_n: number; entries: FindEntry[] };
         return r;
       }
-      const js = 'css' in target ? L.buildFindJs(target.css, { limit: target.limit ?? 20 }) : L.buildSemanticFindJs({ role: (target as { role?: string }).role, name: (target as { name?: string }).name, label: (target as { label?: string }).label, text: (target as { text?: string }).text, testid: (target as { testid?: string }).testid, limit: target.limit ?? 20 });
-      const r = await page.evaluate(js);
-      if (L.isFindError(r)) throw new ActionError(r.error.code, r.error.message, r.error.hint);
-      return r as { matches_n: number; entries: FindEntry[] };
+      // same engine and the same compiled selector as act: what find lists is exactly what act would resolve
+      const spec = target as Record<string, unknown>;
+      const selector = targetToSelector(spec);
+      if (!selector) throw new ActionError('invalid_target', 'find needs selector, css, ref, a semantic locator (role/name/label/text/testid), or a point {x,y}');
+      const r = await page.engineEvaluate(findJs(selector, fallbackSelector(spec), target.limit ?? 20));
+      return r as { matches_n: number; visible_n: number; selector: string; entries: FindEntry[] };
     });
   }
 

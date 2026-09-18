@@ -3,10 +3,10 @@
 **OpenCLI reborn as an MCP-native browser runtime.** One resident process, spawned by Chrome, that gives any MCP host — Claude Code, Cursor, Claude Desktop, or a cloud agent through a tunnel — a persistent object model over your *logged-in* browser, 170+ site adapters, syntax-aware API discovery, and the ability to freeze what an agent explored into a reusable tool.
 
 ```
-Chrome ──connectNative──► opencli-mcp host (Native Messaging ⇄ extension · MCP over loopback HTTP, bearer token)
+Chrome ──connectNative──► opencli-mcp host (Native Messaging ⇄ extension · MCP over a local unix socket / named pipe)
                             │   runtime: sessions · site registry (OpenCLI adapters) · recon · traces · js sessions
 local MCP host ──stdio──► `opencli-mcp` launcher ──► host (or embedded runtime when Chrome is closed)
-cloud agent ──tunnel/reverse proxy──► http://127.0.0.1:19850/mcp
+cloud agent ──tunnel/reverse proxy──► http://127.0.0.1:19850/mcp   (only when config.remote is set: TCP + bearer token)
 ```
 
 ## Why a runtime, not a CLI
@@ -56,14 +56,14 @@ claude mcp add opencli-mcp -- node /path/to/opencli-mcp/dist/src/main.js
 { "mcpServers": { "opencli-mcp": { "command": "node", "args": ["/path/to/opencli-mcp/dist/src/main.js"] } } }
 ```
 ### Cloud agents (Streamable HTTP)
-The host listens on `http://127.0.0.1:19850/mcp` with `Authorization: Bearer $(cat ~/.opencli-mcp/token)`. Expose it through an authenticated tunnel (`ssh -R`, cloudflared, ngrok with auth) and point the agent's MCP connector at it. Never expose the port unauthenticated.
+Locally the host is reached over `~/.opencli-mcp/run/host.sock` (a named pipe on Windows) — no port, no token; the socket's permissions are the authorization, as in Codex's browser-service. For remote agents set `"remote": { "port": 19850 }` in `~/.opencli-mcp/config.json`: the host then also listens on `http://127.0.0.1:19850/mcp` with `Authorization: Bearer $(cat ~/.opencli-mcp/token)`. Expose it through an authenticated tunnel (`ssh -R`, cloudflared, ngrok with auth) and point the agent's MCP connector at it. Never expose the port unauthenticated.
 
 ### Without Chrome
 The stdio launcher embeds a runtime when the host is not running: `public` site commands work; browsing needs Chrome with the extension.
 
 ## Configuration (`~/.opencli-mcp/config.json`)
 ```json
-{ "port": 19850, "cursor": true, "sites": ["hackernews", "reddit"], "sitesWrite": [] }
+{ "cursor": true, "sites": ["hackernews", "reddit"], "sitesWrite": [], "remote": { "port": 19850 } }
 ```
 
 ## Development

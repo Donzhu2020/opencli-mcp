@@ -81,7 +81,7 @@ export class NativeHost {
 
   private async handle(msg: HostToExt): Promise<void> {
     if (!msg) return;
-    if (msg.type === 'ready') { console.log(`[opencli-mcp] host ${msg.version} ready on port ${msg.port}`); return; }
+    if (msg.type === 'ready') { console.log(`[opencli-mcp] host ${msg.version} ready at ${msg.endpoint}`); return; }
     if (msg.type !== 'command') return;
     const cmd = msg.command;
     let result: Result;

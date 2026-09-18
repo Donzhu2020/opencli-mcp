@@ -11,7 +11,7 @@ export interface DoctorResult {
   node: string;
   extension: { dir: string; built: boolean; id: string | null };
   manifests: Array<{ browser: string; file: string; present: boolean; launcherExists: boolean }>;
-  host: { stateFile: string; running: boolean; port?: number; backend?: string; extensionConnected?: boolean; error?: string };
+  host: { stateFile: string; running: boolean; endpoint?: string; remote?: string; backend?: string; extensionConnected?: boolean; error?: string };
   chromeRunning: boolean | null;
   advice: string[];
 }
@@ -47,7 +47,7 @@ export async function doctor(): Promise<DoctorResult> {
     node: process.version,
     extension: { dir: extDir, built, id },
     manifests,
-    host: { stateFile: HOST_STATE_FILE, running: health.ok, port: state?.port, backend: health.backend, extensionConnected: health.extensionConnected, error: health.error },
+    host: { stateFile: HOST_STATE_FILE, running: health.ok, endpoint: state?.socket, remote: state?.remote ? `http://${state.remote.host}:${state.remote.port}/mcp` : undefined, backend: health.backend, extensionConnected: health.extensionConnected, error: health.error },
     chromeRunning,
     advice,
   };

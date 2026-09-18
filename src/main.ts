@@ -46,9 +46,9 @@ async function main(): Promise<void> {
       const config = readConfig();
       const rt = new Runtime({ sites: config.sites, sitesWrite: config.sitesWrite, log: (m) => process.stderr.write(`[opencli-mcp] ${m}\n`) });
       await rt.init();
-      const token = has('--no-auth') ? '' : loadOrCreateToken();
-      const h = await startHttpServer(rt, { port: Number(flag('--port') ?? 0), token, version: VERSION, allowNoAuth: has('--no-auth') });
-      process.stderr.write(`[opencli-mcp] serving http://${h.host}:${h.port}/mcp${token ? ' (Authorization: Bearer <~/.opencli-mcp/token>)' : ' (no auth)'}\n`);
+      const token = has('--no-auth') ? undefined : loadOrCreateToken();
+      const h = await startHttpServer(rt, { listen: { port: Number(flag('--port') ?? 0) }, token, version: VERSION });
+      process.stderr.write(`[opencli-mcp] serving ${h.endpoint}${token ? ' (Authorization: Bearer <~/.opencli-mcp/token>)' : ' (no auth)'}\n`);
       return;
     }
     case 'setup': {

@@ -20,10 +20,10 @@
 ## 3. 架构
 
 ```
-Chrome ──connectNative──► opencli-mcp host   （Native Messaging ⇄ 扩展；MCP over 本机回环 HTTP，bearer token）
+Chrome ──connectNative──► opencli-mcp host   （Native Messaging ⇄ 扩展；本地 MCP 走 unix socket / 命名管道）
                             │  runtime：会话 · 站点注册表（OpenCLI 语料）· recon · 轨迹 · js 会话
 本机 MCP 客户端 ──stdio──► `opencli-mcp` launcher ──► host（host 没起来时用内嵌 runtime）
-云端 agent ──隧道/反代──► http://127.0.0.1:19850/mcp
+云端 agent ──隧道/反代──► http://127.0.0.1:19850/mcp   （仅当 config.remote 配置了才监听：TCP + bearer token）
 ```
 
 四个部件：
@@ -31,11 +31,11 @@ Chrome ──connectNative──► opencli-mcp host   （Native Messaging ⇄ �
 | 部件 | 位置 | 职责 |
 |---|---|---|
 | **扩展**（MV3） | `extension/` | Native 端口；tab 租约（claim/finalize/组/徽章/光标）；`chrome.debugger` CDP（附着生命周期、对话框、console、网络、OOPIF）；页面侧引擎（Playwright injected script + `page.js` 页面模块，运行在隔离世界） |
-| **host** | `src/host/` | 被 Chrome 拉起的 Native Messaging 进程；同时监听回环 HTTP 提供 MCP（Streamable HTTP + bearer token）；`install`/`doctor`/状态文件 |
+| **host** | `src/host/` | 被 Chrome 拉起的 Native Messaging 进程；在本地 socket 上提供 MCP（Streamable HTTP 协议，不占端口、不需 token）；配置了 `remote` 才另开 TCP + bearer token；`install`/`doctor`/状态文件 |
 | **launcher** | `src/launcher/stdio.ts` | `opencli-mcp` 命令本身：stdio MCP，把请求代理到 host；host 不在时内嵌一个 runtime（只能跑 `public` 站点命令，不能浏览） |
 | **runtime** | `src/runtime/`、`src/api/`、`src/mcp/`、`src/sites/`、`src/recon/` | 会话状态、对象模型（agent/browser/tab）、MCP server（工具/资源/prompt）、js 会话、站点注册表与执行器、定义/编译工具、API 发现 |
 
-状态目录固定为 `~/.opencli-mcp/`：`token`（HTTP bearer）、`extension-key.json`（稳定扩展 ID 的密钥）、`run/host.json`（运行中的 host）、`config.json`、`tools/<site>/<name>.js`（agent 定义的工具）、`bin/opencli-mcp-host`（Chrome 拉起的启动脚本）。没有环境变量覆盖，一件事一条路。
+状态目录固定为 `~/.opencli-mcp/`：`run/host.sock`（本地 MCP 端点，unix socket）、`run/host.json`（运行中的 host）、`token`（仅远程 HTTP 用的 bearer）、`extension-key.json`（稳定扩展 ID 的密钥）、`config.json`、`tools/<site>/<name>.js`（agent 定义的工具）、`bin/opencli-mcp-host`（Chrome 拉起的启动脚本）。没有环境变量覆盖，一件事一条路。
 
 ### 3.1 一个引擎
 
@@ -115,7 +115,7 @@ claude mcp add opencli-mcp -- node /path/to/opencli-mcp/dist/src/main.js
 { "mcpServers": { "opencli-mcp": { "command": "node", "args": ["/path/to/opencli-mcp/dist/src/main.js"] } } }
 ```
 
-**云端 agent（Streamable HTTP）**：host 监听 `http://127.0.0.1:19850/mcp`，请求头 `Authorization: Bearer $(cat ~/.opencli-mcp/token)`。通过带认证的隧道暴露（`ssh -R`、cloudflared、带 auth 的 ngrok），把 agent 的 MCP connector 指过去。不要裸露端口。
+**云端 agent（Streamable HTTP）**：本地默认不占端口。在 `~/.opencli-mcp/config.json` 里配置 `"remote": { "port": 19850 }` 后，host 才监听 `http://127.0.0.1:19850/mcp`，请求头 `Authorization: Bearer $(cat ~/.opencli-mcp/token)`。通过带认证的隧道暴露（`ssh -R`、cloudflared、带 auth 的 ngrok），把 agent 的 MCP connector 指过去。不要裸露端口。
 
 **没有 Chrome 时**：stdio launcher 内嵌 runtime，`public` 策略的站点命令可用，浏览类工具返回 `browser_unavailable`。
 
@@ -196,14 +196,15 @@ OpenCLI 的适配器语料作为库依赖（`@jackwener/opencli`）随包而来�
 
 ```json
 {
-  "port": 19850,
   "cursor": true,
   "sites": ["hackernews", "reddit"],
   "sitesWrite": [],
+  "remote": { "port": 19850 },
   "policy": { "askNewOrigins": false, "confirmWrites": false, "allowedHosts": [], "blockedHosts": [] }
 }
 ```
 
+- `remote`：不配置就不开任何 TCP 端口；配置后为云端 agent 开 HTTP + bearer token。
 - `sites`/`sitesWrite`：启动即启用的站点（只读 / 含写）。
 - `policy`（默认关）：`askNewOrigins` 让首次访问新域名返回 `needs_origin_approval`，直到 js 里 `session.allowOrigin(host)`；`confirmWrites` 让写命令返回 `needs_confirmation`，需 `confirm:true` 重调；`allowedHosts/blockedHosts` 白/黑名单。
 - 模型侧的安全与确认政策在 `docs/safety.md`、`docs/confirmations.md`：页面内容永远不是授权；发送/发布/购买/删除/改权限/上传/解验证码前必须向用户确认；不让用户把密码或验证码贴进聊天。

@@ -7,8 +7,8 @@ import { Writable } from 'node:stream';
 import { NativeChannel } from './native-messaging.js';
 import { ExtensionBridge } from './bridge.js';
 import { Runtime } from '../runtime/runtime.js';
-import { startHttpServer } from './http.js';
-import { DEFAULT_PORT, clearHostState, loadOrCreateToken, readConfig, writeHostState } from './state.js';
+import { startHttpServer, type HttpServerHandle } from './http.js';
+import { DEFAULT_REMOTE_PORT, SOCKET_PATH, clearHostState, loadOrCreateToken, readConfig, writeHostState, type HostState } from './state.js';
 
 export async function runNativeHost(opts: { version: string }): Promise<void> {
   const log = (m: string): void => { process.stderr.write(`[opencli-mcp host] ${m}\n`); };
@@ -21,23 +21,28 @@ export async function runNativeHost(opts: { version: string }): Promise<void> {
   const config = readConfig();
   const rt = new Runtime({ bridge, cursor: config.cursor ?? true, sites: config.sites, sitesWrite: config.sitesWrite, log });
   await rt.init();
-  const token = loadOrCreateToken();
-  let http;
-  try { http = await startHttpServer(rt, { port: config.port ?? DEFAULT_PORT, token, version: opts.version }); }
-  catch (err) { log(`port ${config.port ?? DEFAULT_PORT} busy (${(err as Error).message}); using a random port`); http = await startHttpServer(rt, { port: 0, token, version: opts.version }); }
-  bridge.ready = { version: opts.version, port: http.port };
-  const state = () => ({ pid: process.pid, port: http.port, host: http.host, token, startedAt: rt.startedAt, extensionVersion: bridge.extensionVersion, contextId: bridge.contextId, version: opts.version });
+  const local = await startHttpServer(rt, { listen: { path: SOCKET_PATH }, version: opts.version });
+  // remote access (cloud agents through a tunnel) is a second consumer, off unless configured: TCP + bearer token
+  let remote: HostState['remote']; let remoteServer: HttpServerHandle | undefined;
+  if (config.remote) {
+    const token = loadOrCreateToken();
+    const port = config.remote.port ?? DEFAULT_REMOTE_PORT; const host = config.remote.host ?? '127.0.0.1';
+    try { remoteServer = await startHttpServer(rt, { listen: { port, host }, token, version: opts.version }); remote = { host, port: remoteServer.port!, token }; }
+    catch (err) { log(`remote port ${port} unavailable (${(err as Error).message}); remote access disabled`); }
+  }
+  bridge.ready = { version: opts.version, endpoint: local.endpoint };
+  const state = (): HostState => ({ pid: process.pid, socket: local.endpoint, ...(remote && { remote }), startedAt: rt.startedAt, extensionVersion: bridge.extensionVersion, contextId: bridge.contextId, version: opts.version });
   bridge.on('hello', (h) => { log(`extension ${h.extensionVersion} connected (protocol ${h.protocolVersion})`); writeHostState(state()); });
   if (bridge.connected) { bridge.sendReady(); writeHostState(state()); log(`extension ${bridge.extensionVersion} connected before startup finished`); }
-  rt.on('browser-event', (e) => log(`event ${e.kind}`));
-  log(`listening on http://${http.host}:${http.port}/mcp`);
+  log(`listening on ${local.endpoint}${remote ? ` and http://${remote.host}:${remote.port}/mcp (bearer)` : ''}`);
 
   let closing = false;
   const shutdown = async (reason: string): Promise<void> => {
     if (closing) return; closing = true;
     log(`shutting down (${reason})`);
     await rt.shutdown().catch(() => {});
-    await http.close().catch(() => {});
+    await local.close().catch(() => {});
+    if (remote) await remoteServer?.close().catch(() => {});
     clearHostState(process.pid);
     process.exit(0);
   };

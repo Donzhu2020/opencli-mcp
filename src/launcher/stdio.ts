@@ -13,15 +13,15 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { Runtime } from '../runtime/runtime.js';
 import { createMcpServer } from '../mcp/server.js';
-import { hostHealth, readConfig, readHostState } from '../host/state.js';
+import { hostHealth, readConfig, readHostState, socketFetch, LOCAL_MCP_URL } from '../host/state.js';
 
 export async function runStdio(opts: { version: string; forceEmbedded?: boolean }): Promise<void> {
   const log = (m: string): void => { process.stderr.write(`[opencli-mcp] ${m}\n`); };
   const state = readHostState();
   const health = opts.forceEmbedded ? { ok: false } : await hostHealth(state);
   if (state && health.ok) {
-    log(`proxying to host on port ${state.port} (backend ${health.backend})`);
-    await proxyToHost(state.host, state.port, state.token, opts.version, log);
+    log(`proxying to host at ${state.socket} (backend ${health.backend})`);
+    await proxyToHost(state.socket, opts.version, log);
     return;
   }
   log(`host not running (${'error' in health ? health.error : 'embedded mode'}): embedded runtime; browsing needs Chrome + the extension`);
@@ -37,9 +37,10 @@ export async function runStdio(opts: { version: string; forceEmbedded?: boolean 
   process.stdin.once('end', bye);
 }
 
-async function proxyToHost(host: string, port: number, token: string, version: string, log: (m: string) => void): Promise<void> {
+async function proxyToHost(socket: string, version: string, log: (m: string) => void): Promise<void> {
   const client = new Client({ name: 'opencli-mcp-stdio', version }, { capabilities: {} });
-  const upstream = new StreamableHTTPClientTransport(new URL(`http://${host}:${port}/mcp`), { requestInit: { headers: { authorization: `Bearer ${token}` } } });
+  // the same Streamable HTTP protocol, carried by the local socket instead of a TCP port
+  const upstream = new StreamableHTTPClientTransport(new URL(LOCAL_MCP_URL), { fetch: socketFetch(socket) as unknown as typeof fetch });
   await client.connect(upstream);
   const server = new Server({ name: 'opencli-mcp', version }, {
     capabilities: { tools: { listChanged: true }, resources: { listChanged: true }, prompts: { listChanged: true }, logging: {} },

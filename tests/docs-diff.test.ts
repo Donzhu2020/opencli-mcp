@@ -10,7 +10,7 @@ describe('docs manifest', () => {
     expect(ext).toContain('Tabs are the user');
     expect(none).not.toContain('Tabs are the user');
     expect(readDoc('js-tool')).toContain('agent.browsers');
-    expect(requiredDocsFor('cdp_send', { backend: 'extension', capabilities: ['cdp'] })).toEqual(['capabilities/cdp']);
+    expect(requiredDocsFor('cdp_send', { backend: 'extension', capabilities: ['cdp'] })).toEqual([]); // no typed cdp tool any more: the capability doc is returned by browser.capabilities.get('cdp') in js
     expect(listDocs({ backend: 'none', capabilities: [] }).find((d) => d.name === 'tab-lifecycle')?.available).toBe(false);
   });
 });

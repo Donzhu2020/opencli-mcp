@@ -26,7 +26,7 @@ export const DOCS_MANIFEST: DocEntry[] = [
   { name: 'js-tool', mode: 'model' },
   { name: 'recon', mode: 'lookup', description: 'read before discovering a site’s API endpoints' },
   { name: 'define-tools', mode: 'lookup', description: 'read before freezing a flow into a tool' },
-  { name: 'capabilities/cdp', mode: 'model', when: { capabilities: ['cdp'] }, requiredFor: ['cdp_send'] },
+  { name: 'capabilities/cdp', mode: 'model', when: { capabilities: ['cdp'] } },
   { name: 'capabilities/visibility', mode: 'model', when: { capabilities: ['visibility'] } },
   { name: 'troubleshooting', mode: 'lookup', description: 'read when the browser bridge fails' },
 ];

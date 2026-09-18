@@ -17,7 +17,7 @@ const text = (r) => r.content.filter((c) => c.type === 'text').map((c) => c.text
 const call = async (name, args = {}) => { const r = await client.callTool({ name, arguments: args }); const s = text(r); console.log(`\n▶ ${name} ${JSON.stringify(args)} ${r.isError ? 'ERROR' : 'ok'}\n${s.slice(0, 700)}${s.length > 700 ? '…' : ''}`); return r; };
 await call('doctor');
 await call('sites_search', { query: 'hacker news', limit: 5 });
-await call('sites_enable', { site: 'hackernews' });
+await call('js', { code: "await sites.enable('hackernews')" });
 const after = await client.listTools();
 console.log(`\ntools after enable: ${after.tools.length}; has hackernews_top: ${after.tools.some((t) => t.name === 'hackernews_top')}`);
 await call('hackernews_top', { limit: 3 });
@@ -26,7 +26,7 @@ await call('js', { code: 'const hits = sites.search("reddit hot");\nhits.length'
 await call('js', { code: 'const top = await sites.hackernews.top({ limit: 2 });\ntop.map(r => r.title)' });
 await call('tools_define', { site: 'smoketest', name: 'echo', description: 'echo args', access: 'read', strategy: 'public', args: [{ name: 'msg', required: true }], columns: ['msg', 'len'], func: 'async (args) => ({ msg: args.msg, len: args.msg.length })' });
 await call('site_run', { site: 'smoketest', command: 'echo', args: { msg: 'hello' } });
-await call('tools_remove', { site: 'smoketest', name: 'echo' });
+await call('js', { code: "tools.remove('smoketest', 'echo')" });
 await call('docs_list');
 const res = await client.listResources();
 console.log(`\nresources: ${res.resources.map((r) => r.uri).join(', ')}`);

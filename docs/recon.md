@@ -1,4 +1,4 @@
-## recon_discover — find a site's API behind the page
+## recon.discover(tab) — find a site's API behind the page
 
 Static candidates + dynamic evidence. The runtime collects the scripts the page loaded, parses them with a syntax-aware analyzer (fetch/XHR/jQuery/axios/WebSocket/location uses; string concatenation resolved, unknown parts marked `EXPR`), and merges with captured network requests. Ledger order: seen in network > api-shaped static > other.
 

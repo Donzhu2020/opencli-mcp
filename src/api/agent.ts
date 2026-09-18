@@ -352,7 +352,6 @@ export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
   const browserFor = (id: string): Browser => {
     const backend = rt.backend();
     if (id === 'chrome' || id === 'extension') { if (backend !== 'extension') throw new ActionError('browser_unavailable', 'Chrome extension backend is not connected', 'Run doctor; make sure Chrome is running with the opencli-mcp extension.'); return new Browser('chrome', 'extension', ctx); }
-    if (id === 'cdp') { if (backend !== 'cdp' && !rt.cdpEndpoint) throw new ActionError('browser_unavailable', 'No CDP endpoint configured', 'Set OPENCLI_CDP_ENDPOINT.'); return new Browser('cdp', 'cdp', ctx); }
     throw new ActionError('unknown_browser', `no browser "${id}"`);
   };
   const getDefault = async (): Promise<Browser> => {
@@ -396,11 +395,10 @@ export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
       browsers: {
         list: async () => [
           { id: 'chrome', type: 'extension', connected: rt.backend() === 'extension' },
-          ...(rt.cdpEndpoint ? [{ id: 'cdp', type: 'cdp', connected: true }] : []),
         ],
         get: async (id: string) => browserFor(id),
         getDefault,
-        getForUrl: async (url: string) => { try { const h = new URL(url).hostname; if ((h === 'localhost' || h === '127.0.0.1') && rt.cdpEndpoint) return browserFor('cdp'); } catch { /* fall through */ } return getDefault(); },
+        getForUrl: async (_url: string) => getDefault(),
       },
       documentation: { get: (name: string) => readDoc(name) },
     },

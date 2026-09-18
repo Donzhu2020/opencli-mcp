@@ -10,7 +10,6 @@ import { SiteRegistry } from '../sites/registry.js';
 import { runSiteCommand, type CommandRunResult, type CommandRunError, type PageProvider } from '../sites/executor.js';
 import { saveTool, deleteTool, listDefinedTools, ensureToolsDir, type ToolDefinition } from '../sites/define.js';
 import { createExtensionPage, type ExtensionRuntimePage } from '../backends/extension-page.js';
-import { connectCdpBackend, type CdpBackendHandle } from '../backends/cdp-backend.js';
 import type { RuntimePage } from '../backends/page-types.js';
 import { TraceRecorder } from './trace.js';
 import { JsSession } from '../mcp/js-session.js';
@@ -18,14 +17,13 @@ import { opencliVersion } from '../lib/opencli.js';
 import { emitHook } from '../sites/hooks.js';
 import { Policy } from './policy.js';
 
-export type Backend = 'extension' | 'cdp' | 'none';
+export type Backend = 'extension' | 'none';
 
 export interface RuntimeOptions {
   bridge?: ExtensionBridge | null;
   policy?: import('./policy.js').PolicyConfig;
   sites?: string[];
   sitesWrite?: string[];
-  cdpEndpoint?: string;
   cursor?: boolean;
   log?: (msg: string) => void;
 }
@@ -37,7 +35,6 @@ export interface SessionState {
   trace: TraceRecorder;
   browserPage?: RuntimePage;
   browserPagePromise?: Promise<RuntimePage>;
-  cdpHandle?: CdpBackendHandle;
   /** Serializes page operations: one shared page object per session, one active tab identity at a time. */
   lock: Promise<void>;
   enabledSites: Map<string, { write: boolean }>;
@@ -53,7 +50,6 @@ export interface SessionState {
 export interface DoctorReport {
   backend: Backend;
   extension: { connected: boolean; version: string | null; contextId?: string };
-  cdpEndpoint?: string;
   opencliVersion: string;
   sites: number;
   commands: number;
@@ -73,9 +69,7 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
   readonly registry = new SiteRegistry();
   readonly sessions = new Map<string, SessionState>();
   private readonly adapterPages = new Map<string, Promise<RuntimePage>>();
-  private readonly cdpHandles: CdpBackendHandle[] = [];
   bridge: ExtensionBridge | null;
-  cdpEndpoint: string | undefined;
   readonly cursorEnabled: boolean;
   readonly policy: Policy;
   readonly configSites: string[];
@@ -85,7 +79,6 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
   constructor(opts: RuntimeOptions = {}) {
     super();
     this.bridge = opts.bridge ?? null;
-    this.cdpEndpoint = opts.cdpEndpoint ?? process.env.OPENCLI_CDP_ENDPOINT ?? undefined;
     this.cursorEnabled = opts.cursor ?? true;
     this.policy = new Policy(opts.policy);
     this.configSites = opts.sites ?? [];
@@ -103,7 +96,6 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
 
   backend(): Backend {
     if (this.bridge?.connected) return 'extension';
-    if (this.cdpEndpoint) return 'cdp';
     return 'none';
   }
   browserAvailable(): boolean { return this.backend() !== 'none'; }
@@ -142,13 +134,7 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
   private async createPage(opts: { session: string; surface: 'browser' | 'adapter'; siteSession?: 'ephemeral' | 'persistent'; windowMode?: 'foreground' | 'background' }): Promise<RuntimePage> {
     const backend = this.backend();
     if (backend === 'extension' && this.bridge) return createExtensionPage(this.bridge, { ...opts, contextId: this.bridge.contextId });
-    if (backend === 'cdp' && this.cdpEndpoint) {
-      const h = await connectCdpBackend({ endpoint: this.cdpEndpoint, session: opts.session, surface: opts.surface });
-      this.cdpHandles.push(h);
-      if (opts.surface === 'browser') { const sid = opts.session.replace(/^mcp:/, ''); const st = this.sessions.get(sid); if (st) st.cdpHandle = h; }
-      return h.page;
-    }
-    throw Object.assign(new Error('No browser backend is connected'), { code: 'browser_unavailable', hint: 'Run `opencli-mcp doctor`. Chrome with the opencli-mcp extension must be running, or set OPENCLI_CDP_ENDPOINT.' });
+    throw Object.assign(new Error('No browser backend is connected'), { code: 'browser_unavailable', hint: 'Run `opencli-mcp doctor`. Chrome with the opencli-mcp extension must be running.' });
   }
 
   isExtensionPage(page: RuntimePage): page is ExtensionRuntimePage { return typeof (page as ExtensionRuntimePage).claim === 'function'; }
@@ -182,13 +168,11 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
         else await page.closeWindow();
       } catch (err) { this.emit('log', `finalize on close failed: ${(err as Error).message}`); }
     }
-    if (s.cdpHandle) { await s.cdpHandle.close().catch(() => {}); const i = this.cdpHandles.indexOf(s.cdpHandle); if (i >= 0) this.cdpHandles.splice(i, 1); }
     this.emit('session-closed', id);
   }
 
   async shutdown(): Promise<void> {
     for (const id of [...this.sessions.keys()]) await this.closeSession(id);
-    for (const h of this.cdpHandles) await h.close().catch(() => {});
   }
 
   doctor(): DoctorReport {
@@ -196,7 +180,6 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
     return {
       backend: this.backend(),
       extension: { connected: Boolean(this.bridge?.connected), version: this.bridge?.extensionVersion ?? null, contextId: this.bridge?.contextId },
-      cdpEndpoint: this.cdpEndpoint,
       opencliVersion,
       sites: new Set(all.map((c) => c.site)).size,
       commands: all.length,

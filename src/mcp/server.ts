@@ -121,7 +121,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   };
 
   // ── diagnostics & discovery ──
-  server.registerTool('doctor', { title: 'Doctor', description: 'Runtime status: backend (extension/cdp/none), extension version, site/command counts, sessions.', inputSchema: {}, annotations: { readOnlyHint: true } }, async () => run(async () => ok(rt.doctor())));
+  server.registerTool('doctor', { title: 'Doctor', description: 'Runtime status: backend (extension/none), extension version, site/command counts, sessions.', inputSchema: {}, annotations: { readOnlyHint: true } }, async () => run(async () => ok(rt.doctor())));
   server.registerTool('browser_list', { title: 'List browsers', description: 'Available browser backends and whether they are connected.', inputSchema: {}, annotations: { readOnlyHint: true } }, async () => run(async () => ok(await api.agent.browsers.list())));
 
   // ── session ──

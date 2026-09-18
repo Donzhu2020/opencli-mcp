@@ -69,7 +69,7 @@ export async function runSiteCommand(
       result = await withTimeout(run, timeoutMs, key);
     } else {
       if (!provider.browserAvailable()) {
-        throw Object.assign(new Error(`${key} needs a logged-in browser, but no Chrome extension or CDP endpoint is connected`), { code: 'BROWSER_CONNECT', hint: 'Install the opencli-mcp extension (run `opencli-mcp doctor`), or set OPENCLI_CDP_ENDPOINT for a CDP-reachable browser.' });
+        throw Object.assign(new Error(`${key} needs a logged-in browser, but the Chrome extension is not connected`), { code: 'BROWSER_CONNECT', hint: 'Install the opencli-mcp extension and keep Chrome running (run `opencli-mcp doctor`).' });
       }
       const siteSession = opts.siteSession ?? cmd.siteSession ?? 'ephemeral';
       const windowMode = opts.windowMode ?? cmd.defaultWindowMode ?? 'background';

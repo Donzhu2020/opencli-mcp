@@ -25,7 +25,7 @@ export interface UserTabInfo { tabId: number; title?: string; url?: string; wind
 export interface ExtensionPageExtras {
   nameSession(name: string): Promise<void>;
   userTabs(): Promise<UserTabInfo[]>;
-  claim(tab: { tabId: number; title?: string; url?: string }): Promise<{ page: string; url?: string; title?: string }>;
+  claim(tab: { tabId?: number; title?: string; url?: string }): Promise<{ page: string; url?: string; title?: string }>;
   mark(page: string, mark: 'deliverable' | 'handoff' | null): Promise<void>;
   finalize(keep: Array<{ page: string; status: 'deliverable' | 'handoff' }>): Promise<{ closed: string[]; kept: string[] }>;
   cursor(x: number, y: number, opts?: { waitForArrival?: boolean }): Promise<void>;

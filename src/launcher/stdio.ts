@@ -1,8 +1,7 @@
 /**
  * stdio launcher for local MCP hosts (Claude Code, Cursor, …).
  * If the Chrome-spawned host is running, proxy to it (shared browser runtime). Otherwise embed a
- * runtime in-process: site commands with strategy `public` work, and a CDP endpoint (Electron /
- * remote Chrome) can be driven; extension-backed browsing needs Chrome + the extension.
+ * runtime in-process: site commands with strategy `public` work; browsing needs Chrome + the extension.
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -25,9 +24,9 @@ export async function runStdio(opts: { version: string; forceEmbedded?: boolean 
     await proxyToHost(state.host, state.port, state.token, opts.version, log);
     return;
   }
-  log(`host not running (${'error' in health ? health.error : 'embedded mode'}): embedded runtime; browser needs Chrome + extension or OPENCLI_CDP_ENDPOINT`);
+  log(`host not running (${'error' in health ? health.error : 'embedded mode'}): embedded runtime; browsing needs Chrome + the extension`);
   const config = readConfig();
-  const rt = new Runtime({ cdpEndpoint: config.cdpEndpoint, cursor: config.cursor ?? true, sites: config.sites, sitesWrite: config.sitesWrite, log });
+  const rt = new Runtime({ cursor: config.cursor ?? true, sites: config.sites, sitesWrite: config.sitesWrite, log });
   await rt.init();
   const session = createMcpServer(rt, 'stdio', { version: opts.version });
   const transport = new StdioServerTransport();

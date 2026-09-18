@@ -43,7 +43,7 @@ async function main(): Promise<void> {
       const { startHttpServer } = await import('./host/http.js');
       const { loadOrCreateToken, readConfig } = await import('./host/state.js');
       const config = readConfig();
-      const rt = new Runtime({ cdpEndpoint: flag('--cdp') ?? config.cdpEndpoint, sites: config.sites, sitesWrite: config.sitesWrite, log: (m) => process.stderr.write(`[opencli-mcp] ${m}\n`) });
+      const rt = new Runtime({ sites: config.sites, sitesWrite: config.sitesWrite, log: (m) => process.stderr.write(`[opencli-mcp] ${m}\n`) });
       await rt.init();
       const token = has('--no-auth') ? '' : loadOrCreateToken();
       const h = await startHttpServer(rt, { port: Number(flag('--port') ?? 0), token, version: VERSION, allowNoAuth: has('--no-auth') });

@@ -7,7 +7,6 @@ Chrome ──connectNative──► opencli-mcp host (Native Messaging ⇄ exten
                             │   runtime: sessions · site registry (OpenCLI adapters) · recon · traces · js sessions
 local MCP host ──stdio──► `opencli-mcp` launcher ──► host (or embedded runtime when Chrome is closed)
 cloud agent ──tunnel/reverse proxy──► http://127.0.0.1:19850/mcp
-Electron / remote Chrome ──OPENCLI_CDP_ENDPOINT──► direct CDP backend
 ```
 
 ## Why a runtime, not a CLI
@@ -59,11 +58,11 @@ claude mcp add opencli-mcp -- node /path/to/opencli-mcp/dist/src/main.js
 The host listens on `http://127.0.0.1:19850/mcp` with `Authorization: Bearer $(cat ~/.opencli-mcp/token)`. Expose it through an authenticated tunnel (`ssh -R`, cloudflared, ngrok with auth) and point the agent's MCP connector at it. Never expose the port unauthenticated.
 
 ### Without Chrome
-The stdio launcher embeds a runtime when the host is not running: `public` site commands work, and `OPENCLI_CDP_ENDPOINT=ws://…` (or `~/.opencli-mcp/config.json` → `cdpEndpoint`) drives Electron apps / remote Chrome over CDP.
+The stdio launcher embeds a runtime when the host is not running: `public` site commands work; browsing needs Chrome with the extension.
 
 ## Configuration (`~/.opencli-mcp/config.json`)
 ```json
-{ "port": 19850, "cursor": true, "sites": ["hackernews", "reddit"], "sitesWrite": [], "cdpEndpoint": null }
+{ "port": 19850, "cursor": true, "sites": ["hackernews", "reddit"], "sitesWrite": [] }
 ```
 
 ## Development

@@ -89,7 +89,7 @@ export function writeLauncher(): string {
   if (!fs.existsSync(main)) throw new Error('dist/src/main.js not found — run `npm run build` before `opencli-mcp install`');
   const entry = main;
   // Chrome spawns the host with its own environment; bake the settings the launcher relies on
-  const envLines = ['OPENCLI_MCP_HOME', 'OPENCLI_CDP_ENDPOINT'].filter((k) => process.env[k]).map((k) => process.platform === 'win32' ? `set ${k}=${process.env[k]}` : `export ${k}=${JSON.stringify(process.env[k])}`);
+  const envLines = ['OPENCLI_MCP_HOME'].filter((k) => process.env[k]).map((k) => process.platform === 'win32' ? `set ${k}=${process.env[k]}` : `export ${k}=${JSON.stringify(process.env[k])}`);
   if (process.platform === 'win32') {
     const file = path.join(bin, 'opencli-mcp-host.cmd');
     fs.writeFileSync(file, `@echo off\r\n${envLines.map((l) => l + '\r\n').join('')}"${process.execPath}" "${entry}" host --native\r\n`);

@@ -162,10 +162,14 @@ export class SessionManager {
       setTimeout(done, 15_000);
     });
     let tab: chrome.tabs.Tab;
-    try { tab = await chrome.tabs.create({ windowId, url: target, active: s.visible }); }
-    catch { s.windowId = null; s.groupId = null; windowId = await pick(); tab = await chrome.tabs.create({ windowId, url: target, active: s.visible }); }
+    // the tab is born blank, attached (network capture armed), and only then navigated: the requests of the first load
+    // are evidence too — API-first needs the document's own XHR/fetch, which fire before any command would attach
+    try { tab = await chrome.tabs.create({ windowId, url: 'about:blank', active: s.visible }); }
+    catch { s.windowId = null; s.groupId = null; windowId = await pick(); tab = await chrome.tabs.create({ windowId, url: 'about:blank', active: s.visible }); }
     createdId = tab.id!;
     if (target !== 'about:blank') {
+      await executor.ensureAttached(createdId, s.surface === 'browser').catch(() => { /* attach on first command instead */ });
+      await chrome.tabs.update(createdId, { url: target }).catch(() => {});
       const t = await chrome.tabs.get(createdId).catch(() => null);
       if (t?.status === 'complete' && t.url) loaded = true; else await loadedP;
       tab = await chrome.tabs.get(createdId).catch(() => tab);

@@ -36,6 +36,8 @@ type NetworkCaptureEntry = {
   responseBodyFullSize?: number;
   responseBodyTruncated?: boolean;
   timestamp: number;
+  /** response received and body read (or the load failed): only then does a read hand the entry out */
+  done?: boolean;
 };
 
 type NetworkCaptureState = {
@@ -867,13 +869,20 @@ export async function startNetworkCapture(
   });
 }
 
+/** Hand out the finished entries and keep the in-flight ones: the host drains after every goto/act, and an entry drained
+ * before its response arrived would never get its status, content type and body (response events are lookup-only). */
 export async function readNetworkCapture(tabId: number): Promise<NetworkCaptureEntry[]> {
   const state = networkCaptures.get(tabId);
   if (!state) return [];
-  const entries = state.entries.slice();
-  state.entries = [];
-  state.requestToIndex.clear();
-  return entries;
+  const out: NetworkCaptureEntry[] = []; const keep: NetworkCaptureEntry[] = []; const keepIds = new Map<string, number>();
+  const idOf = new Map<number, string>(); for (const [rid, idx] of state.requestToIndex) idOf.set(idx, rid);
+  const stale = Date.now() - 60_000; // a request with no end event after a minute is handed out as it is
+  state.entries.forEach((e, idx) => {
+    if (e.done || e.timestamp < stale) { out.push(e); return; }
+    const rid = idOf.get(idx); if (rid) keepIds.set(rid, keep.length); keep.push(e);
+  });
+  state.entries = keep; state.requestToIndex = keepIds;
+  return out;
 }
 
 export function hasActiveNetworkCapture(tabId: number): boolean {
@@ -1018,12 +1027,22 @@ export function registerListeners(): void {
       return;
     }
 
+    if (method === 'Network.loadingFailed') {
+      const requestId = String(eventParams?.requestId || '');
+      const stateEntryIndex = state.requestToIndex.get(requestId);
+      const entry = stateEntryIndex === undefined ? undefined : state.entries[stateEntryIndex];
+      if (entry) entry.done = true;
+      return;
+    }
     if (method === 'Network.loadingFinished') {
       const requestId = String(eventParams?.requestId || '');
       const stateEntryIndex = state.requestToIndex.get(requestId);
       if (stateEntryIndex === undefined) return;
       const entry = state.entries[stateEntryIndex];
       if (!entry) return;
+      const finish = () => { entry.done = true; };
+      // bodies only for what can carry data: JSON-ish XHR/fetch and documents; assets were filtered at request time
+      if (entry.responseContentType && !/json|graphql|x-component|text\/plain|javascript|html|xml/i.test(entry.responseContentType)) { finish(); return; }
       try {
         const body = await sendDebuggerCommand({ tabId }, 'Network.getResponseBody', { requestId }) as {
           body?: string;
@@ -1040,6 +1059,7 @@ export function registerListeners(): void {
       } catch {
         // Optional; bodies are unavailable for some requests (e.g. uploads).
       }
+      finish();
     }
   });
 }

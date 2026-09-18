@@ -66,10 +66,11 @@ Chrome ──connectNative──► opencli-mcp host   （Native Messaging ⇄ �
 ```bash
 git clone https://github.com/jackwener/opencli-mcp && cd opencli-mcp
 npm install && npm run build
-node dist/src/main.js install          # 写 Native Messaging 清单 + 生成稳定的扩展 key
-node dist/src/main.js extension-path   # 打印扩展目录 → chrome://extensions → 开发者模式 → 加载已解压的扩展程序
-node dist/src/main.js doctor           # 扩展连上后全绿
+node dist/src/main.js setup            # 一条命令：写清单 + key，检测到 Claude Code 就自动注册，
+                                       # 打开 chrome://extensions 并把扩展路径复制到剪贴板，等扩展连上后报绿
 ```
+
+唯一要手点的一步：在打开的页面里开「开发者模式」→「加载已解压的扩展程序」→ 粘贴路径。分步等价：`install` → `extension-path` → 加载 → `doctor`。
 
 可选 `npm link`，之后直接用 `opencli-mcp` 命令。
 
@@ -77,9 +78,7 @@ node dist/src/main.js doctor           # 扩展连上后全绿
 
 ```bash
 npm install -g ./opencli-mcp-0.0.1.tgz
-opencli-mcp install
-opencli-mcp extension-path      # 到 Chrome 加载这个目录
-opencli-mcp doctor
+opencli-mcp setup
 ```
 
 Release 里没有单独的扩展 zip：`install` 会把你机器上生成的 key 写进**安装包里**的 `extension/dist/manifest.json`，扩展 ID 由此稳定；单独解压的 zip 拿不到这个 key 会导致 ID 不匹配。
@@ -90,6 +89,7 @@ Release 里没有单独的扩展 zip：`install` 会把你机器上生成的 key
 opencli-mcp                 stdio MCP（代理到 Chrome 拉起的 host；host 不在则内嵌 runtime）
 opencli-mcp host --native   Native Messaging host（由 Chrome 拉起，不要手动跑）
 opencli-mcp serve [--port]  HTTP MCP + 内嵌 runtime（开发用）
+opencli-mcp setup [--no-open] [--wait 秒]   首次安装一条龙
 opencli-mcp install [--browsers chrome,chromium,…] [--user-data-dir /a,/b] [--extension-id …]
 opencli-mcp uninstall
 opencli-mcp doctor

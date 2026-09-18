@@ -4,6 +4,7 @@
  *   opencli-mcp                 stdio MCP (proxies to the Chrome-spawned host, else embedded runtime)
  *   opencli-mcp host --native   the Native Messaging host (spawned by Chrome; do not run by hand)
  *   opencli-mcp serve [--port]  HTTP MCP with an embedded runtime (dev / CDP-only)
+ *   opencli-mcp setup           first run in one go: install + register with Claude Code + open chrome://extensions + wait
  *   opencli-mcp install         write the Native Messaging manifest + stable extension ID
  *   opencli-mcp uninstall
  *   opencli-mcp doctor
@@ -50,6 +51,11 @@ async function main(): Promise<void> {
       process.stderr.write(`[opencli-mcp] serving http://${h.host}:${h.port}/mcp${token ? ' (Authorization: Bearer <~/.opencli-mcp/token>)' : ' (no auth)'}\n`);
       return;
     }
+    case 'setup': {
+      const { setup } = await import('./host/setup.js');
+      process.exitCode = (await setup({ noOpen: has('--no-open'), waitMs: flag('--wait') ? Number(flag('--wait')) * 1000 : undefined })) ? 0 : 1;
+      return;
+    }
     case 'install': {
       const { install } = await import('./host/install.js');
       const browsers = flag('--browsers')?.split(',');
@@ -77,7 +83,7 @@ async function main(): Promise<void> {
     }
     case 'version': case '--version': case '-V': process.stdout.write(`${VERSION}\n`); return;
     default:
-      process.stderr.write(`Unknown command: ${cmd}\n${['stdio', 'host --native', 'serve [--port N] [--no-auth]', 'install [--browsers chrome,edge] [--user-data-dir /path/to/profile]', 'uninstall', 'doctor', 'extension-path', 'version'].map((c) => `  opencli-mcp ${c}`).join('\n')}\n`);
+      process.stderr.write(`Unknown command: ${cmd}\n${['stdio', 'host --native', 'serve [--port N] [--no-auth]', 'setup [--no-open] [--wait seconds]', 'install [--browsers chrome,edge] [--user-data-dir /path/to/profile]', 'uninstall', 'doctor', 'extension-path', 'version'].map((c) => `  opencli-mcp ${c}`).join('\n')}\n`);
       process.exitCode = 2;
   }
 }

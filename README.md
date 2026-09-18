@@ -41,12 +41,11 @@ The OpenCLI adapter corpus ships as a library dependency (`@jackwener/opencli`):
 ```bash
 git clone https://github.com/jackwener/opencli-mcp && cd opencli-mcp
 npm install && npm run build
-node dist/src/main.js install          # writes the Native Messaging manifest + a stable extension key
-node dist/src/main.js extension-path   # → chrome://extensions → Developer mode → Load unpacked → this dir
-node dist/src/main.js doctor           # everything green once the extension has connected
+node dist/src/main.js setup            # one go: host manifest + extension key, registers with Claude Code if present,
+                                       # opens chrome://extensions with the extension path on your clipboard, waits until connected
 ```
 
-Optional: `npm link` to get `opencli-mcp` on PATH.
+The only manual click: **Load unpacked** on the page that opens (Developer mode on), paste the path. Or step by step: `install` → `extension-path` → load it → `doctor`. Optional: `npm link` to get `opencli-mcp` on PATH.
 
 ### Claude Code
 ```bash

@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 
-export const OPENCLI_MCP_DIR = process.env.OPENCLI_MCP_HOME ?? path.join(os.homedir(), '.opencli-mcp');
+/** The one place state lives: token, extension key, host state, config, agent-defined tools. */
+export const OPENCLI_MCP_DIR = path.join(os.homedir(), '.opencli-mcp');
 export const RUN_DIR = path.join(OPENCLI_MCP_DIR, 'run');
 export const HOST_STATE_FILE = path.join(RUN_DIR, 'host.json');
 export const TOKEN_FILE = path.join(OPENCLI_MCP_DIR, 'token');

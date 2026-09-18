@@ -7,13 +7,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import os from 'node:os';
+import { OPENCLI_MCP_DIR } from '../host/state.js';
 import { getRegistry } from '@jackwener/opencli/registry';
 import { opencliRoot } from '../lib/opencli.js';
 import type { TraceEvent } from '../runtime/trace.js';
 
-/** Where agent-defined tools live (OPENCLI_MCP_TOOLS_DIR overrides, e.g. for tests). */
-export const DEFINED_TOOLS_DIR = process.env.OPENCLI_MCP_TOOLS_DIR || path.join(os.homedir(), '.opencli-mcp', 'tools');
+/** Where agent-defined tools live. */
+export const DEFINED_TOOLS_DIR = path.join(OPENCLI_MCP_DIR, 'tools');
 
 export interface ArgDef { name: string; type?: 'string' | 'int' | 'number' | 'boolean'; default?: unknown; required?: boolean; help?: string; choices?: string[] }
 

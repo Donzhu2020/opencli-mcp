@@ -19,6 +19,7 @@ type ToolResult = { content: Content; structuredContent?: Record<string, unknown
 const targetSchema = z.object({
   ref: z.string().optional().describe('eN ref from tab_observe (or tab.find in js)'),
   selector: z.string().optional().describe('raw Playwright selector, e.g. the selector returned by tab.find in js'),
+  within: z.string().optional().describe('scope: css/selector of a container or an eN ref; the target is resolved inside it (scope generic labels like Close/Search/Add to cart)'),
   css: z.string().optional().describe('CSS selector; add nth for multiple matches'),
   nth: z.number().int().optional(),
   role: z.string().optional().describe('ARIA role, e.g. button, link, textbox'),
@@ -34,10 +35,10 @@ const targetSchema = z.object({
 function pickTarget(t: z.infer<typeof targetSchema> | undefined): Target | undefined {
   if (!t) return undefined;
   if (t.ref !== undefined) return { ref: t.ref, frame: t.frame };
-  if (t.selector) return { selector: t.selector, nth: t.nth, frame: t.frame };
-  if (t.css) return { css: t.css, nth: t.nth, frame: t.frame };
+  if (t.selector) return { selector: t.selector, nth: t.nth, frame: t.frame, within: t.within };
+  if (t.css) return { css: t.css, nth: t.nth, frame: t.frame, within: t.within };
   if (t.x !== undefined && t.y !== undefined) return { x: t.x, y: t.y };
-  if (t.role || t.name || t.label || t.text || t.testid) return { role: t.role, name: t.name, label: t.label, text: t.text, testid: t.testid, nth: t.nth, frame: t.frame };
+  if (t.role || t.name || t.label || t.text || t.testid) return { role: t.role, name: t.name, label: t.label, text: t.text, testid: t.testid, nth: t.nth, frame: t.frame, within: t.within };
   return undefined;
 }
 

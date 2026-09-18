@@ -8,7 +8,7 @@ import type { Runtime, SessionState } from '../runtime/runtime.js';
 import type { RuntimePage } from '../backends/page-types.js';
 import type { ExtensionRuntimePage, UserTabInfo } from '../backends/extension-page.js';
 import { importDist } from '../lib/opencli.js';
-import { lineDiff } from './diff.js';
+import { ariaDiff } from './diff.js';
 import { ActionError } from './errors.js';
 import { Policy } from '../runtime/policy.js';
 import { discoverEndpoints, type DiscoverResult } from '../recon/discover.js';
@@ -18,7 +18,7 @@ import { targetToSelector, fallbackSelector } from '../shared/engine.js';
 import type { FindEntry, FindResult, ElementAtResult, Expectation, CheckResult } from '../shared/page-contract.js';
 import type { DialogInfo, FrameStep } from '../protocol.js';
 
-export type Target = ({ frame?: FrameStep | FrameStep[] }) & (
+export type Target = ({ frame?: FrameStep | FrameStep[]; /** container (css/selector/eN) to resolve inside */ within?: string }) & (
   | { ref: number | string }
   | { selector: string; nth?: number }
   | { css: string; nth?: number }
@@ -84,11 +84,11 @@ export class Tab {
   async reload(): Promise<void> { await this.use((p) => p.history('reload')); }
   async close(): Promise<void> { await this.use((p) => p.closeTab(this.id)); }
 
-  async observe(opts: ObserveOptions = {}): Promise<{ url: string | null; title: string | null; state?: string; diff?: boolean; changed?: { added: number; removed: number }; image?: ImageValue }> {
+  async observe(opts: ObserveOptions = {}): Promise<{ url: string | null; title: string | null; state?: string; diff?: boolean; changed?: { added: number; removed: number; changed?: number }; image?: ImageValue }> {
     const mode = opts.mode ?? 'state';
     return this.use(async (page) => {
       const meta = await this.info(page);
-      const out: { url: string | null; title: string | null; state?: string; diff?: boolean; changed?: { added: number; removed: number }; image?: ImageValue } = { ...meta };
+      const out: { url: string | null; title: string | null; state?: string; diff?: boolean; changed?: { added: number; removed: number; changed?: number }; image?: ImageValue } = { ...meta };
       if (mode === 'state' || mode === 'both') {
         // one state source: Playwright's aria snapshot (credential values redacted); its [ref=eN] are the act targets
         let text = String(await page.pageCall('aria', { viewport: Boolean(opts.viewport) }));
@@ -96,10 +96,13 @@ export class Tab {
         const prev = this.ctx.state.lastObserve.get(key);
         this.ctx.state.lastObserve.set(key, text);
         const diffOn = opts.diff !== false;
-        if (diffOn && prev && prev !== text) {
-          const d = lineDiff(prev, text);
-          if (d.changedRatio < 0.6) { out.diff = true; out.changed = { added: d.added, removed: d.removed }; text = d.text || '(no visible change)'; }
-        } else if (diffOn && prev === text) { out.diff = true; out.changed = { added: 0, removed: 0 }; text = '(unchanged since last observe)'; }
+        // the tail line ("Focused: …") is state, not structure: diff the tree, then re-append the current focus
+        const split = (t: string) => { const i = t.lastIndexOf('\nFocused: '); return i >= 0 ? [t.slice(0, i), t.slice(i + 1)] : [t, '']; };
+        const [tree, focus] = split(text); const [prevTree] = prev ? split(prev) : [''];
+        if (diffOn && prev && prevTree !== tree) {
+          const d = ariaDiff(prevTree, tree);
+          if (d.changedRatio < 0.6) { out.diff = true; out.changed = { added: d.added, removed: d.removed, changed: d.changed }; text = `${d.text || '(no visible change)'}${focus ? `\n${focus}` : ''}`; }
+        } else if (diffOn && prev && prevTree === tree) { out.diff = true; out.changed = { added: 0, removed: 0, changed: 0 }; text = `There has been no change since the last observe.${focus ? `\n${focus}` : ''}`; }
         out.state = text;
         this.ctx.state.trace.record({ kind: 'observe', mode: 'aria', page: this.id, summary: meta.title ?? undefined });
       }

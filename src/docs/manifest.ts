@@ -21,6 +21,7 @@ export const DOCS_MANIFEST: DocEntry[] = [
   { name: 'instructions', mode: 'included' },
   { name: 'api-use', mode: 'included' },
   { name: 'safety', mode: 'included' },
+  { name: 'confirmations', mode: 'included' },
   { name: 'tab-lifecycle', mode: 'included', when: { backends: ['extension'] } },
   { name: 'sites', mode: 'included' },
   { name: 'js-tool', mode: 'model' },

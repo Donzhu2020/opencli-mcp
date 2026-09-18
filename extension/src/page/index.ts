@@ -243,7 +243,10 @@ export function aria(args: AriaArgs = {}): string {
     if (el && m[3] && isCredentialField(el)) { out.push(line.slice(0, line.length - m[3].length) + ': <redacted>'); continue; }
     out.push(line);
   }
-  return out.join('\n');
+  // the plugin always ends its state with the focused element; ours names the focused ref so the next action can target it
+  const active = document.activeElement;
+  const focusRef = active && active !== document.body ? ariaRefOf(active) : null;
+  return out.join('\n') + (focusRef ? `\nFocused: [ref=${focusRef}]` : '');
 }
 
 const describe = (el: Element, i: number): FindEntry => {

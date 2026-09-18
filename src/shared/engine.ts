@@ -38,6 +38,19 @@ export class ActError extends Error {
 
 /** Compile an agent target into a Playwright selector (the same engines the plugin uses). */
 export function targetToSelector(t: ActTarget): string | null {
+  const inner = innerSelector(t);
+  if (!inner) return null;
+  const scope = scopeSelector(t.within);
+  return scope ? `${scope} >> ${inner}` : inner;
+}
+/** A container to resolve inside: css, a raw selector, or an eN ref. */
+function scopeSelector(within: string | undefined): string | null {
+  if (!within) return null;
+  const w = within.trim();
+  if (/^(?:f\d+)?e\d+$/.test(w)) return `aria-ref=${w}`;
+  return w;
+}
+function innerSelector(t: ActTarget): string | null {
   const q = (s: string, exact = false) => `${JSON.stringify(s)}${exact ? 's' : 'i'}`;
   const nth = typeof t.nth === 'number' ? ` >> nth=${t.nth}` : '';
   if (t.ref !== undefined && t.ref !== null) {
@@ -56,7 +69,7 @@ export function targetToSelector(t: ActTarget): string | null {
 }
 /** Secondary selector tried when the primary finds nothing (e.g. label → placeholder). */
 export function fallbackSelector(t: ActTarget): string | null {
-  if (t.label && !t.role && !t.css && !t.selector) return `internal:attr=[placeholder=${JSON.stringify(t.label)}i]`;
+  if (t.label && !t.role && !t.css && !t.selector) { const f = `internal:attr=[placeholder=${JSON.stringify(t.label)}i]`; const scope = scopeSelector(t.within); return scope ? `${scope} >> ${f}` : f; }
   return null;
 }
 

@@ -41,3 +41,21 @@ describe('tools.define', () => {
     expect(net.func).toContain('page.fetchJson(`https://x.test/api/list?q=${args.q}`)');
   });
 });
+
+describe('aria diff', () => {
+  it('diffs by ref identity like the plugin: ~ changed, + added, removed as ranges, focus kept out', async () => {
+    const { ariaDiff } = await import('../src/api/diff.js');
+    const prev = ['- textbox "Name" [ref=e1]: ', '- button "Go" [ref=e2]', '- link "A" [ref=e3]', '- link "B" [ref=e4]', '- link "C" [ref=e5]', '- text: hello'].join('\n');
+    const next = ['- textbox "Name" [ref=e1]: Alice', '- button "Go" [ref=e2]', '- text: hello', '- alert "Saved" [ref=e9]'].join('\n');
+    const d = ariaDiff(prev, next);
+    expect(d.text.split('\n')).toEqual(['Diff from the previous observe: ~ changed, + added; removed nodes are listed by ref.', '~- textbox "Name" [ref=e1]: Alice', '+- alert "Saved" [ref=e9]', 'removed: e3–e5']);
+    expect(d).toMatchObject({ added: 1, removed: 3, changed: 1 });
+    expect(ariaDiff(prev, prev).text).toBe('');
+  });
+  it('scopes targets with within', async () => {
+    const { targetToSelector, fallbackSelector } = await import('../src/shared/engine.js');
+    expect(targetToSelector({ role: 'button', name: 'Close', within: '#checkout' })).toBe('#checkout >> internal:role=button[name="Close"i]');
+    expect(targetToSelector({ text: 'Add to cart', within: 'e12' })).toBe('aria-ref=e12 >> internal:text="Add to cart"i');
+    expect(fallbackSelector({ label: 'Search', within: 'nav' })).toBe('nav >> internal:attr=[placeholder="Search"i]');
+  });
+});

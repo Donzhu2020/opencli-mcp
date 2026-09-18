@@ -1,7 +1,7 @@
 /**
  * The object model — the single surface behind both the typed MCP tools and the `js` session.
  *   agent.browsers → browser.tabs / browser.user / browser.capabilities → tab.observe / tab.act / …
- *   sites.<site>.<command>(args) · recon.discover(tab) · tools.define/compile · session.name/finalize
+ *   sites.<site>.<command>(args) · recon.discover(tab) · tools.define/compile · browser.nameSession / browser.tabs.finalize
  * Mirrors the shape ChatGPT's browser runtime exposes, on OpenCLI page semantics.
  */
 import type { Runtime, SessionState } from '../runtime/runtime.js';
@@ -21,7 +21,6 @@ import type { DialogInfo, FrameStep } from '../protocol.js';
 export type Target = ({ frame?: FrameStep | FrameStep[]; /** container (css/selector/eN) to resolve inside */ within?: string }) & (
   | { ref: number | string }
   | { selector: string; nth?: number }
-  | { css: string; nth?: number }
   | { role?: string; name?: string; label?: string; text?: string; testid?: string; nth?: number }
   | { x: number; y: number });
 
@@ -39,7 +38,7 @@ export interface ImageValue { __image: true; mimeType: string; base64: string }
 function describeTarget(t: Target | undefined): string {
   if (!t) return '';
   if ('ref' in t) return `ref:${t.ref}`;
-  if ('css' in t) return `css:${t.css}${t.nth !== undefined ? `[${t.nth}]` : ''}`;
+  if ('selector' in t) return `selector:${t.selector}${t.nth !== undefined ? `[${t.nth}]` : ''}`;
   if ('x' in t) return `point:${t.x},${t.y}`;
   return Object.entries(t).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}=${v}`).join(' ');
 }
@@ -131,7 +130,7 @@ export class Tab {
       // same engine and the same compiled selector as act: what find lists is exactly what act would resolve
       const spec = target as Record<string, unknown>;
       const selector = targetToSelector(spec);
-      if (!selector) throw new ActionError('invalid_target', 'find needs selector, css, an aria ref (eN), a semantic locator (role/name/label/text/testid), or a point {x,y}');
+      if (!selector) throw new ActionError('invalid_target', 'find needs a selector, an aria ref (eN), a semantic locator (role/name/label/text/testid), or a point {x,y}');
       return await page.pageCall('find', { selector, fallback: fallbackSelector(spec), limit: target.limit ?? 20 }) as FindResult;
     });
   }
@@ -175,18 +174,6 @@ export class Tab {
       return p.evaluateWithArgs(`(async () => { const mc = navigator.modelContext || document.modelContext; if (!mc) throw new Error('page exposes no modelContext'); if (typeof mc.executeTool === 'function') return await mc.executeTool(name, input); const tools = await mc.getTools(); const t = (tools || []).find(x => x.name === name); if (!t || typeof t.execute !== 'function') throw new Error('unknown page tool ' + name); return await t.execute(input); })()`, { name, input });
     }),
   };
-
-  async wait(opts: { text?: string; selector?: string; url?: string; time?: number; timeout?: number } = {}): Promise<{ ok: true }> {
-    return this.use(async (page) => {
-      if (opts.url) {
-        const deadline = Date.now() + (opts.timeout ?? 15) * 1000;
-        for (;;) { const u = await page.getCurrentUrl(); if (u && u.includes(opts.url)) break; if (Date.now() > deadline) throw new ActionError('timeout', `URL did not include "${opts.url}" within ${opts.timeout ?? 15}s`); await page.sleep(0.25); }
-        return { ok: true as const };
-      }
-      await page.wait({ text: opts.text, selector: opts.selector, time: opts.time, timeout: opts.timeout });
-      return { ok: true as const };
-    });
-  }
 
   /** Assert what the page must show now (polled up to timeoutMs). Recorded in the trace so tools_compile emits it as a checkpoint. */
   async expect(what: Expectation, opts: { timeoutMs?: number } = {}): Promise<CheckResult> {
@@ -342,7 +329,7 @@ export interface AgentApi {
   sites: Record<string, unknown> & { search(q: string, limit?: number): unknown; list(): unknown; enable(site: string, opts?: { write?: boolean }): { site: string; tools: string[] }; disable(site: string): boolean; run(site: string, name: string, args?: Record<string, unknown>): Promise<unknown> };
   recon: { discover(tab: Tab, opts?: Parameters<typeof discoverEndpoints>[1]): Promise<DiscoverResult> };
   tools: { define(def: ToolDefinition | (Omit<ToolDefinition, 'func'> & { func?: string | ((ctx: Record<string, unknown>) => unknown) })): Promise<{ file: string; site: string; name: string }>; compile(opts: Parameters<typeof compileFromTrace>[1]): ToolDefinition; list(): ReturnType<typeof listDefinedTools>; remove(site: string, name: string): boolean };
-  session: { id: string; name(n: string): Promise<void>; /** approve a website host after the user agreed (needs_origin_approval); persist remembers it */ allowOrigin(host: string, persist?: boolean): { host: string; persist: boolean }; finalize(keep?: Array<{ tab: string | Tab; status: 'deliverable' | 'handoff' }>): Promise<unknown>; trace(): unknown[]; clearTrace(): void; };
+  session: { id: string; /** approve a website host after the user agreed (needs_origin_approval); persist remembers it */ allowOrigin(host: string, persist?: boolean): { host: string; persist: boolean }; trace(): unknown[]; clearTrace(): void; };
 }
 
 export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
@@ -413,9 +400,7 @@ export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
     },
     session: {
       id: sessionId,
-      name: async (n: string) => { const b = await getDefault(); await b.nameSession(n); },
       allowOrigin: (host: string, persist = false) => { rt.policy.allowHost(host, persist); return { host, persist }; },
-      finalize: async (keep = []) => { const b = await getDefault(); return b.tabs.finalize({ keep }); },
       trace: () => state.trace.events,
       clearTrace: () => state.trace.clear(),
     },

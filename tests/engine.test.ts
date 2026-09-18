@@ -6,7 +6,7 @@ describe('engine selector compilation (Playwright internal engines, as the ChatG
   it('compiles agent targets to Playwright selectors', () => {
     expect(targetToSelector({ ref: 12 })).toBeNull(); // numeric DOM-snapshot refs are gone: eN is the one ref space
     expect(targetToSelector({ ref: 'e12' })).toBe('aria-ref=e12');
-    expect(targetToSelector({ css: '#q', nth: 1 })).toBe('#q >> nth=1');
+    expect(targetToSelector({ selector: '#q', nth: 1 })).toBe('#q >> nth=1');
     expect(targetToSelector({ role: 'button', name: 'Submit' })).toBe('internal:role=button[name="Submit"i]');
     expect(targetToSelector({ role: 'link' })).toBe('internal:role=link');
     expect(targetToSelector({ label: 'Email' })).toBe('internal:label="Email"i');
@@ -39,9 +39,9 @@ describe('page calls and frame steps', () => {
 describe('adapter contract → act target', () => {
   it('maps OpenCLI refs to the single engine', async () => {
     const { refToTarget } = await import('../src/shared/engine.js');
-    expect(refToTarget('@button.submit', { nth: 2 })).toEqual({ css: 'button.submit', nth: 2 });
+    expect(refToTarget('@button.submit', { nth: 2 })).toEqual({ selector: 'button.submit', nth: 2 });
     expect(refToTarget('e12')).toEqual({ ref: 'e12' });
-    expect(refToTarget('#q', { firstOnMulti: true })).toEqual({ css: '#q', nth: 0 });
+    expect(refToTarget('#q', { firstOnMulti: true })).toEqual({ selector: '#q', nth: 0 });
     expect(() => refToTarget('7')).toThrow(/numeric snapshot refs are gone/);
   });
 });

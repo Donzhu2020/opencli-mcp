@@ -19,8 +19,7 @@ type ToolResult = { content: Content; structuredContent?: Record<string, unknown
 const targetSchema = z.object({
   ref: z.string().optional().describe('eN ref from tab_observe (or tab.find in js)'),
   selector: z.string().optional().describe('raw Playwright selector, e.g. the selector returned by tab.find in js'),
-  within: z.string().optional().describe('scope: css/selector of a container or an eN ref; the target is resolved inside it (scope generic labels like Close/Search/Add to cart)'),
-  css: z.string().optional().describe('CSS selector; add nth for multiple matches'),
+  within: z.string().optional().describe('scope: selector of a container or an eN ref; the target is resolved inside it (scope generic labels like Close/Search/Add to cart)'),
   nth: z.number().int().optional(),
   role: z.string().optional().describe('ARIA role, e.g. button, link, textbox'),
   name: z.string().optional().describe('accessible name (with role)'),
@@ -30,13 +29,12 @@ const targetSchema = z.object({
   x: z.number().optional().describe('viewport x (with y) for coordinate clicks'),
   y: z.number().optional(),
   frame: z.union([z.string(), z.number().int(), z.array(z.union([z.string(), z.number().int()]))]).optional().describe('iframe(s) to enter first, outermost first: css selector of the <iframe> or its 0-based index; chain with an array or "outer >> inner"; same-origin and cross-origin alike'),
-}).describe('One of: {ref} | {css,nth?} | {role,name} | {label} | {text} | {testid} | {x,y}; add frame to target inside a same-origin iframe');
+}).describe('One of: {ref} | {selector,nth?} | {role,name} | {label} | {text} | {testid} | {x,y}; add frame to target inside a same-origin iframe');
 
 function pickTarget(t: z.infer<typeof targetSchema> | undefined): Target | undefined {
   if (!t) return undefined;
   if (t.ref !== undefined) return { ref: t.ref, frame: t.frame };
   if (t.selector) return { selector: t.selector, nth: t.nth, frame: t.frame, within: t.within };
-  if (t.css) return { css: t.css, nth: t.nth, frame: t.frame, within: t.within };
   if (t.x !== undefined && t.y !== undefined) return { x: t.x, y: t.y };
   if (t.role || t.name || t.label || t.text || t.testid) return { role: t.role, name: t.name, label: t.label, text: t.text, testid: t.testid, nth: t.nth, frame: t.frame, within: t.within };
   return undefined;
@@ -129,15 +127,15 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   server.registerTool('session_finalize', {
     title: 'Finalize session tabs', description: 'End-of-task cleanup. Agent-created tabs not listed in keep are closed; deliverable tabs leave the group and stay open; handoff tabs stay in the group for a later turn. Claimed user tabs are only released.',
     inputSchema: { keep: z.array(z.object({ tab: z.string().describe('tab id'), status: z.enum(['deliverable', 'handoff']) })).default([]) },
-  }, async ({ keep }) => run(async () => ok(await api.session.finalize(keep))));
+  }, async ({ keep }) => run(async () => ok(await (await api.agent.browsers.getDefault()).tabs.finalize({ keep }))));
 
   // ── tabs ──
   server.registerTool('tab_open', {
     title: 'Open a tab', description: 'Open a URL in a new agent tab (background, in this session’s tab group) and return its id plus the initial page state.',
     inputSchema: { url: z.string().optional().describe('http(s) URL, or data:text/html,… for a scratch page'), observe: z.boolean().default(true), session: z.string().min(1).max(60).optional().describe('name this browser session (short, emoji-prefixed; becomes the Chrome tab-group title) — give it with the first tab') },
   }, async ({ url, observe, session: sessionName }) => run(async () => {
-    if (sessionName) await api.session.name(sessionName);
     const b = await api.agent.browsers.getDefault();
+    if (sessionName) await b.nameSession(sessionName);
     const tab = await b.tabs.new(url);
     if (!observe) return ok({ tab: tab.id, url });
     const { data, images } = stripImage({ tab: tab.id, ...(await tab.observe({ diff: false })) });

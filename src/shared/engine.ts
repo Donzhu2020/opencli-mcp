@@ -43,7 +43,7 @@ export function targetToSelector(t: ActTarget): string | null {
   const scope = scopeSelector(t.within);
   return scope ? `${scope} >> ${inner}` : inner;
 }
-/** A container to resolve inside: css, a raw selector, or an eN ref. */
+/** A container to resolve inside: a selector (css or Playwright syntax) or an eN ref. */
 function scopeSelector(within: string | undefined): string | null {
   if (!within) return null;
   const w = within.trim();
@@ -59,7 +59,6 @@ function innerSelector(t: ActTarget): string | null {
     return null;
   }
   if (t.selector) return `${t.selector}${nth}`;
-  if (t.css) return `${t.css}${nth}`;
   if (t.role) return `internal:role=${t.role}${t.name ? `[name=${q(t.name)}]` : ''}${nth}`;
   if (t.testid) return `internal:testid=[data-testid=${q(t.testid, true)}]${nth}`;
   if (t.label) return `internal:label=${q(t.label)}${nth}`;
@@ -69,7 +68,7 @@ function innerSelector(t: ActTarget): string | null {
 }
 /** Secondary selector tried when the primary finds nothing (e.g. label → placeholder). */
 export function fallbackSelector(t: ActTarget): string | null {
-  if (t.label && !t.role && !t.css && !t.selector) { const f = `internal:attr=[placeholder=${JSON.stringify(t.label)}i]`; const scope = scopeSelector(t.within); return scope ? `${scope} >> ${f}` : f; }
+  if (t.label && !t.role && !t.selector) { const f = `internal:attr=[placeholder=${JSON.stringify(t.label)}i]`; const scope = scopeSelector(t.within); return scope ? `${scope} >> ${f}` : f; }
   return null;
 }
 
@@ -131,7 +130,7 @@ async function resolve(io: ActIO, spec: ActSpec, target: ActTarget, timeoutMs: n
     return { ok: true, x: target.x, y: target.y, matches_n: 1, tag: r.tag, hit: 'target', blocker: null, editable: r.editable, checkable: false, checked: false, isSelect: r.isSelect, ref: null, selector: null, usedSelector: `point:${target.x},${target.y}` };
   }
   const selector = targetToSelector(target);
-  if (!selector) throw new ActError('invalid_target', 'target needs an aria ref (eN), selector, css, x/y, or a semantic locator (role/name/label/text/testid)');
+  if (!selector) throw new ActError('invalid_target', 'target needs an aria ref (eN), a selector, x/y, or a semantic locator (role/name/label/text/testid)');
   const fallback = fallbackSelector(target);
   const strict = WRITE_KINDS.has(spec.kind);
   const states = spec.kind === 'hover' || spec.kind === 'focus' || spec.kind === 'scroll' ? ['visible'] : spec.kind === 'fill' || spec.kind === 'type' ? ['visible', 'enabled', 'editable'] : ['visible', 'enabled'];
@@ -267,5 +266,5 @@ export function refToTarget(ref: string, opts: { nth?: number; firstOnMulti?: bo
   if (/^e\d+$/.test(r) || /^f\d+e\d+$/.test(r)) return { ref: r };
   if (/^\d+$/.test(r)) throw new ActError('invalid_target', `numeric snapshot refs are gone; "${r}" is not a locator`, 'Use a css selector, or an eN ref from the aria snapshot.');
   const nth = typeof opts.nth === 'number' ? opts.nth : opts.firstOnMulti ? 0 : undefined;
-  return { css: r, ...(nth !== undefined && { nth }) };
+  return { selector: r, ...(nth !== undefined && { nth }) };
 }

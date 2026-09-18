@@ -28,7 +28,7 @@ export type ActAction = 'click' | 'dblclick' | 'hover' | 'focus' | 'fill' | 'typ
 export interface ActOptions { target?: Target; action: ActAction; value?: string; files?: string[]; to?: Target; direction?: 'up' | 'down' | 'left' | 'right'; amount?: number; timeoutMs?: number; settleMs?: number; confirm?: boolean }
 const CONSEQUENTIAL_RE = /(submit|pay|purchase|buy|checkout|place order|delete|remove|send|post|publish|confirm|transfer|apply)/i;
 
-export interface ObserveOptions { mode?: 'state' | 'screenshot' | 'both'; source?: 'dom' | 'ax' | 'aria'; diff?: boolean; interactive?: boolean; compact?: boolean; maxDepth?: number; maxTextLength?: number; annotate?: boolean; fullPage?: boolean }
+export interface ObserveOptions { mode?: 'state' | 'screenshot' | 'both'; source?: 'dom' | 'ax' | 'aria'; diff?: boolean; interactive?: boolean; /** only elements intersecting the viewport (what a screenshot shows); default includes 800px around it */ viewport?: boolean; compact?: boolean; maxDepth?: number; maxTextLength?: number; annotate?: boolean; fullPage?: boolean }
 
 export interface ImageValue { __image: true; mimeType: string; base64: string }
 
@@ -104,7 +104,7 @@ export class Tab {
       const out: { url: string | null; title: string | null; state?: string; diff?: boolean; changed?: { added: number; removed: number }; image?: ImageValue } = { ...meta };
       if (mode === 'state' || mode === 'both') {
         const source = opts.source ?? 'dom';
-        const snapOpts = { interactive: opts.interactive, compact: opts.compact ?? true, maxDepth: opts.maxDepth, maxTextLength: opts.maxTextLength, source: source === 'aria' ? 'dom' : source };
+        const snapOpts = { interactive: opts.interactive, compact: opts.compact ?? true, maxDepth: opts.maxDepth, maxTextLength: opts.maxTextLength, source: source === 'aria' ? 'dom' : source, ...(opts.viewport && { viewportExpand: 0 }) };
         let text: string;
         if (source === 'aria') {
           // Playwright's agent-facing accessibility snapshot; its [ref=eN] refs are valid act targets ({ref:'e12'})
@@ -113,7 +113,7 @@ export class Tab {
           const raw = await page.snapshot(snapOpts);
           text = typeof raw === 'string' ? L.formatSnapshot(raw, snapOpts) : JSON.stringify(raw, null, 2);
         }
-        const key = `${this.id}:${snapOpts.source}`;
+        const key = `${this.id}:${snapOpts.source}:${opts.viewport ? 'vp' : 'all'}`;
         const prev = this.ctx.state.lastObserve.get(key);
         this.ctx.state.lastObserve.set(key, text);
         const diffOn = opts.diff !== false;

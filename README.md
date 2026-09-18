@@ -28,7 +28,7 @@ Agent tabs open in the background inside a Chrome tab group named after the sess
 
 ## Sites as capabilities
 
-The OpenCLI adapter corpus ships as a library dependency (`@jackwener/opencli`): 170+ sites, ~1300 commands (Bilibili, Zhihu, Xiaohongshu, Twitter/X, Reddit, HackerNews, LinkedIn, YouTube, Amazon, GitHub, Notion, ChatGPT/Gemini/Claude web…). Adapters for Electron desktop apps are excluded — this runtime drives Chrome only. They are not 1300 tools: `sites_search` finds them, `sites_enable` loads one site's commands as typed tools (read-only by default; `write:true` adds account-changing commands), `site_run` calls any command directly, and `sites.<site>.<command>()` works inside `js`.
+The OpenCLI adapter corpus ships as a library dependency (`@jackwener/opencli`): 160+ sites, ~1200 commands (Bilibili, Zhihu, Xiaohongshu, Twitter/X, Reddit, HackerNews, LinkedIn, YouTube, Amazon, GitHub, Notion, ChatGPT/Gemini/Claude web…). Adapters for Electron desktop apps are excluded — this runtime drives Chrome only. They are not 1300 tools: `sites_search` finds them, `sites_enable` loads one site's commands as typed tools (read-only by default; `write:true` adds account-changing commands), `site_run` calls any command directly, and `sites.<site>.<command>()` works inside `js`.
 
 ## Recon and freezing flows into tools
 

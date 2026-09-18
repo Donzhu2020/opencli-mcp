@@ -255,7 +255,7 @@ export class Tab {
 export interface SessionContext { rt: Runtime; sessionId: string; state: SessionState }
 
 export class Browser {
-  constructor(readonly id: 'chrome' | 'cdp', readonly type: 'extension' | 'cdp', private readonly ctx: SessionContext) {}
+  constructor(readonly id: 'chrome', readonly type: 'extension', private readonly ctx: SessionContext) {}
   private page(): Promise<RuntimePage> { return this.ctx.rt.getBrowserPage(this.ctx.sessionId); }
   private ext(page: RuntimePage): ExtensionRuntimePage {
     if (!this.ctx.rt.isExtensionPage(page)) throw new ActionError('unsupported_backend', 'This operation needs the Chrome extension backend');
@@ -357,7 +357,8 @@ export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
   const getDefault = async (): Promise<Browser> => {
     const b = rt.backend();
     if (b === 'none') throw new ActionError('browser_unavailable', 'No browser backend is connected', 'Run doctor. Site commands with strategy `public` still work without a browser.');
-    return browserFor(b === 'extension' ? 'chrome' : 'cdp');
+    if (b !== 'extension') throw new ActionError('browser_unavailable', 'Chrome extension backend is not connected', 'Run doctor; make sure Chrome is running with the opencli-mcp extension.');
+    return browserFor('chrome');
   };
 
   const siteBase = {

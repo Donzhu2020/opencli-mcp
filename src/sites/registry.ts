@@ -1,6 +1,6 @@
 /**
  * SiteRegistry — the L1 "sites as capabilities" layer.
- * Loads OpenCLI's built-in adapter manifest (179 sites / ~1300 commands) plus user adapters and
+ * Loads OpenCLI's built-in adapter manifest (160+ sites / ~1200 commands after excluding Electron apps) plus user adapters and
  * agent-defined tools as lazy stubs in OpenCLI's global registry; modules import on first use.
  */
 import fs from 'node:fs';

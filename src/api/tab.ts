@@ -41,6 +41,7 @@ const WRITE_EVAL_RE = /(\.click\s*\(|\.submit\s*\(|\blocation\s*(=|\.href\s*=|\.
 export class Tab {
   /** A Tab owns the page object bound to its identity; `bound` lets a caller (frozen tools) pass an existing page. */
   constructor(readonly id: string, private readonly ctx: SessionContext, private readonly bound?: RuntimePage) {}
+  private closed = false;
 
   /** Run `fn` on this tab's own page object. Operations are serialized per tab, never across tabs. */
   async use<T>(fn: (page: RuntimePage) => Promise<T>): Promise<T> {
@@ -50,6 +51,7 @@ export class Tab {
     state.tabLocks.set(this.id, new Promise<void>((r) => { release = r; }));
     try {
       await prev;
+      if (this.closed) throw new ActionError('stale_page', `tab ${this.id} was closed`, 'This Tab object is dead; open or claim another tab.');
       if (state.finalized && !state.pages.has(this.id)) throw new ActionError('page_released', `tab ${this.id} was released by finalize`, 'finalize ends the session\'s control of its tabs; open a new tab or claim the tab again (browser.user.claimTab).');
       state.selected = this.id;
       const page = this.bound ?? await this.ctx.rt.pageFor(this.ctx.sessionId, this.id);
@@ -76,7 +78,7 @@ export class Tab {
   async back(): Promise<void> { await this.use((p) => p.history('back')); }
   async forward(): Promise<void> { await this.use((p) => p.history('forward')); }
   async reload(): Promise<void> { await this.use((p) => p.history('reload')); }
-  async close(): Promise<void> { await this.use((p) => p.closeTab(this.id)); this.ctx.rt.forgetPage(this.ctx.sessionId, this.id); }
+  async close(): Promise<void> { await this.use((p) => p.closeTab(this.id)); this.closed = true; this.ctx.rt.forgetPage(this.ctx.sessionId, this.id); }
 
   async observe(opts: ObserveOptions = {}): Promise<{ url: string | null; title: string | null; state?: string; diff?: boolean; changed?: { added: number; removed: number; changed?: number }; image?: ImageValue }> {
     const mode = opts.mode ?? 'state';

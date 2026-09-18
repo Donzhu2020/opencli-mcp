@@ -75,6 +75,9 @@ function definePageClass(lib: Lib): any {
     private readonly bridge: ExtensionBridge;
     private readonly opts: ExtensionPageOptions;
     private _page: string | undefined;
+    /** A page created for one tab keeps that identity for life: it never adopts another tab, and once its tab is closed or released every command fails with stale_page. */
+    private readonly bound: boolean;
+    private closed = false;
 
     constructor(bridge: ExtensionBridge, opts: ExtensionPageOptions) {
       super();
@@ -83,6 +86,10 @@ function definePageClass(lib: Lib): any {
       this.session = opts.session;
       this.surface = opts.surface;
       this._page = opts.page;
+      this.bound = opts.page !== undefined;
+    }
+    private assertOpen(): void {
+      if (this.closed) throw new BrowserCommandError(`tab ${this._page} was closed`, 'stale_page', 'The tab this object was bound to no longer exists; open or claim another tab.');
     }
 
     private sessionOpts(): Partial<Command> {
@@ -92,10 +99,12 @@ function definePageClass(lib: Lib): any {
     private cmdOpts(): Partial<Command> { return { ...this.sessionOpts(), ...(this._page !== undefined && { page: this._page }) }; }
 
     private async send(action: Command['action'], params: Partial<Command> = {}): Promise<{ data: unknown; page?: string }> {
+      this.assertOpen();
       try {
         return await this.bridge.send(action, { ...this.cmdOpts(), ...params });
       } catch (err) {
-        if (isStalePageIdentityError(err) && this._page !== undefined && action === 'navigate') {
+        // an unbound (session-level) page may fall through to a fresh tab; a bound one reports its tab as gone
+        if (isStalePageIdentityError(err) && this._page !== undefined && action === 'navigate' && !this.bound) {
           this._page = undefined;
           return this.bridge.send(action, { ...this.cmdOpts(), ...params });
         }
@@ -105,7 +114,7 @@ function definePageClass(lib: Lib): any {
 
     async goto(url: string, options?: { waitUntil?: 'load' | 'none'; settleMs?: number }): Promise<void> {
       const result = await this.send('navigate', { url });
-      if (result.page) this._page = result.page;
+      if (result.page && !this.bound) this._page = result.page;
       this._lastUrl = url;
       if (options?.waitUntil !== 'none') {
         const maxMs = options?.settleMs ?? 1000;
@@ -121,7 +130,6 @@ function definePageClass(lib: Lib): any {
       }
     }
     getActivePage(): string | undefined { return this._page; }
-    setActivePage(page?: string): void { this._page = page; this._lastUrl = null; }
 
     async evaluate(input: unknown, ...args: unknown[]): Promise<unknown> {
       const code = buildEvaluateExpression(input as string, args);
@@ -138,7 +146,8 @@ function definePageClass(lib: Lib): any {
     }
     async closeWindow(): Promise<void> {
       try { await this.bridge.send('session-finalize', { ...this.sessionOpts(), keep: [] }); } catch { /* ignore */ }
-      this._page = undefined; this._lastUrl = null;
+      if (this.bound) this.closed = true; else this._page = undefined;
+      this._lastUrl = null;
     }
     async tabs(): Promise<unknown[]> { const r = await this.bridge.send('tabs', { op: 'list', ...this.sessionOpts() }); return Array.isArray(r.data) ? r.data : []; }
     async newTab(url?: string): Promise<string | undefined> {
@@ -151,7 +160,7 @@ function definePageClass(lib: Lib): any {
       if (typeof target === 'number') params.index = target; else if (typeof target === 'string') params.page = target; else if (this._page !== undefined) params.page = this._page;
       const r = await this.bridge.send('tabs', params);
       const closed = (r.data as { closed?: string } | undefined)?.closed;
-      if ((closed && closed === this._page) || (!closed && (target === undefined || target === this._page))) { this._page = undefined; this._lastUrl = null; }
+      if ((closed && closed === this._page) || (!closed && (target === undefined || target === this._page))) { if (this.bound) this.closed = true; else this._page = undefined; this._lastUrl = null; }
     }
     async selectTab(target: number | string): Promise<void> {
       const r = await this.bridge.send('tabs', { op: 'select', ...(typeof target === 'number' ? { index: target } : { page: target }), ...this.sessionOpts() });
@@ -178,14 +187,14 @@ function definePageClass(lib: Lib): any {
     async userTabs(): Promise<UserTabInfo[]> { const r = await this.bridge.send('user-tabs', { ...this.sessionOpts() }); return Array.isArray(r.data) ? r.data as UserTabInfo[] : []; }
     async claim(tab: { tabId?: number; title?: string; url?: string }): Promise<{ page: string; url?: string; title?: string }> {
       const r = await this.bridge.send('claim', { ...this.sessionOpts(), claim: tab });
-      if (r.page) this._page = r.page;
+      if (r.page && !this.bound) this._page = r.page;
       const d = (r.data ?? {}) as { url?: string; title?: string };
       return { page: r.page ?? '', url: d.url, title: d.title };
     }
     async mark(page: string, mark: 'deliverable' | 'handoff' | null): Promise<void> { await this.bridge.send('mark', { ...this.sessionOpts(), page, mark }); }
     async finalize(keep: Array<{ page: string; status: 'deliverable' | 'handoff' }>): Promise<{ closed: string[]; kept: string[] }> {
       const r = await this.bridge.send('session-finalize', { ...this.sessionOpts(), keep });
-      this._page = undefined;
+      if (this.bound) this.closed = true; else this._page = undefined;
       return (r.data ?? { closed: [], kept: [] }) as { closed: string[]; kept: string[] };
     }
     async cursor(x: number, y: number, opts: { waitForArrival?: boolean } = {}): Promise<void> {

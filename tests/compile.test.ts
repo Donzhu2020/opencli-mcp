@@ -5,13 +5,14 @@ import type { TraceEvent, TraceInput } from '../src/runtime/trace.js';
 const t = (e: TraceInput): TraceEvent => ({ t: 1, ...e } as TraceEvent);
 
 describe('tools_compile: frozen flows run on the agent engine with checkpoints', () => {
-  it('emits act steps with replay selectors, expect checkpoints, explicit args and structured step failures', () => {
+  it('freezes the locator intent, expect checkpoints, explicit args and structured step failures', () => {
     const trace: TraceEvent[] = [
       t({ kind: 'goto', url: 'https://shop.example/search' }),
       t({ kind: 'act', action: 'fill', target: 'label:Search', targetSpec: { label: 'Search' }, targetSelector: 'internal:label="Search"i', value: 'red shoes', ok: true }),
       t({ kind: 'act', action: 'press', target: 'label:Search', targetSpec: { label: 'Search' }, targetSelector: 'internal:label="Search"i', value: 'Enter', ok: true }),
       t({ kind: 'expect', what: { text: 'Results for red shoes', url: '/search?q=red' }, ok: true }),
       t({ kind: 'act', action: 'click', target: 'text:Nope', targetSpec: { text: 'Nope' }, ok: false }),
+      t({ kind: 'act', action: 'click', target: 'ref:e7', targetSpec: { ref: 'e7' }, targetSelector: 'div > div:nth-child(3) > a', ok: true }),
       t({ kind: 'observe', mode: 'aria', summary: 'Results' }),
     ];
     const strict = compileFromTrace(trace, { site: 'shop', name: 'search', description: 'Search the shop', inputs: { query: { sample: 'red shoes', description: 'search terms' } } });
@@ -19,8 +20,12 @@ describe('tools_compile: frozen flows run on the agent engine with checkpoints',
     const def = compileFromTrace(trace, { site: 'shop', name: 'search', description: 'Search the shop', inputs: { query: { sample: 'red shoes', description: 'search terms', mode: 'within' } } });
     expect(def.args).toEqual([{ name: 'query', type: 'string', required: true, help: 'search terms' }]);
     const f = def.func!;
-    expect(f).toContain('tab.act({ action: "fill", target: {"selector":"internal:label=\\"Search\\"i"}, value: `${args.query}` })');
-    expect(f).toContain('tab.act({ action: "press", target: {"selector":"internal:label=\\"Search\\"i"}, value: "Enter" })');
+    expect(f).toContain('tab.act({ action: "fill", target: {"label":"Search"}, value: `${args.query}` })'); // the intent, not the resolved selector
+    expect(f).toContain('tab.act({ action: "press", target: {"label":"Search"}, value: "Enter" })');
+    expect(f).toContain('target: {"selector":"div > div:nth-child(3) > a"}'); // a one-time ref has no intent: the replay selector is frozen…
+    expect(f).toContain('// REVIEW: acted on aria ref e7 (one-time)');
+    expect(def.warnings).toHaveLength(1); expect(def.warnings?.[0]).toMatch(/^step 5: acted on aria ref e7 \(one-time\)/); // …and the tool is flagged
+    expect(strict.warnings?.[0]).toMatch(/replace with a stable locator/);
     expect(f).toContain('tab.expect({"text":`Results for ${args.query}`,"url":"/search?q=red"})');
     expect(f).toContain('// checkpoint text follows the input (declared mode "within")');
     expect(f).not.toContain('Nope'); // failed steps are not frozen

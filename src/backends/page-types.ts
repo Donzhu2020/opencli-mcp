@@ -5,7 +5,6 @@ import type { Expectation, CheckResult } from '../shared/page-contract.js';
 
 export interface RuntimePage extends IPage {
   getActivePage(): string | undefined;
-  setActivePage(page?: string): void;
   cdp(method: string, params?: Record<string, unknown>): Promise<unknown>;
   newTab(url?: string): Promise<string | undefined>;
   closeTab(target?: number | string): Promise<void>;

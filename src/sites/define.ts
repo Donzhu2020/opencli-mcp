@@ -143,7 +143,7 @@ export type CompileInput = string | { sample: string; description?: string; type
  * failure (`step`, `label`, `state`) when a step fails. Inputs are explicit: only exact occurrences of a declared
  * sample value become `args.<name>`.
  */
-export function compileFromTrace(trace: TraceEvent[], opts: { site: string; name: string; description: string; access?: 'read' | 'write'; inputs?: Record<string, CompileInput>; domain?: string }): ToolDefinition {
+export function compileFromTrace(trace: TraceEvent[], opts: { site: string; name: string; description: string; access?: 'read' | 'write'; inputs?: Record<string, CompileInput>; domain?: string }): ToolDefinition & { warnings?: string[] } {
   const inputs = Object.entries(opts.inputs ?? {}).map(([name, v]) => (typeof v === 'string' ? { name, sample: v, type: 'string' as const, required: true, mode: 'exact' as const } : { name, sample: v.sample, type: v.type ?? 'string', required: v.required ?? true, help: v.description, mode: v.mode ?? 'exact' as const }));
   const argDefs: ArgDef[] = inputs.map((i) => ({ name: i.name, type: i.type, required: i.required, help: i.help ?? `example: ${i.sample}` }));
   // exact by default: a literal becomes an argument only when it IS the sample; 'within' inputs are the agent's explicit
@@ -158,6 +158,7 @@ export function compileFromTrace(trace: TraceEvent[], opts: { site: string; name
 
   const net = trace.filter((e): e is Extract<TraceEvent, { kind: 'network' }> => e.kind === 'network' && /json|graphql|x-component/i.test(e.contentType ?? '') && (e.status ?? 200) < 400 && (opts.domain ? e.url.includes(opts.domain) : true));
   const body: string[] = [];
+  const warnings: string[] = [];
   const firstGoto = trace.find((e): e is Extract<TraceEvent, { kind: 'goto' }> => e.kind === 'goto');
   if (net.length > 0) {
     const best = net.sort((a, b) => (b.bodyBytes ?? 0) - (a.bodyBytes ?? 0))[0];
@@ -175,9 +176,18 @@ export function compileFromTrace(trace: TraceEvent[], opts: { site: string; name
         if (!e.ok) continue;
         const spec = (e.targetSpec ?? {}) as Record<string, unknown>;
         const { frame, ...loc } = spec;
-        const target: Record<string, unknown> = e.targetSelector ? { selector: e.targetSelector } : { ...loc };
+        // freeze the intent the agent expressed (role/name, label, text, testid, a selector it chose, within), not the element the
+        // engine happened to resolve it to: intent survives a redesign, the resolved selector does not. Only a one-time ref or
+        // a point has no intent to keep — then the engine's replay selector is frozen and the tool is flagged for review.
+        const intent = ['role', 'name', 'label', 'text', 'testid', 'selector', 'within'].some((k) => k in loc);
+        const target: Record<string, unknown> = intent ? { ...loc } : e.targetSelector ? { selector: e.targetSelector } : { ...loc };
         if (frame !== undefined) target.frame = frame;
-        if (!e.targetSelector && typeof loc.ref === 'string') body.push(`  // the agent acted on aria ref ${loc.ref} and no replay selector was recorded — replace with a stable locator`);
+        const structural = (s: unknown) => typeof s === 'string' && !s.startsWith('internal:') && !/^#[\w-]+$|\[data-testid=|\[data-[\w-]+=|^aria-ref=/.test(s) && !s.includes(' >> internal:');
+        if (!intent) {
+          const why = typeof loc.ref === 'string' ? `aria ref ${loc.ref} (one-time)` : 'a viewport point';
+          warnings.push(`step ${n + 1}: acted on ${why}; frozen as the engine's replay selector ${JSON.stringify(e.targetSelector ?? null)} — replace with a stable locator (testid, role+name, label, or a selector scoped by within)`);
+          body.push(`  // REVIEW: acted on ${why} — the replay selector below is what the engine resolved at exploration time, not an intent`);
+        } else if (structural(loc.selector)) warnings.push(`step ${n + 1}: selector ${JSON.stringify(loc.selector)} is structural css; it breaks on a redesign — prefer testid, role+name or label`);
         const valued = ['fill', 'type', 'press', 'select'].includes(e.action);
         push(`${e.action} ${e.target}`.slice(0, 80), `tab.act({ action: ${JSON.stringify(e.action)}, target: ${JSON.stringify(target)}${valued ? `, value: ${lit(String(e.value ?? (e.action === 'press' ? 'Enter' : '')))}` : ''} })`);
       } else if (e.kind === 'expect') {
@@ -192,5 +202,5 @@ export function compileFromTrace(trace: TraceEvent[], opts: { site: string; name
     body.push(`  return await tab.observe({ diff: false });`);
   }
   const func = `async ({ tab, args }) => {\n${body.join('\n')}\n}`;
-  return { site: opts.site, name: opts.name, description: opts.description, access: opts.access ?? 'read', strategy: 'cookie', domain: opts.domain, args: argDefs, func, siteSession: 'persistent' };
+  return { site: opts.site, name: opts.name, description: opts.description, access: opts.access ?? 'read', strategy: 'cookie', domain: opts.domain, args: argDefs, func, siteSession: 'persistent', ...(warnings.length && { warnings }) };
 }

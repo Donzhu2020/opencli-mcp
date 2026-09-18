@@ -66,9 +66,10 @@ const networkCaptures = new Map<number, NetworkCaptureState>();
  * so commands fail fast with `dialog_open` instead of timing out, and let the agent
  * read and answer the dialog explicitly (the ChatGPT plugin surfaces dialogs as state).
  */
-export interface PendingDialog { type: 'alert' | 'confirm' | 'prompt' | 'beforeunload'; message: string; defaultPrompt?: string; url?: string; openedAt: number }
+export interface PendingDialog { type: 'alert' | 'confirm' | 'prompt' | 'beforeunload'; message: string; defaultPrompt?: string; url?: string; openedAt: number; /** CDP session that reported it (an OOPIF child session, or the auxiliary session); undefined = root */ sessionId?: string }
 const dialogs = new Map<number, PendingDialog>();
 const dialogWaiters = new Map<number, Set<(d: PendingDialog) => void>>();
+const dialogClosedWaiters = new Map<number, Set<() => void>>();
 /**
  * Answering a dialog on the tab's root session does not work in practice: the input command whose handler opened the
  * dialog is still in flight and chrome.debugger queues later commands behind it (~5s until Chrome gives up on the ack).
@@ -103,24 +104,42 @@ function dialogOpenError(tabId: number, d: PendingDialog, method: string): Error
   });
 }
 
+/**
+ * Answer the dialog the way the ChatGPT plugin does: send Page.handleJavaScriptDialog and treat the
+ * Page.javascriptDialogClosed event as the confirmation — the command's own response may be delayed or lost while the
+ * renderer sits in the dialog's nested loop. The answer is tried on every session that could own the dialog: the one
+ * that reported it, the pre-attached auxiliary session, and the root session.
+ */
 export async function handleDialog(tabId: number, accept: boolean, promptText?: string): Promise<PendingDialog | null> {
   const d = dialogs.get(tabId) ?? null;
-  const sessionId = dialogSessions.get(tabId) ?? null;
-  const target = sessionId ? ({ tabId, sessionId } as chrome.debugger.Debuggee) : { tabId };
+  const params = { accept, ...(promptText !== undefined && { promptText }) };
+  let onClosed: (() => void) | undefined;
+  const closed = new Promise<'closed'>((resolve) => {
+    onClosed = () => resolve('closed');
+    if (!dialogClosedWaiters.has(tabId)) dialogClosedWaiters.set(tabId, new Set());
+    dialogClosedWaiters.get(tabId)!.add(onClosed);
+  });
+  const sessions = new Set<string | undefined>([d?.sessionId, dialogSessions.get(tabId), undefined]);
+  const attempts = [...sessions].map((sessionId) => {
+    const target = (sessionId ? { tabId, sessionId } : { tabId }) as chrome.debugger.Debuggee;
+    return sendDebuggerCommand(target, 'Page.handleJavaScriptDialog', params, 5_000).then(() => 'ok' as const, (e: unknown) => (e instanceof Error ? e.message : String(e)));
+  });
+  const allDone = Promise.all(attempts).then((rs) => (rs.includes('ok') ? 'ok' as const : rs.join(' | ')));
+  const timeout = new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 6_000));
   try {
-    await sendDebuggerCommand(target, 'Page.handleJavaScriptDialog', { accept, ...(promptText !== undefined && { promptText }) }, 5_000);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    if (/No dialog is showing/i.test(msg)) throw Object.assign(new Error(sessionId ? 'the auxiliary session sees no dialog' : 'the dialog is no longer showing'), { code: 'no_dialog', hint: 'If dialog get still reports it, the answer session was attached after it opened; reload the extension and retry.' });
-    throw e;
+    const outcome = await Promise.race([closed, allDone, timeout]);
+    if (outcome === 'closed' || outcome === 'ok') { dialogs.delete(tabId); return d; }
+    if (outcome === 'timeout') throw Object.assign(new Error('the dialog did not close within 6s'), { code: 'dialog_answer_timeout', hint: 'Check the browser window; the dialog may need the tab to be visible.' });
+    if (/No dialog is showing/i.test(outcome)) throw Object.assign(new Error('no session sees a dialog to answer'), { code: 'no_dialog', hint: d ? 'The tracked dialog is stale; it was closed by the page or the user.' : 'Nothing is pending.' });
+    throw new Error(outcome);
+  } finally {
+    if (onClosed) dialogClosedWaiters.get(tabId)?.delete(onClosed);
   }
-  dialogs.delete(tabId);
-  return d;
 }
 
 function noteDialog(tabId: number, d: PendingDialog | null): void {
   if (d) { dialogs.set(tabId, d); for (const w of dialogWaiters.get(tabId) ?? []) w(d); }
-  else dialogs.delete(tabId);
+  else { dialogs.delete(tabId); for (const w of dialogClosedWaiters.get(tabId) ?? []) w(); }
 }
 
 /**
@@ -897,12 +916,12 @@ export async function detach(tabId: number): Promise<void> {
 
 export function registerListeners(): void {
   chrome.debugger.onEvent.addListener((source, method, params: any) => {
-    if (!source.tabId || source.sessionId) return;
-    if (method === 'Page.javascriptDialogOpening') noteDialog(source.tabId, { type: params?.type ?? 'alert', message: String(params?.message ?? ''), defaultPrompt: params?.defaultPrompt, url: params?.url, openedAt: Date.now() });
+    if (!source.tabId) return;
+    if (method === 'Page.javascriptDialogOpening') { if (!dialogs.has(source.tabId)) noteDialog(source.tabId, { type: params?.type ?? 'alert', message: String(params?.message ?? ''), defaultPrompt: params?.defaultPrompt, url: params?.url, openedAt: Date.now(), sessionId: source.sessionId }); }
     else if (method === 'Page.javascriptDialogClosed') noteDialog(source.tabId, null);
   });
   chrome.tabs.onRemoved.addListener((tabId) => {
-    dialogs.delete(tabId); dialogWaiters.delete(tabId); dialogSessions.delete(tabId);
+    dialogs.delete(tabId); dialogWaiters.delete(tabId); dialogClosedWaiters.delete(tabId); dialogSessions.delete(tabId);
     attached.delete(tabId);
     networkCaptures.delete(tabId);
     tabFrameContexts.delete(tabId);

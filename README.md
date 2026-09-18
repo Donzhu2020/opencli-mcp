@@ -20,11 +20,11 @@ A CLI process cannot keep a debugger attached, keep refs alive between calls, pu
 | **entry tools** | `tab_open`, `tab_claim`, `tab_observe`, `tab_act`, `tab_expect`, `session_finalize`, `sites_search`, `site_run`, `tools_compile`, `tools_define`, `docs_*`, `doctor` (+ enabled site commands as `<site>_<command>`) | the core loop as single structured calls |
 | **`js`** | persistent JavaScript session: `agent.browsers`, `browser.tabs`, `tab.observe/act/evaluate/screenshot`, `sites.<site>.<command>()`, `recon.discover(tab)`, `tools.define()` | batching many steps in one call; loops; conditionals |
 
-`tab_act` is **one atomic command at the browser's edge** (`src/shared/engine.ts`, Playwright's injected script running in the extension's isolated world): locate (`{ref}`, `{role,name}`, `{label}`, `{text}`, `{testid}`, `{css,nth?}`, `{x,y}`) → wait until visible, enabled and stable → scroll into view → hit-test the click point → cursor overlay → real mouse/keyboard via CDP → wait for the DOM to settle. Actions: click, dblclick, hover, focus, fill (verified), type, press, select, check/uncheck, upload, drag, scroll, back/forward/reload. Errors are branchable codes (`stale_ref`, `not_found`, `selector_ambiguous` with candidates, `not_visible`, `not_enabled`, `intercepted` with the blocker, `option_not_found` with options, `page_not_loaded`). `tab_observe` returns a diff when the page changed only a little.
+`tab_act` is **one atomic command at the browser's edge** (`src/shared/engine.ts`, Playwright's injected script running in the extension's isolated world): locate (`{ref}`, `{role,name}`, `{label}`, `{text}`, `{testid}`, `{selector,nth?}`, `{x,y}`) → wait until visible, enabled and stable → scroll into view → hit-test the click point → cursor overlay → real mouse/keyboard via CDP → wait for the DOM to settle. Actions: click, dblclick, hover, focus, fill (verified), type, press, select, check/uncheck, upload, drag, scroll, back/forward/reload. Errors are branchable codes (`stale_ref`, `not_found`, `selector_ambiguous` with candidates, `not_visible`, `not_enabled`, `intercepted` with the blocker, `option_not_found` with options, `page_not_loaded`). `tab_observe` returns a diff when the page changed only a little.
 
 ## Tabs are the user's property
 
-Agent tabs open in the background inside a Chrome tab group named after the session (`tab_open {session}` / `session.name()`), muted until looked at. `tab_claim` takes over a tab the user already has open by `tabId`, or by a `url` prefix / `title` substring that matches exactly one tab (given together with a `tabId` they are guards that fail closed); claimed tabs are never moved or closed. `session_finalize` keeps only `deliverable` (leaves the group, green badge) or `handoff` (stays in the group, yellow badge) tabs and closes the rest. A cursor overlay glides to the point of each action on visible tabs.
+Agent tabs open in the background inside a Chrome tab group named after the session (`tab_open {session}` / `browser.nameSession()`), muted until looked at. `tab_claim` takes over a tab the user already has open by `tabId`, or by a `url` prefix / `title` substring that matches exactly one tab (given together with a `tabId` they are guards that fail closed); claimed tabs are never moved or closed. `session_finalize` keeps only `deliverable` (leaves the group, green badge) or `handoff` (stays in the group, yellow badge) tabs and closes the rest. A cursor overlay glides to the point of each action on visible tabs.
 
 ## Sites as capabilities
 
@@ -35,6 +35,8 @@ The OpenCLI adapter corpus ships as a library dependency (`@jackwener/opencli`):
 `recon.discover(tab)` (in `js`) parses the scripts a page loaded (a JavaScript port of jsluice's ideas on web-tree-sitter: fetch/XHR/jQuery/axios/WebSocket/location usage, string concatenation resolved, unknown parts marked `EXPR`) and merges the candidates with captured network requests into a ledger. `tools_compile` drafts a tool from the session's recorded steps; `tools_define` writes it to `~/.opencli-mcp/tools/<site>/<name>.js` and registers it live (`tools/list_changed`).
 
 ## Install
+
+中文全览与使用指南：[docs/guide.zh-CN.md](docs/guide.zh-CN.md)。Releases: https://github.com/jackwener/opencli-mcp/releases
 
 ```bash
 git clone https://github.com/jackwener/opencli-mcp && cd opencli-mcp

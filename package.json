@@ -11,7 +11,7 @@
     "opencli-mcp": "dist/src/main.js"
   },
   "scripts": {
-    "build": "node scripts/extract-playwright-injected.mjs && tsc -p tsconfig.json && node scripts/build-extension.mjs && node scripts/copy-assets.mjs",
+    "build": "node scripts/extract-playwright-injected.mjs && tsc -p tsconfig.json && node scripts/gen-api-reference.mjs && node scripts/build-extension.mjs && node scripts/copy-assets.mjs",
     "build:ext": "node scripts/build-extension.mjs",
     "dev": "tsx src/main.ts",
     "test": "vitest run",
@@ -19,7 +19,7 @@
     "smoke": "node scripts/smoke.mjs --dist",
     "smoke:browser": "node scripts/smoke-browser.mjs",
     "prepare": "npm run build",
-    "check": "npm run typecheck && npm test && npm run build"
+    "check": "npm run typecheck && npm run build && npm test"
   },
   "files": [
     "dist/",

@@ -320,7 +320,7 @@ export class Browser {
 
   documentation(): string {
     const ctx: DocContext = { backend: this.type, capabilities: [...this.ctx.state.capabilities] };
-    return `${buildInstructions(ctx)}\n\n${readDoc('js-tool') ?? ''}`;
+    return `${buildInstructions(ctx)}\n\n${readDoc('js-tool') ?? ''}\n\n${readDoc('api-reference') ?? ''}`;
   }
 }
 

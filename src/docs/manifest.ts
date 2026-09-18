@@ -25,6 +25,8 @@ export const DOCS_MANIFEST: DocEntry[] = [
   { name: 'tab-lifecycle', mode: 'included', when: { backends: ['extension'] } },
   { name: 'sites', mode: 'included' },
   { name: 'js-tool', mode: 'model' },
+  { name: 'api-reference', mode: 'model', description: 'the whole object model, generated from its TypeScript declarations' },
+  { name: 'errors', mode: 'lookup', description: 'error code families and what to do for each' },
   { name: 'recon', mode: 'lookup', description: 'read before discovering a site’s API endpoints' },
   { name: 'define-tools', mode: 'lookup', description: 'read before freezing a flow into a tool' },
   { name: 'capabilities/cdp', mode: 'model', when: { capabilities: ['cdp'] } },

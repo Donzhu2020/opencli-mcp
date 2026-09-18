@@ -198,7 +198,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     const first = state.js.runs === 0;
     const r = await state.js.run(code, { timeoutMs });
     const content: Content = [];
-    if (first) { const b = rt.backend(); const doc = b === 'none' ? `${readDoc('js-tool') ?? ''}\n\n(No browser backend connected: browser objects will throw browser_unavailable; sites.* public commands work.)` : `${readDoc('js-tool') ?? ''}`; content.push(text(`# API\n${doc}\n\n# Result`)); }
+    if (first) { const b = rt.backend(); const ref = readDoc('api-reference') ?? ''; const doc = b === 'none' ? `${readDoc('js-tool') ?? ''}\n\n${ref}\n\n(No browser backend connected: browser objects will throw browser_unavailable; sites.* public commands work.)` : `${readDoc('js-tool') ?? ''}\n\n${ref}`; content.push(text(`# API\n${doc}\n\n# Result`)); }
     if (r.writes.length) content.push(text(r.writes.join('\n')));
     if (r.error) content.push(text(`Error: ${r.error.name}: ${r.error.message}${r.error.stack ? `\n${r.error.stack}` : ''}`));
     else if (r.value !== undefined) content.push(text(safeStringify(r.value, 120_000)));

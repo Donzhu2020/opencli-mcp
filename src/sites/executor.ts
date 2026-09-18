@@ -28,7 +28,7 @@ export interface CommandRunError {
   ok: false;
   site: string;
   name: string;
-  error: { code: string; message: string; hint?: string };
+  error: { code: string; message: string; hint?: string; /** for compiled flows: which step failed and the page state then */ details?: { step?: number; label?: string; state?: string; expect?: unknown } };
   elapsedMs: number;
 }
 
@@ -94,10 +94,11 @@ export async function runSiteCommand(
     return { ok: true, site: cmd.site, name: cmd.name, value: result, elapsedMs };
   } catch (err) {
     const env = toEnvelope(err) as { code?: string; message?: string; hint?: string };
-    const anyErr = err as { code?: string; hint?: string; message?: string };
+    const anyErr = err as { code?: string; hint?: string; message?: string; step?: number; label?: string; state?: string; extra?: { expect?: unknown; state?: string } };
+    const details = anyErr.step !== undefined ? { step: anyErr.step, label: anyErr.label, state: anyErr.state } : anyErr.extra?.expect !== undefined ? { expect: anyErr.extra.expect, state: anyErr.extra.state } : undefined;
     return {
       ok: false, site: cmd.site, name: cmd.name, elapsedMs: Date.now() - started,
-      error: { code: String(env.code ?? anyErr.code ?? 'COMMAND_EXEC'), message: String(env.message ?? anyErr.message ?? err), hint: env.hint ?? anyErr.hint },
+      error: { code: String(env.code ?? anyErr.code ?? 'COMMAND_EXEC'), message: String(env.message ?? anyErr.message ?? err), hint: env.hint ?? anyErr.hint, ...(details && { details }) },
     };
   }
 }

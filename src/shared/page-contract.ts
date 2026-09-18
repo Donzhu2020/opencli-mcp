@@ -63,3 +63,7 @@ export interface SettleArgs { maxMs: number; quietMs: number }
 export interface SelectResult { selected?: string[]; error?: string; available?: string[] }
 
 export interface ElementAtResult { matches_n: number; entries: FindEntry[] }
+
+/** What a flow expects of the page at a step; every field given must hold. */
+export interface Expectation { text?: string; notText?: string; selector?: string; ref?: string; url?: string; title?: string; visible?: boolean }
+export interface CheckResult { ok: boolean; failed: string[]; url: string; title: string }

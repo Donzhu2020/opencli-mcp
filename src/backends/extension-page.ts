@@ -10,7 +10,8 @@ import { importDist } from '../lib/opencli.js';
 import { buildEvaluateExpression } from '@jackwener/opencli/browser/utils';
 import type { RuntimePage } from './page-types.js';
 import type { Command, ActSpec, ActResult, DialogInfo } from '../protocol.js';
-import { pageCallJs, refToTarget, parseKey } from '../shared/engine.js';
+import { pageCallJs, refToTarget, parseKey, ActError } from '../shared/engine.js';
+import type { Expectation, CheckResult } from '../shared/page-contract.js';
 
 export interface ExtensionPageOptions {
   session: string;
@@ -209,6 +210,17 @@ function definePageClass(lib: Lib): any {
     // ── OpenCLI adapter contract, served by the act engine (no second locator engine) ──
     /** Accessibility snapshot text (the agent's observation) for adapters and compiled tools. */
     async aria(opts: { viewport?: boolean } = {}): Promise<string> { return String(await this.pageCall('aria', { viewport: Boolean(opts.viewport) })); }
+    async expect(what: Expectation, opts: { timeoutMs?: number } = {}): Promise<CheckResult> {
+      const deadline = Date.now() + (opts.timeoutMs ?? 5000);
+      let last: CheckResult | null = null;
+      for (;;) {
+        try { last = await this.pageCall('check', what, 3000) as CheckResult; if (last.ok) return last; } catch { /* navigation in flight: retry */ }
+        if (Date.now() >= deadline) break;
+        await new Promise((r) => setTimeout(r, 150));
+      }
+      const state = await this.aria({ viewport: true }).catch(() => '');
+      throw new ActError('expectation_failed', last ? last.failed.join('; ') : 'page not reachable', 'Observe the page; the flow may need a different step or a wait.', { expect: what as Record<string, unknown>, url: last?.url, title: last?.title, state: state.slice(0, 4000) });
+    }
     async click(ref: string, opts: { nth?: number; firstOnMulti?: boolean } = {}): Promise<{ ref: string; matches_n: number; match_level: 'exact'; click_method: string; hit: string }> {
       const r = await this.act({ kind: 'click', target: refToTarget(ref, opts) });
       return { ref, matches_n: r.matches_n, match_level: 'exact', click_method: r.method, hit: r.hit };

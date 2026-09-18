@@ -128,13 +128,23 @@ export function listDefinedTools(): Array<{ site: string; name: string; file: st
  * page (cookies included). Otherwise the UI steps (goto/act/observe) become an explicit function.
  * Values equal to an input are replaced by `args.<input>`.
  */
-export function compileFromTrace(trace: TraceEvent[], opts: { site: string; name: string; description: string; access?: 'read' | 'write'; inputs?: Record<string, string>; domain?: string }): ToolDefinition {
-  const inputs = opts.inputs ?? {};
-  const argDefs: ArgDef[] = Object.entries(inputs).map(([name, sample]) => ({ name, type: 'string', required: true, help: `example: ${sample}` }));
+export type CompileInput = string | { sample: string; description?: string; type?: 'string' | 'int' | 'number' | 'boolean'; required?: boolean };
+
+/**
+ * Compile a recorded session trace into a tool draft.
+ * Network-first: if the trace captured a JSON endpoint on the site, the tool fetches it through the page (cookies
+ * included). Otherwise the UI steps become an explicit function on the same engine the agent used: `page.act` with the
+ * replay selector recorded at act time, `page.expect` checkpoints where the agent asserted the page, and a structured
+ * failure (`step`, `label`, `state`) when a step fails. Inputs are explicit: only exact occurrences of a declared
+ * sample value become `args.<name>`.
+ */
+export function compileFromTrace(trace: TraceEvent[], opts: { site: string; name: string; description: string; access?: 'read' | 'write'; inputs?: Record<string, CompileInput>; domain?: string }): ToolDefinition {
+  const inputs = Object.entries(opts.inputs ?? {}).map(([name, v]) => (typeof v === 'string' ? { name, sample: v, type: 'string' as const, required: true } : { name, sample: v.sample, type: v.type ?? 'string', required: v.required ?? true, help: v.description }));
+  const argDefs: ArgDef[] = inputs.map((i) => ({ name: i.name, type: i.type, required: i.required, help: i.help ?? `example: ${i.sample}` }));
   const sub = (v: string): string => {
-    for (const [k, sample] of Object.entries(inputs)) if (sample && v === sample) return `\${args.${k}}`;
+    for (const i of inputs) if (i.sample && v === i.sample) return `\${args.${i.name}}`;
     let out = v;
-    for (const [k, sample] of Object.entries(inputs)) if (sample && out.includes(sample)) out = out.split(sample).join(`\${args.${k}}`);
+    for (const i of inputs) if (i.sample && out.includes(i.sample)) out = out.split(i.sample).join(`\${args.${i.name}}`);
     return out;
   };
   const lit = (v: string): string => { const s = sub(v); return s.includes('${') ? '`' + s.replace(/`/g, '\\`') + '`' : JSON.stringify(s); };
@@ -148,18 +158,26 @@ export function compileFromTrace(trace: TraceEvent[], opts: { site: string; name
     body.push(`  const data = await page.fetchJson(${lit(best.url)}${best.method && best.method !== 'GET' ? `, { method: ${JSON.stringify(best.method)} }` : ''});`);
     body.push(`  return data;`);
   } else {
+    // every step is wrapped so a failure names the step, carries the engine's error code/hint and the page state at that moment
+    body.push(`  const step = async (n, label, fn) => { try { return await fn(); } catch (e) { const state = await page.aria({ viewport: true }).catch(() => ''); throw Object.assign(new Error('step ' + n + ' (' + label + ') failed: ' + (e && e.message || e)), { code: (e && e.code) || 'step_failed', hint: e && e.hint, step: n, label, state: String(state).slice(0, 4000) }); } };`);
+    let n = 0;
+    const push = (label: string, call: string) => { n += 1; body.push(`  await step(${n}, ${JSON.stringify(label)}, () => ${call});`); };
     for (const e of trace) {
-      if (e.kind === 'goto') body.push(`  await page.goto(${lit(e.url)});`);
+      if (e.kind === 'goto') push(`goto ${e.url.slice(0, 60)}`, `page.goto(${lit(e.url)})`);
       else if (e.kind === 'act') {
-        // Replay through the same engine the agent used: the Playwright-generated selector recorded at act time, else the agent's own locator
+        if (!e.ok) continue;
         const spec = (e.targetSpec ?? {}) as Record<string, unknown>;
         const { frame, ...loc } = spec;
         const target: Record<string, unknown> = e.targetSelector ? { selector: e.targetSelector } : { ...loc };
         if (frame !== undefined) target.frame = frame;
         if (!e.targetSelector && typeof loc.ref === 'string') body.push(`  // the agent acted on aria ref ${loc.ref} and no replay selector was recorded — replace with a stable locator`);
-        const kind = e.action;
-        const valued = ['fill', 'type', 'press', 'select'].includes(kind);
-        body.push(`  await page.act({ kind: ${JSON.stringify(kind)}, target: ${JSON.stringify(target)}${valued ? `, value: ${lit(String(e.value ?? (kind === 'press' ? 'Enter' : '')))}` : ''} });`);
+        const valued = ['fill', 'type', 'press', 'select'].includes(e.action);
+        push(`${e.action} ${e.target}`.slice(0, 80), `page.act({ kind: ${JSON.stringify(e.action)}, target: ${JSON.stringify(target)}${valued ? `, value: ${lit(String(e.value ?? (e.action === 'press' ? 'Enter' : '')))}` : ''} })`);
+      } else if (e.kind === 'expect') {
+        if (!e.ok) continue;
+        const what = Object.fromEntries(Object.entries(e.what).map(([k, v]) => [k, typeof v === 'string' ? sub(v) : v]));
+        const literal = JSON.stringify(what).replace(/"\$\{args\.([a-zA-Z_$][\w$]*)\}"/g, 'args.$1').replace(/"([^"]*\$\{args\.[^"]*)"/g, (_m, inner: string) => '`' + inner.replace(/`/g, '\\`') + '`');
+        push(`expect ${Object.keys(e.what).join(',')}`, `page.expect(${literal})`);
       } else if (e.kind === 'observe') body.push(`  // observed: ${e.mode}${e.summary ? ' — ' + e.summary.slice(0, 80) : ''}`);
     }
     body.push(`  return await page.aria();`);

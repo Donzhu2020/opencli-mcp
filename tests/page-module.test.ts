@@ -171,3 +171,18 @@ describe('frames', () => {
     expect(p.frameProbe({ step: 3 })).toEqual({ found: false });
   });
 });
+
+describe('check', () => {
+  it('evaluates text, url, title, selector and absence expectations', async () => {
+    document.body.innerHTML = '<h1>Results for red shoes</h1><button id="b">Go</button>';
+    document.title = 'Shop';
+    rect(document.getElementById('b')!, { left: 0, top: 0, width: 50, height: 20 });
+    stubEngine();
+    const p = await page();
+    expect(p.check({ text: 'Results for red', title: 'Shop', selector: '#b' })).toMatchObject({ ok: true, failed: [] });
+    const r = p.check({ text: 'blue', url: 'nowhere', selector: '#zzz', notText: 'red' });
+    expect(r.ok).toBe(false);
+    expect(r.failed).toHaveLength(4);
+    expect(p.check({ selector: '#zzz', visible: false })).toMatchObject({ ok: true });
+  });
+});

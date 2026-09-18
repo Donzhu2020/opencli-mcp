@@ -7,7 +7,7 @@
 import {
   ACT_MARK, FRAME_MARK, ENGINE_GLOBAL, PAGE_GLOBAL,
   type ResolveArgs, type ResolveOutcome, type Candidate, type FindArgs, type FindResult, type FindEntry,
-  type AriaArgs, type PointInfo, type FrameProbeResult, type SettleArgs, type SelectResult, type ElementAtResult, type Box,
+  type AriaArgs, type PointInfo, type FrameProbeResult, type SettleArgs, type SelectResult, type ElementAtResult, type Box, type Expectation, type CheckResult,
 } from '../../../src/shared/page-contract.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -297,7 +297,26 @@ export function annotate(): number {
 }
 export function unannotate(): void { document.getElementById(ANNOTATE_ID)?.remove(); }
 
-export const api = { resolve, pointInfo, focus, readValue, fill, nativeSet, isChecked, select, caretToEnd, isFileInput, useAssociatedFileInput, clearActMark, settle, frameProbe, clearFrameMark, aria, find, elementAt, annotate, unannotate };
+/** Evaluate an expectation once (the host polls until it holds or times out). */
+export function check(args: Expectation): CheckResult {
+  const failed: string[] = [];
+  const bodyText = (document.body?.innerText ?? document.body?.textContent ?? '').replace(/\s+/g, ' ');
+  if (args.text !== undefined && !bodyText.includes(args.text)) failed.push(`text "${args.text}" not on the page`);
+  if (args.notText !== undefined && bodyText.includes(args.notText)) failed.push(`text "${args.notText}" still on the page`);
+  if (args.url !== undefined && !location.href.includes(args.url)) failed.push(`url ${location.href} does not include "${args.url}"`);
+  if (args.title !== undefined && !document.title.includes(args.title)) failed.push(`title "${document.title}" does not include "${args.title}"`);
+  const locator = args.selector ?? (args.ref ? `aria-ref=${args.ref}` : undefined);
+  if (locator !== undefined) {
+    const els = query(locator);
+    const wantVisible = args.visible !== false;
+    if (!els.length) { if (wantVisible) failed.push(`${locator} matches nothing`); }
+    else if (wantVisible && !els.some((e) => is(e, 'visible'))) failed.push(`${locator} matches but none is visible`);
+    else if (!wantVisible && els.some((e) => is(e, 'visible'))) failed.push(`${locator} is still visible`);
+  }
+  return { ok: failed.length === 0, failed, url: location.href, title: document.title };
+}
+
+export const api = { check, resolve, pointInfo, focus, readValue, fill, nativeSet, isChecked, select, caretToEnd, isFileInput, useAssociatedFileInput, clearActMark, settle, frameProbe, clearFrameMark, aria, find, elementAt, annotate, unannotate };
 export type PageApi = typeof api;
 
 (globalThis as any)[PAGE_GLOBAL] = api;

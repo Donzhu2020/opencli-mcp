@@ -15,7 +15,7 @@ import { discoverEndpoints, type DiscoverResult } from '../recon/discover.js';
 import { compileFromTrace, listDefinedTools, type ToolDefinition } from '../sites/define.js';
 import { buildInstructions, readDoc, type DocContext } from '../docs/manifest.js';
 import { targetToSelector, fallbackSelector } from '../shared/engine.js';
-import type { FindEntry, FindResult, ElementAtResult } from '../shared/page-contract.js';
+import type { FindEntry, FindResult, ElementAtResult, Expectation, CheckResult } from '../shared/page-contract.js';
 import type { DialogInfo, FrameStep } from '../protocol.js';
 
 export type Target = ({ frame?: FrameStep | FrameStep[] }) & (
@@ -181,6 +181,14 @@ export class Tab {
       }
       await page.wait({ text: opts.text, selector: opts.selector, time: opts.time, timeout: opts.timeout });
       return { ok: true as const };
+    });
+  }
+
+  /** Assert what the page must show now (polled up to timeoutMs). Recorded in the trace so tools_compile emits it as a checkpoint. */
+  async expect(what: Expectation, opts: { timeoutMs?: number } = {}): Promise<CheckResult> {
+    return this.use(async (page) => {
+      try { const r = await page.expect(what, opts); this.ctx.state.trace.record({ kind: 'expect', what: what as Record<string, unknown>, ok: true, page: this.id }); return r; }
+      catch (err) { this.ctx.state.trace.record({ kind: 'expect', what: what as Record<string, unknown>, ok: false, page: this.id }); const e = err as { code?: string; message?: string; hint?: string; extra?: Record<string, unknown> }; throw new ActionError(e.code ?? 'expectation_failed', e.message ?? String(err), e.hint, e.extra); }
     });
   }
 

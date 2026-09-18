@@ -35,7 +35,7 @@ Chrome ──connectNative──► opencli-mcp host   （Native Messaging ⇄ �
 | **launcher** | `src/launcher/stdio.ts` | `opencli-mcp` 命令本身：stdio MCP，把请求代理到 host；host 不在时内嵌一个 runtime（只能跑 `public` 站点命令，不能浏览） |
 | **runtime** | `src/runtime/`、`src/api/`、`src/mcp/`、`src/sites/`、`src/recon/` | 会话状态、对象模型（agent/browser/tab）、MCP server（工具/资源/prompt）、js 会话、站点注册表与执行器、定义/编译工具、API 发现 |
 
-状态目录固定为 `~/.opencli-mcp/`：`token`（HTTP bearer）、`extension-key.json`（稳定扩展 ID 的密钥）、`run/host.json`（运行中的 host）、`config.json`、`tools/<site>/<name>.js`（agent 定义的工具）、`bin/opencli-mcp-host`（Chrome 拉起的启动脚本）。没有环境变量覆盖，一件事一条路。
+状态目录固定为 `~/.opencli-mcp/`：`token`（HTTP bearer）、`run/host.json`（运行中的 host）、`config.json`、`tools/<site>/<name>.js`（agent 定义的工具）、`bin/opencli-mcp-host`（Chrome 拉起的启动脚本）。没有环境变量覆盖，一件事一条路。
 
 ### 3.1 一个引擎
 
@@ -81,7 +81,7 @@ npm install -g ./opencli-mcp-0.0.1.tgz
 opencli-mcp setup
 ```
 
-Release 里没有单独的扩展 zip：`install` 会把你机器上生成的 key 写进**安装包里**的 `extension/dist/manifest.json`，扩展 ID 由此稳定；单独解压的 zip 拿不到这个 key 会导致 ID 不匹配。
+Release 也附扩展 zip（`opencli-mcp-extension-<版本>.zip`）：解压到任意目录「加载已解压」即可。扩展 ID 由 manifest 里项目固定的公钥决定（`bpjiolaihhdecffckoljgckkcbglbpih`），在任何机器上都一样，Native Messaging 清单只认这个 ID。
 
 ### 4.3 命令一览
 

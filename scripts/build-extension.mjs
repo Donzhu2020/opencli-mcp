@@ -27,8 +27,6 @@ await build({
 const manifest = JSON.parse(readFileSync(resolve(ext, 'manifest.json'), 'utf8'));
 const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
 manifest.version = pkg.version;
-// `opencli-mcp install` writes the stable extension key into this manifest; a rebuild keeps it (a fresh checkout has none)
-try { const { key } = JSON.parse(readFileSync(resolve(out, 'manifest.json'), 'utf8')); if (key) manifest.key = key; } catch { /* not installed yet */ }
 writeFileSync(resolve(out, 'manifest.json'), JSON.stringify(manifest, null, 2));
 cpSync(resolve(ext, 'icons'), resolve(out, 'icons'), { recursive: true });
 cpSync(resolve(ext, 'cursor.svg'), resolve(out, 'cursor.svg'));

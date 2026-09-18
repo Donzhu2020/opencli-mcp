@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.0.3 — 2026-09-18
+
+- The extension ID is fixed by the project: the public key lives in `extension/manifest.json`, so the ID is
+  `bpjiolaihhdecffckoljgckkcbglbpih` on every machine (and will stay so on the Chrome Web Store). The per-machine key
+  file, manifest patching and build-time key preservation are gone. Releases ship an extension zip that can be loaded
+  from anywhere.
+- `setup` prints the standard MCP configuration for any client instead of registering with one.
+- Default port 19991; local and remote clients use the same loopback HTTP endpoint with a bearer token.
+
 ## 0.0.2 — 2026-09-18
 
 - `opencli-mcp setup`: the first run in one command — writes the host manifests and the stable extension key, prints

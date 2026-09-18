@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { NATIVE_HOST_NAME } from '../protocol.js';
-import { extensionDir, nativeHostDirs, runningProfileDirs, KEY_FILE } from './install.js';
+import { extensionDir, nativeHostDirs, runningProfileDirs, extensionId } from './install.js';
 import { hostHealth, readHostState, HOST_STATE_FILE } from './state.js';
 
 export interface DoctorResult {
@@ -19,7 +19,7 @@ export interface DoctorResult {
 export async function doctor(): Promise<DoctorResult> {
   const extDir = extensionDir();
   let id: string | null = null;
-  try { id = (JSON.parse(fs.readFileSync(KEY_FILE, 'utf8')) as { id: string }).id; } catch { /* not installed */ }
+  try { id = extensionId(); } catch { /* not built */ }
   const built = fs.existsSync(path.join(extDir, 'background.js')) && fs.existsSync(path.join(extDir, 'manifest.json'));
   const running = runningProfileDirs();
   const manifests = [...nativeHostDirs(), ...running.map((d) => ({ browser: `profile:${d}`, dir: path.join(d, 'NativeMessagingHosts') }))].map(({ browser, dir }) => {
@@ -38,7 +38,6 @@ export async function doctor(): Promise<DoctorResult> {
   if (!built) advice.push('Build the extension: npm run build (or npm run build:ext).');
   if (!manifests.some((m) => m.present)) advice.push('Run `opencli-mcp install` to write the Native Messaging host manifest.');
   for (const d of running) if (!manifests.find((m) => m.browser === `profile:${d}`)?.present) advice.push(`Chrome is running with --user-data-dir=${d} but that profile has no host manifest: run \`opencli-mcp install\` (it writes to running profiles automatically) and reload the extension there.`);
-  if (!id) advice.push('No extension key yet: `opencli-mcp install` generates a stable extension ID.');
   if (!health.ok) advice.push(`Host not reachable (${health.error ?? 'unknown'}): open chrome://extensions, enable Developer mode, Load unpacked → ${extDir}. The extension spawns the host automatically; reload the extension after (re)installing.`);
   else if (!health.extensionConnected) advice.push('Host is up but the extension has not said hello: reload the extension in chrome://extensions.');
   if (chromeRunning === false) advice.push('No Chromium-based browser process found; start Chrome.');

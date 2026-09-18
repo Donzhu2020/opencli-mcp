@@ -1,17 +1,16 @@
 /**
- * Installer: stable extension key/ID, Native Messaging host manifests for Chromium browsers,
- * and the launcher script Chrome executes.
+ * Installer: Native Messaging host manifests for Chromium browsers and the launcher script Chrome executes.
+ * The extension ID is fixed by the project: the public key in extension/manifest.json determines it, on every machine
+ * and later on the Chrome Web Store alike — so a zip of extension/dist loaded anywhere connects.
  */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createHash, generateKeyPairSync } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { NATIVE_HOST_NAME } from '../protocol.js';
 import { OPENCLI_MCP_DIR } from './state.js';
-
-export const KEY_FILE = path.join(OPENCLI_MCP_DIR, 'extension-key.json');
 
 export function projectRoot(): string {
   // walk up from this file to the nearest package.json that is ours (works from src/ under tsx and from dist/src/)
@@ -29,30 +28,15 @@ export function extensionDir(): string {
   return fs.existsSync(path.join(dist, 'manifest.json')) ? dist : path.join(root, 'extension');
 }
 
-/** Chrome derives an unpacked extension's ID from `key`; we generate one once so the ID is stable. */
-export function ensureExtensionKey(): { key: string; id: string } {
-  try {
-    const j = JSON.parse(fs.readFileSync(KEY_FILE, 'utf8')) as { key: string; id: string };
-    if (j.key && j.id) return j;
-  } catch { /* create */ }
-  const { publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048, publicKeyEncoding: { type: 'spki', format: 'der' }, privateKeyEncoding: { type: 'pkcs8', format: 'der' } });
-  const key = (publicKey as Buffer).toString('base64');
-  const id = extensionIdFromKey(key);
-  fs.mkdirSync(OPENCLI_MCP_DIR, { recursive: true });
-  fs.writeFileSync(KEY_FILE, JSON.stringify({ key, id }, null, 2), { mode: 0o600 });
-  return { key, id };
+/** The extension ID Chrome derives from the `key` in the manifest (the same everywhere). */
+export function extensionId(): string {
+  const m = JSON.parse(fs.readFileSync(path.join(extensionDir(), 'manifest.json'), 'utf8')) as { key?: string };
+  if (!m.key) throw new Error('extension manifest has no key — the build is incomplete');
+  return extensionIdFromKey(m.key);
 }
 export function extensionIdFromKey(keyBase64: string): string {
   const hex = createHash('sha256').update(Buffer.from(keyBase64, 'base64')).digest('hex').slice(0, 32);
   return [...hex].map((c) => String.fromCharCode('a'.charCodeAt(0) + parseInt(c, 16))).join('');
-}
-
-export function patchExtensionManifest(key: string): string {
-  const dir = extensionDir();
-  const file = path.join(dir, 'manifest.json');
-  const m = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
-  if (m.key !== key) { m.key = key; fs.writeFileSync(file, JSON.stringify(m, null, 2)); }
-  return dir;
 }
 
 export function nativeHostDirs(): Array<{ browser: string; dir: string }> {
@@ -120,11 +104,10 @@ export function writeLauncher(): string {
 }
 
 export function install(opts: { browsers?: string[]; extensionId?: string; userDataDirs?: string[] } = {}): { extensionId: string; extensionDir: string; launcher: string; manifests: Array<{ browser: string; file: string; written: boolean }> } {
-  const { key, id } = ensureExtensionKey();
-  const extDir = patchExtensionManifest(key);
-  const extensionId = opts.extensionId ?? id;
+  const extDir = extensionDir();
+  const id = opts.extensionId ?? extensionId();
   const launcher = writeLauncher();
-  const manifest = { name: NATIVE_HOST_NAME, description: 'opencli-mcp browser runtime host', path: launcher, type: 'stdio', allowed_origins: [`chrome-extension://${extensionId}/`] };
+  const manifest = { name: NATIVE_HOST_NAME, description: 'opencli-mcp browser runtime host', path: launcher, type: 'stdio', allowed_origins: [`chrome-extension://${id}/`] };
   const manifests: Array<{ browser: string; file: string; written: boolean }> = [];
   // Chrome resolves user-level hosts relative to its user data dir: custom --user-data-dir profiles get their own copy
   const profiles = new Set([...(opts.userDataDirs ?? []), ...runningProfileDirs()]);
@@ -142,7 +125,7 @@ export function install(opts: { browsers?: string[]; extensionId?: string; userD
       try { execFileSync('reg', ['add', `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${NATIVE_HOST_NAME}`, '/ve', '/t', 'REG_SZ', '/d', file, '/f'], { stdio: 'ignore' }); } catch { /* best effort */ }
     }
   }
-  return { extensionId, extensionDir: extDir, launcher, manifests };
+  return { extensionId: id, extensionDir: extDir, launcher, manifests };
 }
 
 export function uninstall(): string[] {

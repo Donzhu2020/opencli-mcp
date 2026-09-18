@@ -45,7 +45,7 @@ node dist/src/main.js setup            # one go: host manifest + extension key, 
                                        # opens chrome://extensions with the extension path on your clipboard, waits until connected
 ```
 
-The only manual click: **Load unpacked** on the page that opens (Developer mode on), paste the path. Or step by step: `install` → `extension-path` → load it → `doctor`. Optional: `npm link` to get `opencli-mcp` on PATH.
+The only manual click: **Load unpacked** on the page that opens (Developer mode on), paste the path — or unzip the `opencli-mcp-extension-<version>.zip` from a release anywhere and load that. The extension ID is fixed by the key in the manifest, so any copy connects. Or step by step: `install` → `extension-path` → load it → `doctor`. Optional: `npm link` to get `opencli-mcp` on PATH.
 
 ### Claude Code
 ```bash

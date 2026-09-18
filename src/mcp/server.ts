@@ -233,6 +233,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
           description: `${cmd.description}${cmd.domain ? ` (${cmd.domain})` : ''} [${cmd.access}, ${String(cmd.strategy ?? 'public')}]${cmd.columns ? ` → columns: ${cmd.columns.join(', ')}` : ''}`,
           inputSchema: argsToShape(cmd.args, { timeout: z.number().optional().describe('seconds'), ...(cmd.access === 'write' ? { confirm: z.boolean().optional().describe('set true after the user approved this write action') } : {}) }),
           annotations: { readOnlyHint: cmd.access === 'read', destructiveHint: cmd.access === 'write', openWorldHint: true },
+          ...(cmd.domain ? { icons: [{ src: `https://${cmd.domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '')}/favicon.ico` }] } : {}),
         }, async (args, extra) => run(() => runSiteWithProgress(site, cmd.name, args as Record<string, unknown>, extra as unknown as Extra)));
         siteTools.set(name, reg);
       }

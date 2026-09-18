@@ -5,7 +5,7 @@
 import { McpServer, ResourceTemplate, inputRequired, inputResponse, type RegisteredTool, type InputRequiredResult } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Runtime } from '../runtime/runtime.js';
-import { createAgentApi, Tab, consequentialAct, describeTarget, type AgentApi, type Target, type ActAction } from '../api/agent.js';
+import { createAgentApi, Tab, type AgentApi, type Target, type ActAction } from '../api/agent.js';
 import { ActionError, errorEnvelope } from '../api/errors.js';
 import { JsSession, safeStringify } from './js-session.js';
 import { buildInstructions, listDocs, readDoc, DOCS_MANIFEST, type DocContext } from '../docs/manifest.js';
@@ -165,22 +165,13 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   server.registerTool('tab_act', { title: 'Act on a tab', description: 'Perform one action: click, dblclick, hover, focus, fill (replace), type (append), press (key), select (option label/value), check/uncheck, upload (files), drag (to), scroll (target or direction), back/forward/reload. Waits for actionability, dispatches real input, returns matches_n/match_level and branchable error codes.',
     inputSchema: { tab: z.string().optional(), action: z.enum(['click', 'dblclick', 'hover', 'focus', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'upload', 'drag', 'scroll', 'back', 'forward', 'reload']), target: targetSchema.optional(), value: z.string().optional().describe('text for fill/type, key for press, option for select'), files: z.array(z.string()).optional(), to: targetSchema.optional(), direction: z.enum(['up', 'down', 'left', 'right']).optional(), amount: z.number().optional(), settleMs: z.number().int().min(0).max(10_000).default(600).describe('wait for the DOM to settle after the action'), observe: z.boolean().default(false).describe('also return the page state after the action') },
     annotations: { destructiveHint: true, openWorldHint: true },
-  }, async ({ tab, action, target, to, observe, ...rest }, extra) => {
-    const picked = pickTarget(target);
-    // Consequential clicks/presses ask the user to approve first via MRTR; approval obtained here satisfies the object-model gate.
-    if (rt.policy.confirmWrites && consequentialAct(action, picked)) {
-      const decision = askApproval('approve', `Confirm this action: ${action} ${describeTarget(picked)}? It may submit, purchase, delete or send data.`, ctxExtra(extra));
-      if (typeof decision !== 'boolean') return decision;
-      if (!decision) return fail(new ActionError('user_declined', `The user declined ${action} ${describeTarget(picked)}`, undefined, { retryable: false }));
-    }
-    return run(async () => {
-      const t = await tabOf(tab);
-      const r = await t.act({ action: action as ActAction, target: picked, to: pickTarget(to), confirm: true, ...rest });
-      if (!observe) return ok({ tab: t.id, ...r });
-      const { data, images } = stripImage({ tab: t.id, ...r, after: await t.observe() });
-      return ok(data, images);
-    });
-  });
+  }, async ({ tab, action, target, to, observe, ...rest }) => run(async () => {
+    const t = await tabOf(tab);
+    const r = await t.act({ action: action as ActAction, target: pickTarget(target), to: pickTarget(to), ...rest });
+    if (!observe) return ok({ tab: t.id, ...r });
+    const { data, images } = stripImage({ tab: t.id, ...r, after: await t.observe() });
+    return ok(data, images);
+  }));
   server.registerTool('tab_expect', { title: 'Expect', description: 'Assert what the page must show now: text / notText / url / title / selector / ref (with visible:false to require absence). Polls up to timeout seconds; fails with expectation_failed listing the failed checks and the current state. Recorded so tools_compile turns it into a checkpoint of the frozen flow.', inputSchema: { tab: z.string().optional(), text: z.string().optional(), notText: z.string().optional(), url: z.string().optional(), title: z.string().optional(), selector: z.string().optional(), ref: z.string().optional(), visible: z.boolean().optional(), timeout: z.number().default(5) } }, async ({ tab, timeout, ...what }) => run(async () => { const t = await tabOf(tab); return ok({ tab: t.id, ...(await t.expect(what, { timeoutMs: timeout * 1000 })) }); }));
 
   // ── sites ──

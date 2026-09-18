@@ -20,8 +20,7 @@ export type Target = ({ frame?: FrameStep | FrameStep[]; /** container (css/sele
 
 export type ActAction = 'click' | 'dblclick' | 'hover' | 'focus' | 'fill' | 'type' | 'press' | 'select' | 'check' | 'uncheck' | 'upload' | 'drag' | 'scroll' | 'back' | 'forward' | 'reload';
 
-export interface ActOptions { target?: Target; action: ActAction; value?: string; files?: string[]; to?: Target; direction?: 'up' | 'down' | 'left' | 'right'; amount?: number; timeoutMs?: number; settleMs?: number; confirm?: boolean }
-const CONSEQUENTIAL_RE = /(submit|pay|purchase|buy|checkout|place order|delete|remove|send|post|publish|confirm|transfer|apply)/i;
+export interface ActOptions { target?: Target; action: ActAction; value?: string; files?: string[]; to?: Target; direction?: 'up' | 'down' | 'left' | 'right'; amount?: number; timeoutMs?: number; settleMs?: number }
 
 export interface ObserveOptions { mode?: 'state' | 'screenshot' | 'both'; /** return only the change since the previous observe when the page moved a little (default true) */ diff?: boolean; /** only the subtree on screen right now (what a screenshot shows) */ viewport?: boolean; /** overlay eN labels on the screenshot */ annotate?: boolean; fullPage?: boolean }
 
@@ -37,10 +36,6 @@ export function describeTarget(t: Target | undefined): string {
   return Object.entries(t).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}=${v}`).join(' ');
 }
 
-/** True when an act looks consequential (submit/pay/delete/…) and is a click/dblclick/press — the human-approval trigger. */
-export function consequentialAct(action: ActAction | string, target: Target | undefined): boolean {
-  return Boolean(target) && CONSEQUENTIAL_RE.test(describeTarget(target)) && (action === 'click' || action === 'dblclick' || action === 'press');
-}
 
 /** Request headers that are the browser's or the session's, never part of an endpoint's contract. */
 const DROP_HEADER = /^(cookie|authorization|user-agent|referer|origin|host|accept-encoding|accept-language|connection|content-length|pragma|cache-control|priority|te|upgrade-insecure-requests|sec-.*|:.*)$/i;
@@ -189,7 +184,6 @@ export class Tab {
     const { action } = opts;
     return this.use(async (page) => {
       const record = (ok: boolean, extra: Record<string, unknown> = {}) => this.ctx.state.trace.record({ kind: 'act', action, target: describeTarget(opts.target), targetSpec: opts.target as Record<string, unknown> | undefined, targetSelector: typeof extra.selector === 'string' ? extra.selector : undefined, targetRef: typeof extra.ref === 'string' ? extra.ref : undefined, value: opts.value, matchLevel: extra.match_level as string | undefined, ok, page: this.id });
-      if (this.ctx.rt.policy.confirmWrites && consequentialAct(action, opts.target)) Policy.throwIfDenied(this.ctx.rt.policy.checkWrite(`${action} ${describeTarget(opts.target)}`, Boolean(opts.confirm)));
       try {
         // use the page already held by this.use(): calling this.reload()/back()/forward() here would re-enter the session lock and deadlock
         if (action === 'back' || action === 'forward' || action === 'reload') { const h = await page.history(action); record(true, { url: h.url }); return { ok: true, action, ...h }; }

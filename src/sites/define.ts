@@ -242,7 +242,7 @@ export function compileFromTrace(trace: TraceEvent[], net: NetworkEvidence[], op
     if (e.method && e.method !== 'GET') init.push(`method: ${JSON.stringify(e.method)}`);
     // Contract headers travel with the tool. A header whose value looks like a token or signature (long, high-entropy)
     // is computed per request/session by the page and must not be frozen — instead we replay it: csrf/xsrf-family tokens
-    // are re-read from the cookie at run time, and other computed values get a signer-hook scaffold the author completes.
+    // are re-read from the cookie at run time; other computed values (signatures) are named in a warning, not faked in code.
     const headers: Record<string, string> = {};   // frozen contract headers
     const dynHeaders: string[] = [];               // "H": <var> resolved at replay
     const preLines: string[] = [];                 // run-time token resolutions, emitted before fetchJson
@@ -261,13 +261,8 @@ export function compileFromTrace(trace: TraceEvent[], net: NetworkEvidence[], op
     }
     const headerEntries = [...Object.entries(headers).map(([k, val]) => `${JSON.stringify(k)}: ${JSON.stringify(val)}`), ...dynHeaders];
     if (headerEntries.length) init.push(`headers: { ${headerEntries.join(', ')} }`);
-    if (computed.length) {
-      preLines.push(`  // SIGNER HOOK: header(s) ${computed.join(', ')} are computed by the page per request (a signature/nonce/transaction id).`);
-      preLines.push(`  // Recompute them at replay by calling the site's own signer on the page, then add them to the headers below:`);
-      preLines.push(`  //   const sig = await tab.evaluate('(${computed.map((c) => `${JSON.stringify(c)}: /* call the page signer */ ""`).join(', ')})'); // then spread ...sig into headers`);
-    }
     if (cookieBacked.length) warnings.push(`header(s) ${cookieBacked.join(', ')} are re-read from the cookie at run time (tab.cookie); verify the cookie name matches this site with tab.fetchJson`);
-    if (computed.length) warnings.push(`header(s) ${computed.join(', ')} are computed by the page per request and are NOT frozen — complete the SIGNER HOOK in the tool (call the page's signer via tab.evaluate, or read the value from page state) and add them to headers before tab.fetchJson`);
+    if (computed.length) warnings.push(`header(s) ${computed.join(', ')} are computed by the page per request (a signature/nonce/transaction id) and are NOT frozen — this endpoint will fail until you compute them at replay: call the page's own signer with tab.evaluate, or read the value from page state, and add them to the headers before tab.fetchJson. If you cannot recompute the signature, freeze this flow as DOM steps instead.`);
     if (e.postData) init.push(`body: ${bodyLit(e.postData, e.requestHeaders?.['content-type'], lit)}`);
     for (const l of preLines) body.push(l);
     body.push(`  const data = await tab.fetchJson(${urlLit(e.url, inputs, lit)}${init.length ? `, { ${init.join(', ')} }` : ''});`);

@@ -97,10 +97,9 @@ describe('tools_compile: frozen flows run on the agent engine with checkpoints',
     ];
     const def = compileFromTrace(trace, net, { site: 'xhs', name: 'feed', description: 'Feed', inputs: {} });
     const f = def.func!;
-    expect(f).toContain('SIGNER HOOK'); // the scaffold is emitted so the author recomputes the signature at replay
-    expect(f).toContain('x-s'); // the header is named in the hook
-    expect(f).not.toMatch(/"x-s":\s*"XYZ/); // …but its captured value is NOT frozen into headers
-    expect(def.warnings?.some((w) => /x-s/.test(w) && /computed/.test(w) && /SIGNER HOOK/.test(w))).toBe(true);
+    expect(f).not.toMatch(/"x-s":\s*"XYZ/); // the computed signature is NOT frozen into headers
+    expect(f).not.toContain('SIGNER HOOK'); // and no non-working scaffold code is emitted
+    expect(def.warnings?.some((w) => /x-s/.test(w) && /computed/.test(w))).toBe(true); // the header is named in a warning
     expect(() => new Function(`return (${f});`)).not.toThrow();
   });
 });

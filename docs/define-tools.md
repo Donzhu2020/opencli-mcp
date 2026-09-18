@@ -9,7 +9,7 @@ Three ways to freeze:
 
 **Signed / computed request params (the replay hook).** Some endpoints require per-request values the page computes: csrf/xsrf tokens, signatures (wbi, x-s), nonces, transaction ids. These are never frozen — a frozen value would be stale. Instead the tool recomputes them at replay:
 - **csrf/xsrf-family tokens** are re-read from the cookie automatically: `tools_compile` emits `const __tok0 = await tab.cookie("ct0") || await tab.cookie("csrftoken") || …;` and puts it back in the request headers. Use `tab.cookie(name)` yourself the same way in a hand-written `func`.
-- **Computed signatures** get a `// SIGNER HOOK` scaffold and a warning naming the header. Complete it: call the site's own signer on the page with `tab.evaluate('(/* return the signed value */)')`, or read the value from page state, then add it to the `headers` before `tab.fetchJson`. Without this, a signed endpoint falls back to DOM.
+- **Computed signatures** (wbi, x-s, transaction ids) are named in a `warning` and left out of the frozen headers — the endpoint will fail until you recompute them at replay. Add them yourself: call the site's own signer on the page with `tab.evaluate('(/* return the signed value */)')`, or read the value from page state, then put it in the `headers` before `tab.fetchJson`. If you cannot recompute the signature, freeze the flow as DOM steps instead.
 
 `inputs` are explicit: `{query: "what you typed"}` or `{query: {sample, description, type, mode: "exact"|"within"}}`. By default only whole literals equal to the sample become `args.query`; declare `mode: "within"` to also parameterize longer literals that contain it. Nothing is guessed.
 

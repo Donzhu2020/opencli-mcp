@@ -222,7 +222,7 @@ The first `js` call returns the generated API reference. Model-facing discipline
 - `port` — the loopback HTTP port the host serves MCP on (default `19991`).
 - `cursor` — whether the cursor overlay is shown.
 - `sites` / `sitesWrite` — sites enabled at startup (read-only / including write commands).
-- `policy` (off by default) — `askNewOrigins` makes the first navigation to a new host return `needs_origin_approval` until `session.allowOrigin(host)` is called in `js`; `confirmWrites` gates write commands and consequential clicks: the typed tools ask the user through the client (a multi-round-trip approval prompt, no confirm flag), while inside `js` the call throws `needs_confirmation` and you re-run it with `{ confirm: true }` after approval; `allowedHosts` pre-approves hosts (in memory, for the run).
+- `policy` (off by default) — `askNewOrigins` makes the first navigation to a new host return `needs_origin_approval` until `session.allowOrigin(host)` is called in `js`; `confirmWrites` gates write site commands: `site_run` and the `<site>_<command>` tools ask the user through the client (a multi-round-trip approval prompt, no confirm flag); `allowedHosts` pre-approves hosts (in memory, for the run).
 
 The state directory `~/.opencli-mcp/` also holds `token` (the HTTP bearer), `run/host.json` (the running host), `tools/<site>/<name>.js` (agent-defined tools), and the launcher script Chrome spawns. There are no environment-variable overrides — one way to do each thing.
 

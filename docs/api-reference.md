@@ -91,7 +91,7 @@ type Target = ({ frame?: FrameStep | FrameStep[]; within?: string }) & (
 
 type ActAction = 'click' | 'dblclick' | 'hover' | 'focus' | 'fill' | 'type' | 'press' | 'select' | 'check' | 'uncheck' | 'upload' | 'drag' | 'scroll' | 'back' | 'forward' | 'reload';
 
-interface ActOptions { target?: Target; action: ActAction; value?: string; files?: string[]; to?: Target; direction?: 'up' | 'down' | 'left' | 'right'; amount?: number; timeoutMs?: number; settleMs?: number; confirm?: boolean }
+interface ActOptions { target?: Target; action: ActAction; value?: string; files?: string[]; to?: Target; direction?: 'up' | 'down' | 'left' | 'right'; amount?: number; timeoutMs?: number; settleMs?: number }
 
 interface ObserveOptions { mode?: 'state' | 'screenshot' | 'both'; diff?: boolean; viewport?: boolean; annotate?: boolean; fullPage?: boolean }
 ```

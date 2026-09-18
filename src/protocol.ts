@@ -66,10 +66,7 @@ export interface Command {
   cdpMethod?: string;
   cdpParams?: Record<string, unknown>;
   windowMode?: 'foreground' | 'background';
-  idleTimeout?: number;
   frameIndex?: number;
-  contextId?: string;
-  preferredContextId?: string;
   timeout?: number;
   deadlineAt?: number;
   /** session-name */

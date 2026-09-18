@@ -1,6 +1,6 @@
 /**
  * `opencli-mcp setup` — the whole first-run in one command, for a human at a terminal:
- *   1. install: Native Messaging host manifest(s) + the stable extension key
+ *   1. install: the Native Messaging host manifest(s) (trusting the fixed extension ID)
  *   2. register with every MCP client that has a CLI for it (Claude Code, Codex) and print the standard configuration
  *      for the rest (Cursor, Claude Desktop, …) — the runtime itself knows no client, MCP is the contract
  *   3. open chrome://extensions and put the unpacked-extension path on the clipboard

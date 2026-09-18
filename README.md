@@ -104,7 +104,7 @@ node dist/src/main.js setup     # or `opencli-mcp setup` after `npm link`
 
 `setup` does the whole first run in one command:
 
-1. Writes the Native Messaging host manifest(s) with the stable extension key.
+1. Writes the Native Messaging host manifest(s), whose `allowed_origins` trusts the fixed extension ID.
 2. Registers with Claude Code and Codex when their CLIs are present, and prints the standard config for every other client.
 3. Opens `chrome://extensions` with the unpacked-extension path on your clipboard.
 4. Waits for the extension to connect and reports green.

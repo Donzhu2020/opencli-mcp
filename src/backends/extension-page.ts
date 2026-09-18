@@ -18,8 +18,6 @@ export interface ExtensionPageOptions {
   surface: 'browser' | 'adapter';
   siteSession?: 'ephemeral' | 'persistent';
   windowMode?: 'foreground' | 'background';
-  idleTimeout?: number;
-  contextId?: string;
   /** bind this page object to one tab identity for its whole life (per-Tab pages); omitted = session-scope page with no tab */
   page?: string;
 }
@@ -94,7 +92,7 @@ function definePageClass(lib: Lib): any {
 
     private sessionOpts(): Partial<Command> {
       const o = this.opts;
-      return { session: o.session, surface: o.surface, ...(o.contextId && { contextId: o.contextId }), ...(o.idleTimeout != null && { idleTimeout: o.idleTimeout }), ...(o.windowMode && { windowMode: o.windowMode }), ...(o.siteSession && { siteSession: o.siteSession }) };
+      return { session: o.session, surface: o.surface, ...(o.windowMode && { windowMode: o.windowMode }), ...(o.siteSession && { siteSession: o.siteSession }) };
     }
     private cmdOpts(): Partial<Command> { return { ...this.sessionOpts(), ...(this._page !== undefined && { page: this._page }) }; }
 

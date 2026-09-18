@@ -34,7 +34,7 @@ export function extensionId(): string {
   if (!m.key) throw new Error('extension manifest has no key — the build is incomplete');
   return extensionIdFromKey(m.key);
 }
-export function extensionIdFromKey(keyBase64: string): string {
+function extensionIdFromKey(keyBase64: string): string {
   const hex = createHash('sha256').update(Buffer.from(keyBase64, 'base64')).digest('hex').slice(0, 32);
   return [...hex].map((c) => String.fromCharCode('a'.charCodeAt(0) + parseInt(c, 16))).join('');
 }

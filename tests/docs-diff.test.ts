@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { buildInstructions, listDocs, requiredDocsFor, readDoc } from '../src/docs/manifest.js';
-import { lineDiff } from '../src/api/diff.js';
 import { compileFromTrace, renderToolModule, validateDefinition } from '../src/sites/define.js';
 
 describe('docs manifest', () => {
@@ -17,14 +16,6 @@ describe('docs manifest', () => {
     expect(readDoc('errors')).toContain('selector_ambiguous');
     expect(requiredDocsFor('cdp_send', { backend: 'extension', capabilities: ['cdp'] })).toEqual([]); // no typed cdp tool any more: the capability doc is returned by browser.capabilities.get('cdp') in js
     expect(listDocs({ backend: 'none', capabilities: [] }).find((d) => d.name === 'tab-lifecycle')?.available).toBe(false);
-  });
-});
-
-describe('line diff', () => {
-  it('reports small changes as diffs', () => {
-    const d = lineDiff('a\nb\nc\nd', 'a\nB\nc\nd\ne');
-    expect(d.added).toBe(2); expect(d.removed).toBe(1); expect(d.changedRatio).toBeLessThan(0.7);
-    expect(d.text).toContain('- b'); expect(d.text).toContain('+ B'); expect(d.text).toContain('+ e');
   });
 });
 

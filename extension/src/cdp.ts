@@ -658,7 +658,23 @@ function trackOopifs(source: chrome.debugger.Debuggee, method: string, params: a
 
 /** Auto-attach is armed at tab attach (see attachNow) so OOPIF sessions exist before anyone asks for them. */
 export async function armOopifAutoAttach(tabId: number): Promise<void> {
-  await sendDebuggerCommand({ tabId }, 'Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }, 3_000).catch(() => {});
+  await sendDebuggerCommand({ tabId }, 'Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }, 3_000).catch((e) => console.warn(`[opencli-mcp] Target.setAutoAttach failed for tab ${tabId}: ${e instanceof Error ? e.message : String(e)}`));
+}
+
+/** Sessions we opened ourselves by attaching to the iframe target (the plugin's approach); keyed `${tabId}:${frameId}`. */
+const directTargets = new Map<string, string>();
+
+/** Debuggee for a frame's own session: a tracked auto-attached child session, else a direct attachment to the iframe target. */
+async function frameDebuggee(tabId: number, frameId: string, aggressiveRetry = false): Promise<chrome.debugger.Debuggee> {
+  const tracked = oopifByTab.get(tabId)?.get(frameId);
+  if (tracked) return { tabId, sessionId: tracked.sessionId } as chrome.debugger.Debuggee;
+  const key = `${tabId}:${frameId}`;
+  if (directTargets.has(key)) return { targetId: frameId } as chrome.debugger.Debuggee;
+  await ensureAttached(tabId, aggressiveRetry);
+  try { await chrome.debugger.attach({ targetId: frameId } as chrome.debugger.Debuggee, '1.3'); }
+  catch (e) { const msg = e instanceof Error ? e.message : String(e); if (!/already attached/i.test(msg)) throw Object.assign(new Error(`frame ${frameId} has no attachable target: ${msg}`), { code: 'frame_unreachable' }); }
+  directTargets.set(key, frameId);
+  return { targetId: frameId } as chrome.debugger.Debuggee;
 }
 
 async function ensureFrameSession(tabId: number, frameId: string, aggressiveRetry = false, waitMs = 1_500): Promise<OopifSession> {
@@ -683,7 +699,7 @@ async function ensureFrameSession(tabId: number, frameId: string, aggressiveRetr
 
 /** True when the frame renders in its own process (has an auto-attached iframe session); false for in-process frames. */
 export async function hasFrameTarget(tabId: number, frameId: string, aggressiveRetry = false): Promise<boolean> {
-  try { await ensureFrameSession(tabId, frameId, aggressiveRetry, 300); return true; } catch { return false; }
+  try { await frameDebuggee(tabId, frameId, aggressiveRetry); return true; } catch { return false; }
 }
 
 export async function sendCommandInFrameTarget(
@@ -694,8 +710,8 @@ export async function sendCommandInFrameTarget(
   aggressiveRetry: boolean = false,
   timeoutMs: number = CDP_COMMAND_TIMEOUT_MS,
 ): Promise<unknown> {
-  const s = await ensureFrameSession(tabId, frameId, aggressiveRetry);
-  return sendDebuggerCommand({ tabId, sessionId: s.sessionId } as chrome.debugger.Debuggee, method, params, timeoutMs);
+  const target = await frameDebuggee(tabId, frameId, aggressiveRetry);
+  return sendDebuggerCommand(target, method, params, timeoutMs);
 }
 
 export async function insertText(
@@ -726,25 +742,47 @@ export async function listFrames(tabId: number): Promise<FrameEntry[]> {
   const seen = new Set<string>();
   const { frameTree: root } = await sendDebuggerCommand({ tabId }, 'Page.getFrameTree') as { frameTree: FrameNode };
   const top = origin(root.frame.url);
-  const push = (f: FrameNode['frame'], oopif: boolean) => {
+  const inTree = new Map<string, FrameNode['frame']>();
+  const index = (node: FrameNode) => { for (const c of node.childFrames ?? []) { inTree.set(c.frame.id, c.frame); index(c); } };
+  index(root);
+  seen.add(root.frame.id);
+  const push = (f: { id: string; url: string; name?: string }, oopif: boolean) => {
     if (seen.has(f.id)) return; seen.add(f.id);
     const o = origin(f.url);
     out.push({ index: out.length, frameId: f.id, url: f.url, name: f.name ?? '', crossOrigin: oopif || o === null || o === 'null' || o !== top, oopif });
   };
-  const walk = (node: FrameNode, oopif: boolean) => { for (const child of node.childFrames ?? []) { push(child.frame, oopif); walk(child, oopif); } };
-  seen.add(root.frame.id);
-  walk(root, false);
-  // out-of-process iframes: the sessions auto-attach reported for this tab, each with its own frame tree
-  await armOopifAutoAttach(tabId);
-  for (const t of oopifSessions(tabId)) {
-    if (seen.has(t.targetId)) continue;
-    push({ id: t.targetId, url: t.url }, true);
-    try {
-      const { frameTree } = await sendDebuggerCommand({ tabId, sessionId: t.sessionId } as chrome.debugger.Debuggee, 'Page.getFrameTree', undefined, 3_000) as { frameTree: FrameNode };
-      if (frameTree.frame.id !== t.targetId) seen.add(frameTree.frame.id);
-      walk(frameTree, true);
-    } catch { /* target went away: listed without its subtree */ }
-  }
+  // Frames come from the DOM in document order: every <iframe>/<frame> node carries its frameId, in-process or not
+  // (a tab-scoped Target.getTargets does not list out-of-process iframes; the root frame tree does not contain them).
+  type DomNode = { nodeName?: string; frameId?: string; children?: DomNode[]; contentDocument?: DomNode; shadowRoots?: DomNode[] };
+  const iframeIds = (doc: DomNode): string[] => {
+    const ids: string[] = [];
+    const walk = (n: DomNode) => { if ((n.nodeName === 'IFRAME' || n.nodeName === 'FRAME') && n.frameId) ids.push(n.frameId); for (const c of n.children ?? []) walk(c); for (const c of n.shadowRoots ?? []) walk(c); if (n.contentDocument) walk(n.contentDocument); };
+    walk(doc);
+    return ids;
+  };
+  const visit = async (target: chrome.debugger.Debuggee, oopif: boolean, depth: number): Promise<void> => {
+    if (depth > 4) return;
+    let ids: string[] = [];
+    try { const { root: doc } = await sendDebuggerCommand(target, 'DOM.getDocument', { depth: -1, pierce: true }, 5_000) as { root: DomNode }; ids = iframeIds(doc); } catch { return; }
+    for (const id of ids) {
+      if (seen.has(id)) continue;
+      const known = inTree.get(id);
+      if (known) { push(known, oopif); continue; } // in-process (relative to this session): described by the frame tree
+      // not in this session's tree → its own process: attach to the iframe target (targetId == frameId) and read its tree
+      try {
+        const child = await frameDebuggee(tabId, id);
+        const { frameTree } = await sendDebuggerCommand(child, 'Page.getFrameTree', undefined, 3_000) as { frameTree: FrameNode };
+        push({ id, url: frameTree.frame.url, name: frameTree.frame.name }, true);
+        const sub = (n: FrameNode) => { for (const c of n.childFrames ?? []) { inTree.set(c.frame.id, c.frame); sub(c); } };
+        sub(frameTree);
+        await visit(child, true, depth + 1);
+      } catch (e) {
+        push({ id, url: '' }, true);
+        console.warn(`[opencli-mcp] frame ${id}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+  };
+  await visit({ tabId }, false, 0);
   return out;
 }
 
@@ -850,6 +888,7 @@ export function registerListeners(): void {
   });
   chrome.tabs.onRemoved.addListener((tabId) => {
     consoleLogs.delete(tabId);
+    for (const k of [...directTargets.keys()]) if (k.startsWith(`${tabId}:`)) directTargets.delete(k);
     dialogs.delete(tabId); dialogWaiters.delete(tabId); dialogClosedWaiters.delete(tabId);
     attached.delete(tabId);
     networkCaptures.delete(tabId);
@@ -868,8 +907,10 @@ export function registerListeners(): void {
       attached.delete(source.tabId);
       networkCaptures.delete(source.tabId);
       oopifByTab.delete(source.tabId);
+      for (const k of [...directTargets.keys()]) if (k.startsWith(`${source.tabId}:`)) directTargets.delete(k);
       return;
     }
+    if ((source as { targetId?: string }).targetId) { const tid = (source as { targetId?: string }).targetId!; for (const [k, v] of directTargets) if (v === tid) directTargets.delete(k); return; }
   });
   // Invalidate attached cache when tab URL changes to non-debuggable
   chrome.tabs.onUpdated.addListener(async (tabId, info) => {

@@ -82,6 +82,26 @@ export function nativeHostDirs(): Array<{ browser: string; dir: string }> {
   return [{ browser: 'chrome', dir: path.join(process.env.LOCALAPPDATA ?? path.join(home, 'AppData', 'Local'), 'opencli-mcp') }];
 }
 
+/**
+ * Profiles of Chromium browsers running right now with a custom --user-data-dir (Chrome for Testing, dev profiles,
+ * test harnesses). Chrome resolves user-level Native Messaging hosts under that directory, so the manifest must be
+ * written there too — the single most common reason a first install "did nothing".
+ */
+export function runningProfileDirs(): string[] {
+  if (process.platform === 'win32') return [];
+  try {
+    const out = execFileSync('ps', ['ax', '-o', 'command'], { encoding: 'utf8', stdio: 'pipe', maxBuffer: 16 * 1024 * 1024 });
+    const dirs = new Set<string>();
+    for (const line of out.split('\n')) {
+      if (!/chrome|chromium|edge|brave/i.test(line)) continue;
+      const m = /--user-data-dir=("([^"]+)"|(\S+))/.exec(line);
+      const d = m?.[2] ?? m?.[3];
+      if (d && fs.existsSync(d)) dirs.add(d);
+    }
+    return [...dirs];
+  } catch { return []; }
+}
+
 export function writeLauncher(): string {
   const bin = path.join(OPENCLI_MCP_DIR, 'bin');
   fs.mkdirSync(bin, { recursive: true });
@@ -109,7 +129,8 @@ export function install(opts: { browsers?: string[]; extensionId?: string; userD
   const manifest = { name: NATIVE_HOST_NAME, description: 'opencli-mcp browser runtime host', path: launcher, type: 'stdio', allowed_origins: [`chrome-extension://${extensionId}/`] };
   const manifests: Array<{ browser: string; file: string; written: boolean }> = [];
   // Chrome resolves user-level hosts relative to its user data dir: custom --user-data-dir profiles get their own copy
-  const targets = [...nativeHostDirs(), ...(opts.userDataDirs ?? []).map((d) => ({ browser: `profile:${d}`, dir: path.join(d, 'NativeMessagingHosts') }))];
+  const profiles = new Set([...(opts.userDataDirs ?? []), ...runningProfileDirs()]);
+  const targets = [...nativeHostDirs(), ...[...profiles].map((d) => ({ browser: `profile:${d}`, dir: path.join(d, 'NativeMessagingHosts') }))];
   for (const { browser, dir } of targets) {
     if (opts.browsers && !opts.browsers.includes(browser)) continue;
     const parent = path.dirname(dir);
@@ -128,7 +149,7 @@ export function install(opts: { browsers?: string[]; extensionId?: string; userD
 
 export function uninstall(): string[] {
   const removed: string[] = [];
-  for (const { dir } of nativeHostDirs()) {
+  for (const { dir } of [...nativeHostDirs(), ...runningProfileDirs().map((d) => ({ dir: path.join(d, 'NativeMessagingHosts') }))]) {
     const file = path.join(dir, `${NATIVE_HOST_NAME}.json`);
     if (fs.existsSync(file)) { fs.rmSync(file); removed.push(file); }
   }

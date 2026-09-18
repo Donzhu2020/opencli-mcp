@@ -54,7 +54,8 @@ async function main(): Promise<void> {
       const { install } = await import('./host/install.js');
       const browsers = flag('--browsers')?.split(',');
       const r = install({ browsers, extensionId: flag('--extension-id'), userDataDirs: flag('--user-data-dir')?.split(',') });
-      process.stdout.write(`${JSON.stringify(r, null, 2)}\n\nNext: chrome://extensions → Developer mode → Load unpacked → ${r.extensionDir}\nThe extension ID will be ${r.extensionId}. Then run: opencli-mcp doctor\n`);
+      const written = r.manifests.filter((m) => m.written);
+      process.stdout.write(`${JSON.stringify(r, null, 2)}\n\nWrote ${written.length} host manifest(s): ${written.map((m) => m.browser).join(', ') || 'none'} (running custom profiles are detected automatically; add --user-data-dir for others).\nNext: chrome://extensions → Developer mode → Load unpacked → ${r.extensionDir}\nThe extension ID will be ${r.extensionId}. If the extension was already loaded, reload it. Then run: opencli-mcp doctor\n`);
       return;
     }
     case 'uninstall': {

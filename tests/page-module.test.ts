@@ -145,6 +145,26 @@ describe('observation: aria is the one state source', () => {
     p.unannotate();
     expect(document.getElementById('opencli-mcp-annotate')).toBeNull();
   });
+  it('keeps a ref pinned to its element when a node is inserted above it (Playwright would renumber)', async () => {
+    document.body.innerHTML = '<button id="a">A</button><button id="b">B</button>';
+    const a = document.getElementById('a')!; const b = document.getElementById('b')!;
+    // first snapshot: Playwright hands out e1→a, e2→b (tree order)
+    stubEngine({ ariaText: ['- button "A" [ref=e1]', '- button "B" [ref=e2]'].join('\n'), refs: { e1: a, e2: b } });
+    const p = await page();
+    expect(p.aria().split('\n')).toEqual(['- button "A" [ref=e1]', '- button "B" [ref=e2]']);
+    // a banner is inserted at the top: Playwright now numbers banner=e1, a=e2, b=e3 — but the SAME engine, so our ids hold
+    const banner = document.createElement('div'); document.body.insertBefore(banner, a);
+    (globalThis as Record<string, unknown>)[ENGINE_GLOBAL] = Object.assign((globalThis as Record<string, unknown>)[ENGINE_GLOBAL] as object, {
+      ariaSnapshot: () => ['- generic [ref=e1]', '- button "A" [ref=e2]', '- button "B" [ref=e3]'].join('\n'),
+      _lastAriaSnapshotForQuery: { info: new Map<string, { element: Element }>([['e1', { element: banner }], ['e2', { element: a }], ['e3', { element: b }]]) },
+    });
+    // a and b keep e1/e2; the banner is the new identity e3 (max+1), not e1
+    expect(p.aria().split('\n')).toEqual(['- generic [ref=e3]', '- button "A" [ref=e1]', '- button "B" [ref=e2]']);
+    // a ref held from the first snapshot still resolves to the same element after the insert
+    expect(p.check({ ref: 'e2' }).ok).toBe(true); // e2 still resolves (to button B) after the insert
+    expect(p.find({ selector: 'aria-ref=e2', fallback: null, limit: 1 }).matches_n).toBe(1);
+  });
+
   it('describes the element under a point with its ancestors', async () => {
     document.body.innerHTML = '<div id="wrap"><a id="l" href="/x">Link</a></div>';
     stubEngine({ refs: { e7: document.getElementById('l')! } });
@@ -152,7 +172,7 @@ describe('observation: aria is the one state source', () => {
     const p = await page();
     const r = p.elementAt({ x: 5, y: 5 });
     expect(r.matches_n).toBe(2);
-    expect(r.entries[0]).toMatchObject({ tag: 'a', role: 'link', ref: 'e7', selector: '#l' });
+    expect(r.entries[0]).toMatchObject({ tag: 'a', role: 'link', ref: 'e1', selector: '#l' }); // our stable ref, not Playwright's stub e7
     expect(r.entries[1]).toMatchObject({ tag: 'div', selector: '#wrap' });
   });
 });

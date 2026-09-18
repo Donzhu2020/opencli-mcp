@@ -20,6 +20,8 @@ function injected(): Injected {
 }
 
 function query(selector: string, root: Node = document): Element[] {
+  const rm = /^aria-ref=(e\d+)$/.exec(selector);
+  if (rm) { const el = refToEl.get(rm[1]); return el && el.isConnected ? [el] : []; }
   const i = injected();
   return i.querySelectorAll(i.parseSelector(selector), root) as Element[];
 }
@@ -43,19 +45,29 @@ function nameOf(el: Element): string {
   try { const u = injected().utils; return u?.getElementAccessibleNameText ? String(u.getElementAccessibleNameText(el, false) || '') : ''; } catch { return ''; }
 }
 
-// ── aria refs: the one ref space (eN from the last aria snapshot) ──
-let refIndexFor: WeakMap<object, Map<Element, string>> = new WeakMap();
+// ── aria refs: a stable identity per element, kept across snapshots ──
+// Playwright's eN are tree-order and renumber on every insert (a banner at the top shifts every ref below it), which
+// breaks a held ref and floods the diff. We pin the ref to the element itself — like Codex pins observation identity to
+// the DOM backend-node id — so a ref survives inserts/removals: deleted numbers are never reused, new nodes get max+1.
 function lastSnapshot(): { info?: Map<string, { element: Element }> } | null {
   try { return injected()._lastAriaSnapshotForQuery ?? null; } catch { return null; }
 }
-/** eN of an element in the most recent aria snapshot, or null. */
-export function ariaRefOf(el: Element): string | null {
-  const snap = lastSnapshot();
-  if (!snap?.info) return null;
-  let index = refIndexFor.get(snap);
-  if (!index) { index = new Map(); for (const [ref, v] of snap.info) if (v?.element) index.set(v.element, ref); refIndexFor.set(snap, index); }
-  return index.get(el) ?? null;
+let refEngine: object | null = null;
+let stableId = new WeakMap<Element, number>();
+let nextStableId = 1;
+const refToEl = new Map<string, Element>(); // stable ref → element, for resolving a ref between snapshots
+function resetRefsIfEngineChanged(): void {
+  let e: object | null = null; try { e = injected(); } catch { e = null; }
+  if (e !== refEngine) { refEngine = e; stableId = new WeakMap(); nextStableId = 1; refToEl.clear(); }
 }
+/** The stable ref of an element (assigned on first sight); also registers it for resolution. */
+function stableRefOf(el: Element): string {
+  let id = stableId.get(el);
+  if (id === undefined) { id = nextStableId++; stableId.set(el, id); }
+  const ref = 'e' + id; refToEl.set(ref, el); return ref;
+}
+/** The stable ref of an element, assigning one if needed. */
+export function ariaRefOf(el: Element): string | null { resetRefsIfEngineChanged(); return stableRefOf(el); }
 
 const candidate = (el: Element): Candidate => ({ tag: el.tagName.toLowerCase(), role: el.getAttribute('role') || '', text: text(el).slice(0, 80), ref: ariaRefOf(el), visible: is(el, 'visible'), box: box(el) });
 
@@ -226,8 +238,8 @@ const REF_LINE = /^(\s*)-\s.*\[ref=(e\d+|f\d+e\d+)\](:.*)?$/;
 export function aria(args: AriaArgs = {}): string {
   const i = injected();
   const raw: string = i.ariaSnapshot(document.body, { mode: 'ai' });
+  resetRefsIfEngineChanged();
   const snap = lastSnapshot();
-  refIndexFor = new WeakMap(); // a new snapshot: refs re-issued
   const info = snap?.info;
   if (!info) return raw;
   const out: string[] = [];
@@ -239,10 +251,14 @@ export function aria(args: AriaArgs = {}): string {
     if (!m) { out.push(line); continue; }
     const entry = info.get(m[2]);
     const el = entry?.element;
+    // pin the line to the element's stable ref (identity is independent of the viewport filter below)
+    const ref = el ? stableRefOf(el) : m[2];
+    const rline = ref === m[2] ? line : line.replace('[ref=' + m[2] + ']', '[ref=' + ref + ']');
     if (args.viewport && el && !intersectsViewport(el)) { dropBelow = indent; continue; }
-    if (el && m[3] && isCredentialField(el)) { out.push(line.slice(0, line.length - m[3].length) + ': <redacted>'); continue; }
-    out.push(line);
+    if (el && m[3] && isCredentialField(el)) { out.push(rline.slice(0, rline.length - m[3].length) + ': <redacted>'); continue; }
+    out.push(rline);
   }
+  if (refToEl.size > 4000) for (const [k, v] of refToEl) if (!v.isConnected) refToEl.delete(k);
   // the plugin always ends its state with the focused element; ours names the focused ref so the next action can target it
   const active = document.activeElement;
   const focusRef = active && active !== document.body ? ariaRefOf(active) : null;
@@ -284,11 +300,11 @@ export function annotate(): number {
   layer.id = ANNOTATE_ID;
   layer.setAttribute('style', 'all:initial;position:fixed;inset:0;z-index:2147483645;pointer-events:none;font:11px/1 -apple-system,Segoe UI,Arial,sans-serif;');
   let count = 0;
-  for (const [ref, v] of snap.info) {
+  for (const [, v] of snap.info) {
     const el = v?.element; if (!el || !is(el, 'visible') || !intersectsViewport(el)) continue;
     const r = el.getBoundingClientRect();
     const tag = document.createElement('span');
-    tag.textContent = ref;
+    tag.textContent = stableRefOf(el); // the label matches the stable ref observe shows
     tag.setAttribute('style', `position:absolute;left:${Math.max(0, r.left)}px;top:${Math.max(0, r.top - 12)}px;background:#1d4ed8;color:#fff;padding:1px 3px;border-radius:2px;white-space:nowrap;`);
     const outline = document.createElement('div');
     outline.setAttribute('style', `position:absolute;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;outline:1px solid rgba(29,78,216,.8);`);

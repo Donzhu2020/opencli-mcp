@@ -330,7 +330,7 @@ export interface AgentApi {
   sites: Record<string, unknown> & { search(q: string, limit?: number): unknown; list(): unknown; enable(site: string, opts?: { write?: boolean }): { site: string; tools: string[] }; disable(site: string): boolean; run(site: string, name: string, args?: Record<string, unknown>): Promise<unknown> };
   recon: { discover(tab: Tab, opts?: Parameters<typeof discoverEndpoints>[1]): Promise<DiscoverResult> };
   tools: { define(def: ToolDefinition): Promise<{ file: string; site: string; name: string }>; compile(opts: Parameters<typeof compileFromTrace>[1]): ToolDefinition; list(): ReturnType<typeof listDefinedTools>; remove(site: string, name: string): boolean };
-  session: { id: string; name(n: string): Promise<void>; finalize(keep?: Array<{ tab: string | Tab; status: 'deliverable' | 'handoff' }>): Promise<unknown>; trace(): unknown[]; clearTrace(): void; };
+  session: { id: string; name(n: string): Promise<void>; /** approve a website host after the user agreed (needs_origin_approval); persist remembers it */ allowOrigin(host: string, persist?: boolean): { host: string; persist: boolean }; finalize(keep?: Array<{ tab: string | Tab; status: 'deliverable' | 'handoff' }>): Promise<unknown>; trace(): unknown[]; clearTrace(): void; };
 }
 
 export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
@@ -401,6 +401,7 @@ export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
     session: {
       id: sessionId,
       name: async (n: string) => { const b = await getDefault(); await b.nameSession(n); },
+      allowOrigin: (host: string, persist = false) => { rt.policy.allowHost(host, persist); return { host, persist }; },
       finalize: async (keep = []) => { const b = await getDefault(); return b.tabs.finalize({ keep }); },
       trace: () => state.trace.events,
       clearTrace: () => state.trace.clear(),

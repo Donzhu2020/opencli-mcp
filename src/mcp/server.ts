@@ -17,8 +17,8 @@ type Content = Array<{ type: 'text'; text: string } | { type: 'image'; data: str
 type ToolResult = { content: Content; structuredContent?: Record<string, unknown>; isError?: boolean };
 
 const targetSchema = z.object({
-  ref: z.string().optional().describe('eN ref from tab_observe / tab_find'),
-  selector: z.string().optional().describe('raw Playwright selector, e.g. the selector returned by tab_find'),
+  ref: z.string().optional().describe('eN ref from tab_observe (or tab.find in js)'),
+  selector: z.string().optional().describe('raw Playwright selector, e.g. the selector returned by tab.find in js'),
   css: z.string().optional().describe('CSS selector; add nth for multiple matches'),
   nth: z.number().int().optional(),
   role: z.string().optional().describe('ARIA role, e.g. button, link, textbox'),
@@ -143,7 +143,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     return ok(data, images);
   }));
   server.registerTool('tab_claim', {
-    title: 'Claim a user tab', description: 'Take control of a tab the user already has open. tabId from tab_list(user:true) is enough; or give url (exact or prefix) and/or title (substring) to find it — the match must be unique. url/title together with a tabId are guards that fail closed if the tab changed. The tab is not moved into the agent group and is never closed by finalize.',
+    title: 'Claim a user tab', description: 'Take control of a tab the user already has open. tabId (from browser.user.openTabs() in js) is enough; or give url (exact or prefix) and/or title (substring) to find it — the match must be unique. url/title together with a tabId are guards that fail closed if the tab changed. The tab is not moved into the agent group and is never closed by finalize.',
     inputSchema: { tabId: z.number().int().optional(), title: z.string().optional(), url: z.string().optional(), observe: z.boolean().default(true) },
   }, async ({ tabId, title, url, observe }) => run(async () => {
     const b = await api.agent.browsers.getDefault();
@@ -171,7 +171,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   server.registerTool('tab_expect', { title: 'Expect', description: 'Assert what the page must show now: text / notText / url / title / selector / ref (with visible:false to require absence). Polls up to timeout seconds; fails with expectation_failed listing the failed checks and the current state. Recorded so tools_compile turns it into a checkpoint of the frozen flow.', inputSchema: { tab: z.string().optional(), text: z.string().optional(), notText: z.string().optional(), url: z.string().optional(), title: z.string().optional(), selector: z.string().optional(), ref: z.string().optional(), visible: z.boolean().optional(), timeout: z.number().default(5) } }, async ({ tab, timeout, ...what }) => run(async () => { const t = await tabOf(tab); return ok({ tab: t.id, ...(await t.expect(what, { timeoutMs: timeout * 1000 })) }); }));
 
   // ── sites ──
-  server.registerTool('sites_search', { title: 'Search sites & commands', description: 'Find site commands by keyword or domain across the adapter corpus (160+ sites). Then sites_enable the site or call site_run directly.', inputSchema: { query: z.string(), limit: z.number().int().max(100).default(20) }, annotations: { readOnlyHint: true } }, async ({ query, limit }) => run(async () => ok({ results: api.sites.search(query, limit) })));
+  server.registerTool('sites_search', { title: 'Search sites & commands', description: 'Find site commands by keyword or domain across the adapter corpus (160+ sites). Then site_run a command directly, or sites.enable(site) in js to get typed tools.', inputSchema: { query: z.string(), limit: z.number().int().max(100).default(20) }, annotations: { readOnlyHint: true } }, async ({ query, limit }) => run(async () => ok({ results: api.sites.search(query, limit) })));
   server.registerTool('site_run', { title: 'Run a site command', description: 'Run any site command without enabling it as a tool (args as an object; see sites_search for names). Write commands may return needs_confirmation → re-call with args.confirm:true after the user approves.', inputSchema: { site: z.string(), command: z.string(), args: z.record(z.string(), z.unknown()).default({}) }, annotations: { openWorldHint: true } }, async ({ site, command, args }, extra) => run(() => runSiteWithProgress(site, command, args, extra as unknown as Extra)));
 
   // ── capabilities ──
@@ -257,7 +257,9 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
 
   // ── prompts ──
   server.registerPrompt('browse', { title: 'Browse a site for a goal', description: 'Structured plan: prefer site tools, then observe → act → observe, finalize.', argsSchema: { goal: z.string(), url: z.string().optional() } }, ({ goal, url }) => ({ messages: [{ role: 'user', content: { type: 'text', text: `Goal: ${goal}${url ? `\nStart at: ${url}` : ''}\n\n1. sites_search for an existing command that covers the goal; if found, sites_enable and use it.\n2. Otherwise session_name, tab_open, then loop tab_observe → tab_act, reading match_level and error codes.\n3. Confirm before irreversible actions. Finish with session_finalize, keeping only deliverable/handoff tabs.` } }] }));
-  server.registerPrompt('write-tool', { title: 'Turn a flow into a tool', description: 'Explore, discover the API, verify, then tools_define.', argsSchema: { site: z.string(), goal: z.string() } }, ({ site, goal }) => ({ messages: [{ role: 'user', content: { type: 'text', text: `Create a reusable ${site} tool for: ${goal}\n\n1. Open the site, arm tab_network, perform the flow once.\n2. recon_discover to list endpoint candidates; verify the best one with tab_evaluate (fetch) or js (page.fetchJson).\n3. tools_compile with inputs for the values you typed; review the draft; tools_define it; run it once to verify.` } }] }));
+  server.registerPrompt('write-tool', { title: 'Turn a flow into a tool', description: 'Explore, discover the API, verify, then tools_define.', argsSchema: { site: z.string(), goal: z.string() } }, ({ site, goal }) => ({ messages: [{ role: 'user', content: { type: 'text', text: `Create a reusable ${site} tool for: ${goal}\n\n1. Open the site, arm capture (`await tab.network.start()` in js), perform the flow once, and tab_expect what each step must show.
+2. `await recon.discover(tab)` in js to list endpoint candidates; verify the best one with tab.evaluate (fetch).
+3. tools_compile with explicit inputs (sample/description/mode); review the draft; tools_define it; run it once to verify.` } }] }));
 
   return {
     server, api,

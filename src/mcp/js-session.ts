@@ -27,8 +27,33 @@ function maskCode(code: string): string {
   return out;
 }
 
+/**
+ * Put every top-level statement on its own line: `const a = 1; const b = a + 1; b` on one line becomes three lines, so the
+ * per-line rewrite below sees each declaration (semicolons inside brackets/strings do not split).
+ */
+function splitTopLevelStatements(code: string): string {
+  const masked = maskCode(code);
+  const lines = code.split('\n'); const maskedLines = masked.split('\n');
+  let depth = 0; const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]; const ml = maskedLines[i];
+    if (depth !== 0) { for (const ch of ml) { if (ch === '{' || ch === '(' || ch === '[') depth++; else if (ch === '}' || ch === ')' || ch === ']') depth = Math.max(0, depth - 1); } out.push(line); continue; }
+    let d = 0; let start = 0; const parts: string[] = [];
+    for (let j = 0; j < ml.length; j++) {
+      const ch = ml[j];
+      if (ch === '{' || ch === '(' || ch === '[') d++; else if (ch === '}' || ch === ')' || ch === ']') d = Math.max(0, d - 1);
+      else if (ch === ';' && d === 0 && j < ml.length - 1 && ml.slice(j + 1).trim()) { parts.push(line.slice(start, j + 1)); start = j + 1; }
+    }
+    parts.push(line.slice(start));
+    depth = d;
+    out.push(...parts.map((p, k) => (k === 0 ? p : p.replace(/^\s+/, ''))));
+  }
+  return out.join('\n');
+}
+
 /** Rewrite top-level declarations to assignments and return the last top-level expression. */
-export function transformCode(code: string): string {
+export function transformCode(input: string): string {
+  const code = splitTopLevelStatements(input);
   const masked = maskCode(code);
   const lines = code.split('\n'); const maskedLines = masked.split('\n');
   let depth = 0; const topLevel: boolean[] = [];

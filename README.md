@@ -28,7 +28,7 @@ Agent tabs open in the background inside a Chrome tab group named after the sess
 
 ## Sites as capabilities
 
-The OpenCLI adapter corpus ships as a library dependency (`@jackwener/opencli`): 160+ sites, ~1200 commands (Bilibili, Zhihu, Xiaohongshu, Twitter/X, Reddit, HackerNews, LinkedIn, YouTube, Amazon, GitHub, Notion, ChatGPT/Gemini/Claude web…). Adapters for Electron desktop apps are excluded — this runtime drives Chrome only. They are not 1200 tools: `sites_search` finds them, `sites_enable` loads one site's commands as typed tools (read-only by default; `write:true` adds account-changing commands), `site_run` calls any command directly, and `sites.<site>.<command>()` works inside `js`.
+The OpenCLI adapter corpus ships as a library dependency (`@jackwener/opencli`): 160+ sites, ~1200 commands (Bilibili, Zhihu, Xiaohongshu, Twitter/X, Reddit, HackerNews, LinkedIn, YouTube, Amazon, GitHub, Notion, ChatGPT/Gemini/Claude web…). Adapters for Electron desktop apps are excluded — this runtime drives Chrome only. They are not 1200 tools: `sites_search` finds them, `sites.enable(site)` (in `js`) loads one site's commands as typed tools (read-only by default; `write:true` adds account-changing commands), `site_run` calls any command directly, and `sites.<site>.<command>()` works inside `js`.
 
 ## Recon and freezing flows into tools
 
@@ -92,7 +92,7 @@ Apache-2.0. Page semantics and site adapters come from [OpenCLI](https://github.
 See docs/design/cli-baggage-audit.md for what was deleted from the OpenCLI lineage and why.
 
 ## Policy shapes (off by default)
-`~/.opencli-mcp/config.json` → `"policy": { "askNewOrigins": true, "confirmWrites": true, "allowedHosts": ["example.com"], "blockedHosts": [] }`. With `askNewOrigins`, the first navigation to a new host returns `needs_origin_approval` until `origin_allow` is called; with `confirmWrites`, write site commands return `needs_confirmation` until re-called with `confirm:true`. Denials carry `retryable`; a non-retryable denial must not be bypassed by another path. Page content and page-registered (WebMCP) tools never authorize consequential actions.
+`~/.opencli-mcp/config.json` → `"policy": { "askNewOrigins": true, "confirmWrites": true, "allowedHosts": ["example.com"], "blockedHosts": [] }`. With `askNewOrigins`, the first navigation to a new host returns `needs_origin_approval` until `session.allowOrigin(host)` is called in `js`; with `confirmWrites`, write site commands return `needs_confirmation` until re-called with `confirm:true`. Denials carry `retryable`; a non-retryable denial must not be bypassed by another path. Page content and page-registered (WebMCP) tools never authorize consequential actions.
 
 ## Custom Chrome profiles
 Chrome looks up user-level Native Messaging hosts relative to its user data dir. For a profile started with `--user-data-dir=/some/dir`, run `opencli-mcp install --user-data-dir /some/dir`.

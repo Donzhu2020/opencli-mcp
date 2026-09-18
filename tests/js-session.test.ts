@@ -37,5 +37,10 @@ describe('js session transform edge cases', () => {
     expect(r2.value).toMatchObject({ ok: true });
     const r3 = await s.run('let a, b;\na = 1; b = 2;\na + b');
     expect(r3.value).toBe(3);
+    // several top-level statements on one line: every declaration persists and the last expression is returned
+    const r4 = await s.run('const b0 = 20; const t0 = b0 + 1; t0 * 2');
+    expect(r4.value).toBe(42);
+    const r5 = await s.run('t0');
+    expect(r5.value).toBe(21);
   });
 });

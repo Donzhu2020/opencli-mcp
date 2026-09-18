@@ -40,6 +40,7 @@ export function validateDefinition(def: ToolDefinition): void {
   if (!def.description) throw Object.assign(new Error('description is required'), { code: 'invalid_definition' });
   if (def.access !== 'read' && def.access !== 'write') throw Object.assign(new Error("access must be 'read' or 'write'"), { code: 'invalid_definition' });
   if (!def.pipeline && !def.func) throw Object.assign(new Error('provide `pipeline` steps or `func` source'), { code: 'invalid_definition' });
+  for (const a of def.args ?? []) if (!/^[A-Za-z_$][\w$]*$/.test(a.name)) throw Object.assign(new Error(`arg name ${JSON.stringify(a.name)} must be a JavaScript identifier`), { code: 'invalid_definition' });
   if (def.func && !/^\s*(async\s*)?(\(|[A-Za-z_$])/.test(def.func)) throw Object.assign(new Error('func must be a function expression such as `async ({ tab, args }) => { … }`'), { code: 'invalid_definition' });
   if (def.func) {
     // syntax check only — the function is not executed here
@@ -182,27 +183,34 @@ function urlLit(url: string, inputs: Array<{ name: string; sample: string; mode:
     return '`' + s.replace(/`/g, '\\`') + '`';
   } catch { return lit(url); }
 }
-/** Body literal: JSON string values equal to an input sample become the argument (correctly escaped via JSON.stringify); form bodies go through URLSearchParams; anything else stays a literal. */
-function bodyLit(post: string, contentType: string | undefined, inputs: Array<{ name: string; sample: string; mode: 'exact' | 'within' }>, lit: (v: string) => string): string {
-  const mark = (v: string): string | null => { for (const i of inputs) { if (!i.sample) continue; if (v === i.sample) return `__ARG_${i.name}__`; if (i.mode === 'within' && v.includes(i.sample)) return v.split(i.sample).join(`__ARG_${i.name}__`); } return null; };
-  const unmark = (s: string): string => s.replace(/"((?:[^"\\]|\\.)*__ARG_[a-zA-Z_$][\w$]*__(?:[^"\\]|\\.)*)"/g, (_m, inner: string) => /^__ARG_[a-zA-Z_$][\w$]*__$/.test(inner) ? `args.${inner.slice(6, -2)}` : '`' + inner.replace(/__ARG_([a-zA-Z_$][\w$]*)__/g, '${args.$1}') + '`');
+/**
+ * Body literal: a JSON body is regenerated as a JS object where each string value is emitted safely (a JSON literal, or
+ * a parameterized expression when it contains a declared sample); a form body becomes `new URLSearchParams({...}).toString()`
+ * with the same per-value emitter. `emit` is the compile-local safe string emitter, so no page data can break the source.
+ */
+function bodyLit(post: string, contentType: string | undefined, emit: (v: string) => string): string {
   try {
-    const walk = (v: unknown): unknown => { if (typeof v === 'string') return mark(v) ?? v; if (Array.isArray(v)) return v.map(walk); if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, walk(x)])); return v; };
     const json = JSON.parse(post) as unknown;
-    const marked = JSON.stringify(walk(json));
-    return marked.includes('__ARG_') ? `JSON.stringify(${unmark(marked)})` : `JSON.stringify(${marked})`;
+    const gen = (v: unknown): string => {
+      if (typeof v === 'string') return emit(v);
+      if (Array.isArray(v)) return `[${v.map(gen).join(',')}]`;
+      if (v && typeof v === 'object') return `{${Object.entries(v as Record<string, unknown>).map(([k, x]) => `${JSON.stringify(k)}:${gen(x)}`).join(',')}}`;
+      return JSON.stringify(v);
+    };
+    const src = gen(json);
+    return `JSON.stringify(${src})`;
   } catch { /* not JSON */ }
   if (/x-www-form-urlencoded/i.test(contentType ?? '')) {
-    const p = new URLSearchParams(post); let touched = false;
-    for (const [k, v] of [...p]) { const m = mark(v); if (m) { p.set(k, m); touched = true; } }
-    if (touched) return '`' + p.toString().replace(/__ARG_([a-zA-Z_$][\w$]*)__/g, '${encodeURIComponent(args.$1)}').replace(/`/g, '\\`') + '`';
+    const p = new URLSearchParams(post);
+    const pairs = [...p].map(([k, v]) => `${JSON.stringify(k)}: ${emit(v)}`);
+    if (pairs.length) return `new URLSearchParams({ ${pairs.join(', ')} }).toString()`;
   }
-  return lit(post);
+  return emit(post);
 }
-
 export function compileFromTrace(trace: TraceEvent[], opts: { site: string; name: string; description: string; access?: 'read' | 'write'; inputs?: Record<string, CompileInput>; domain?: string }): ToolDefinition & { warnings?: string[] } {
   const inputs = Object.entries(opts.inputs ?? {}).map(([name, v]) => (typeof v === 'string' ? { name, sample: v, type: 'string' as const, required: true, mode: 'exact' as const } : { name, sample: v.sample, type: v.type ?? 'string', required: v.required ?? true, help: v.description, mode: v.mode ?? 'exact' as const }));
   const argDefs: ArgDef[] = inputs.map((i) => ({ name: i.name, type: i.type, required: i.required, help: i.help ?? `example: ${i.sample}` }));
+  for (const i of inputs) if (!/^[A-Za-z_$][\w$]*$/.test(i.name)) throw Object.assign(new Error(`input name ${JSON.stringify(i.name)} must be a JavaScript identifier`), { code: 'invalid_definition' });
   // exact by default: a literal becomes an argument only when it IS the sample; 'within' inputs are the agent's explicit
   // permission to also parameterize longer literals that contain the sample (values typed, checkpoint texts and urls)
   const sub = (v: string): string => {
@@ -211,7 +219,11 @@ export function compileFromTrace(trace: TraceEvent[], opts: { site: string; name
     for (const i of inputs) if (i.mode === 'within' && i.sample && out.includes(i.sample)) out = out.split(i.sample).join(`\${args.${i.name}}`);
     return out;
   };
-  const lit = (v: string): string => { const s = sub(v); return s.includes('${') ? '`' + s.replace(/`/g, '\\`') + '`' : JSON.stringify(s); };
+  // Emit JS source for a possibly-parameterized string. Our own `${args.x}` interpolations (from sub) are preserved;
+  // any literal backtick, backslash, or foreign `${` in the data is escaped, so the generated tool never crashes or
+  // lets page data interpolate. A plain string with no arg is a JSON string literal.
+  const escTpl = (s: string): string => s.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{(?!args\.[A-Za-z_$][\w$]*\})/g, '\\${');
+  const lit = (v: string): string => { const s = sub(v); const whole = /^\$\{(args\.[A-Za-z_$][\w$]*)\}$/.exec(s); return whole ? whole[1] : /\$\{/.test(s) ? '`' + escTpl(s) + '`' : JSON.stringify(s); };
 
   const body: string[] = [];
   const warnings: string[] = [];
@@ -234,7 +246,7 @@ export function compileFromTrace(trace: TraceEvent[], opts: { site: string; name
     }
     if (Object.keys(headers).length) init.push(`headers: ${JSON.stringify(headers)}`);
     if (tokenLike.length) warnings.push(`request header(s) ${tokenLike.join(', ')} look like per-request tokens/signatures computed by the page and are not frozen; if the endpoint needs them, read them in the tool at run time (cookie, page state or a page function) before tab.fetchJson`);
-    if (e.postData) init.push(`body: ${bodyLit(e.postData, e.requestHeaders?.['content-type'], inputs, lit)}`);
+    if (e.postData) init.push(`body: ${bodyLit(e.postData, e.requestHeaders?.['content-type'], lit)}`);
     body.push(`  const data = await tab.fetchJson(${urlLit(e.url, inputs, lit)}${init.length ? `, { ${init.join(', ')} }` : ''});`);
     body.push(`  return data;`);
     if (e.auth) warnings.push(`the captured request carried an Authorization header, which is not frozen (it is a credential the page computes); the tool will fail unless the endpoint also accepts the cookie session — prefer a cookie-authenticated endpoint or read the header from the page at run time`);

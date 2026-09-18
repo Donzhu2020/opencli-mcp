@@ -5,6 +5,23 @@ import type { TraceEvent, TraceInput } from '../src/runtime/trace.js';
 const t = (e: TraceInput): TraceEvent => ({ t: 1, ...e } as TraceEvent);
 
 describe('tools_compile: frozen flows run on the agent engine with checkpoints', () => {
+  it('never lets page data break the generated source (literal ${ and backticks are escaped)', () => {
+    const trace: TraceEvent[] = [
+      t({ kind: 'goto', url: 'https://x.test/p?q=${danger}`' }),
+      t({ kind: 'act', action: 'fill', target: 'label:Note', targetSpec: { label: 'Note' }, targetSelector: 'internal:label="Note"i', value: 'pay ${amount} now `tick`', ok: true }),
+      t({ kind: 'network', url: 'https://x.test/api', method: 'POST', contentType: 'application/json', status: 200, bodyBytes: 50, resourceType: 'Fetch', requestHeaders: { 'content-type': 'application/json' }, postData: '{"note":"has ${x} and `tick`"}', responseSample: '{"ok":true}' }),
+    ];
+    const def = compileFromTrace(trace, { site: 'x', name: 'p', description: 'd', inputs: {} });
+    const f = def.func!;
+    expect(() => new Function(`return (${f});`)).not.toThrow();      // the source parses
+    expect(f).not.toMatch(/[^\\]\$\{(?!args\.)/);                    // no unescaped foreign interpolation survives
+  });
+
+  it('rejects an input name that is not a JavaScript identifier', () => {
+    const trace: TraceEvent[] = [t({ kind: 'goto', url: 'https://x.test/' }), t({ kind: 'network', url: 'https://x.test/api?id=7', contentType: 'application/json', status: 200, bodyBytes: 10, resourceType: 'Fetch', responseSample: '{"id":7}' })];
+    expect(() => compileFromTrace(trace, { site: 'x', name: 'p', description: 'd', inputs: { 'user-id': '7' } })).toThrow(/identifier/);
+  });
+
   it('freezes the locator intent, expect checkpoints, explicit args and structured step failures', () => {
     const trace: TraceEvent[] = [
       t({ kind: 'goto', url: 'https://shop.example/search' }),
@@ -20,7 +37,7 @@ describe('tools_compile: frozen flows run on the agent engine with checkpoints',
     const def = compileFromTrace(trace, { site: 'shop', name: 'search', description: 'Search the shop', inputs: { query: { sample: 'red shoes', description: 'search terms', mode: 'within' } } });
     expect(def.args).toEqual([{ name: 'query', type: 'string', required: true, help: 'search terms' }]);
     const f = def.func!;
-    expect(f).toContain('tab.act({ action: "fill", target: {"label":"Search"}, value: `${args.query}` })'); // the intent, not the resolved selector
+    expect(f).toContain('tab.act({ action: "fill", target: {"label":"Search"}, value: args.query })'); // the intent, not the resolved selector
     expect(f).toContain('tab.act({ action: "press", target: {"label":"Search"}, value: "Enter" })');
     expect(f).toContain('target: {"selector":"div > div:nth-child(3) > a"}'); // a one-time ref has no intent: the replay selector is frozen…
     expect(f).toContain('// REVIEW: acted on aria ref e7 (one-time)');

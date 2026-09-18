@@ -24,7 +24,7 @@ function ensureOverlay(): HTMLElement {
   cursor = document.createElement('div');
   cursor.className = 'c';
   const img = document.createElement('img');
-  img.src = chrome.runtime.getURL('cursor.svg');
+  try { img.src = chrome.runtime.getURL('cursor.svg'); } catch { /* context invalidated */ }
   img.width = 28; img.height = 32; img.alt = '';
   cursor.appendChild(img);
   shadow.append(style, cursor);
@@ -96,8 +96,17 @@ function render(state: CursorState): Promise<{ arrived: boolean; seq?: number }>
 }
 
 /** A new document (navigation, bfcache restore) starts from the background's state instead of blank. */
+/** True until the extension is reloaded/updated; after that the old content script's chrome.* calls throw "Extension context invalidated". */
+function alive(): boolean { try { return Boolean(chrome.runtime?.id); } catch { return false; } }
+
+/** A new document (navigation, bfcache restore) starts from the background's state instead of blank. */
 function pullState(): void {
-  chrome.runtime.sendMessage({ type: 'opencli:cursor-state?' }).then((r: { state?: CursorState } | undefined) => { if (r && r.state !== undefined) void render(r.state ? { ...r.state, animate: false } : null); }).catch(() => {});
+  if (!alive()) return; // this content script belongs to a replaced extension version; the fresh one loads on next navigation
+  try {
+    chrome.runtime.sendMessage({ type: 'opencli:cursor-state?' })
+      .then((r: { state?: CursorState } | undefined) => { if (r && r.state !== undefined) void render(r.state ? { ...r.state, animate: false } : null); })
+      .catch(() => { /* context invalidated or no listener */ });
+  } catch { /* context invalidated */ }
 }
 
 chrome.runtime.onMessage.addListener((msg: { type?: string; state?: CursorState; badge?: Badge }, _sender, sendResponse) => {

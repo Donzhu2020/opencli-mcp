@@ -11,8 +11,8 @@
     "opencli-mcp": "dist/src/main.js"
   },
   "scripts": {
-    "build": "node scripts/extract-playwright-injected.mjs && tsc -p tsconfig.json && node scripts/gen-api-reference.mjs && node scripts/build-extension.mjs && node scripts/copy-assets.mjs",
-    "build:ext": "node scripts/build-extension.mjs",
+    "build": "node scripts/extract-playwright-injected.mjs && tsc -p tsconfig.json && node scripts/gen-api-reference.mjs && node scripts/render-icons.mjs && node scripts/build-extension.mjs && node scripts/copy-assets.mjs",
+    "build:ext": "node scripts/render-icons.mjs && node scripts/build-extension.mjs",
     "dev": "tsx src/main.ts",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.tests.json && tsc -p extension/tsconfig.json",
@@ -39,6 +39,7 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "@types/chrome": "^0.3.0",
     "@types/jsdom": "^30.0.0",
     "@types/node": "^22.20.3",

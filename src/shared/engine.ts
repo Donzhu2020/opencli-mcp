@@ -1,6 +1,6 @@
 /**
  * The interaction engine, rebuilt on Playwright's injected script (what the ChatGPT plugin also embeds).
- * Runs at the browser's edge (extension isolated world, or the direct-CDP backend's main world) and does,
+ * Runs at the browser's edge (the extension's isolated world in every frame) and does,
  * in one command: compile target → locate with Playwright's engines (strict, unique-visible fallback) →
  * check states (visible/enabled/editable) → scroll (three alignments) → wall-clock stable box → hit-test
  * (expectHitTarget) → cursor overlay → real CDP mouse/keyboard → parallel navigation wait → DOM settle.

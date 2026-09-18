@@ -1,7 +1,7 @@
 /**
  * Runtime — the resident kernel: site registry, per-MCP-session state, page backends, traces.
  * Lives inside the Chrome-spawned host (extension backend) or embedded in the stdio launcher
- * (CDP backend / browser-less site commands).
+ * (browser-less: only `public` site commands work until Chrome connects).
  */
 import { EventEmitter } from 'node:events';
 import type { ExtensionBridge } from '../host/bridge.js';

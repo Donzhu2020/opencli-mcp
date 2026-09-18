@@ -11,7 +11,7 @@ describe('docs manifest', () => {
     expect(none).not.toContain('Tabs are the user');
     expect(readDoc('js-tool')).toContain('agent.browsers');
     expect(requiredDocsFor('cdp_send', { backend: 'extension', capabilities: ['cdp'] })).toEqual(['capabilities/cdp']);
-    expect(listDocs({ backend: 'cdp', capabilities: [] }).find((d) => d.name === 'tab-lifecycle')?.available).toBe(false);
+    expect(listDocs({ backend: 'none', capabilities: [] }).find((d) => d.name === 'tab-lifecycle')?.available).toBe(false);
   });
 });
 

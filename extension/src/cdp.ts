@@ -15,8 +15,6 @@ const frameTargetKeys = new Map<string, string>();
 let frameTargetCleanupRegistered = false;
 
 // Large cap so agents stop hitting silent JSON.parse failures on real API bodies.
-// See src/browser/cdp.ts CDP_RESPONSE_BODY_CAPTURE_LIMIT for the matching constant
-// on the direct-CDP path. Keep in sync.
 const CDP_RESPONSE_BODY_CAPTURE_LIMIT = 8 * 1024 * 1024;
 const CDP_REQUEST_BODY_CAPTURE_LIMIT = 1 * 1024 * 1024;
 

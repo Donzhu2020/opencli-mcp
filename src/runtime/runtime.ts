@@ -49,6 +49,8 @@ export interface SessionState {
   lastObserve: Map<string, string>;
   /** Network entries seen per tab, with monotonically increasing sequence numbers for cursor-based reads. */
   netLog: Map<string, { seq: number; entries: Array<Record<string, unknown> & { seq: number }>; seen: Set<string> }>;
+  /** Static endpoint candidates per tab document (recon), discovered once per page URL when the network log is first read. */
+  recon: Map<string, { url: string; promise: Promise<unknown[]>; done?: unknown[] }>;
   finalized: boolean;
 }
 
@@ -109,7 +111,7 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
   session(id: string): SessionState {
     let s = this.sessions.get(id);
     if (!s) {
-      s = { id, createdAt: Date.now(), trace: new TraceRecorder(), pages: new Map(), tabLocks: new Map(), enabledSites: new Map(), capabilities: new Set(), docsRead: new Set(), lastObserve: new Map(), netLog: new Map(), finalized: false };
+      s = { id, createdAt: Date.now(), trace: new TraceRecorder(), pages: new Map(), tabLocks: new Map(), enabledSites: new Map(), capabilities: new Set(), docsRead: new Set(), lastObserve: new Map(), netLog: new Map(), recon: new Map(), finalized: false };
       this.sessions.set(id, s);
     }
     return s;

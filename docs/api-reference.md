@@ -74,7 +74,7 @@ class Tab {
   };
   network: {
     start(pattern?: string): Promise<boolean>;
-    read(opts?: { pattern?: string; limit?: number; includeStatic?: boolean; afterSequence?: number; }): Promise<{ cursor: number; entries: Array<unknown>; hasMore: boolean; }>; // Cursor-paged read: pass `afterSequence` from the previous result to get only new requests.
+    read(opts?: { pattern?: string; limit?: number; includeStatic?: boolean; afterSequence?: number; }): Promise<{ cursor: number; entries: Array<unknown>; hasMore: boolean; candidates?: Array<EndpointCandidate>; candidatesPending?: boolean; }>; // Cursor-paged read: pass `afterSequence` from the previous result to get only new requests.
   };
   cookies(domain: string): Promise<Array<unknown>>;
   fetchJson(url: string, opts?: Record<string, unknown>): Promise<unknown>; // Fetch JSON through the page (its cookies, its origin) — the network-first way to freeze a site: find the endpoint, call it directly.

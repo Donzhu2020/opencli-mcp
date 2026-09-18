@@ -11,6 +11,7 @@ import type { FindEntry, FindResult, ElementAtResult, Expectation, CheckResult }
 import type { DialogInfo, FrameStep } from '../protocol.js';
 import type { SessionContext } from './context.js';
 import type { TraceInput } from '../runtime/trace.js';
+import { discoverEndpoints, type EndpointCandidate } from '../recon/discover.js';
 
 export type Target = ({ frame?: FrameStep | FrameStep[]; /** container (css/selector/eN) to resolve inside */ within?: string }) & (
   | { ref: number | string }
@@ -251,7 +252,7 @@ export class Tab {
   readonly network = {
     start: async (pattern = ''): Promise<boolean> => this.use((p) => p.startNetworkCapture(pattern)),
     /** Cursor-paged read: pass `afterSequence` from the previous result to get only new requests. */
-    read: async (opts: { pattern?: string; limit?: number; includeStatic?: boolean; afterSequence?: number } = {}): Promise<{ cursor: number; entries: unknown[]; hasMore: boolean }> => this.use(async (p) => {
+    read: async (opts: { pattern?: string; limit?: number; includeStatic?: boolean; afterSequence?: number } = {}): Promise<{ cursor: number; entries: unknown[]; hasMore: boolean; candidates?: EndpointCandidate[]; candidatesPending?: boolean }> => this.use(async (p) => {
       await this.harvest(p);
       let log = this.ctx.state.netLog.get(this.id);
       // no capture (adapter tab, or a tab attached before this host): the page's performance entries are all there is
@@ -260,9 +261,28 @@ export class Tab {
       const matching = log.entries.filter((e) => e.seq > after && (!opts.pattern || String(e.url ?? e.name ?? '').includes(opts.pattern)));
       const limit = opts.limit ?? 100;
       const page = matching.slice(0, limit);
-      return { cursor: page.length ? page[page.length - 1].seq : after, entries: page, hasMore: matching.length > limit };
+      const cands = await this.candidates(p, log.entries);
+      return { cursor: page.length ? page[page.length - 1].seq : after, entries: page, hasMore: matching.length > limit, ...(cands ? { candidates: cands } : { candidatesPending: true }) };
     }),
   };
+  /**
+   * recon by default: the endpoints the page's own scripts call, discovered once per document (bounded: 25 scripts,
+   * 4 s per script) and merged with the harvested requests. The first read after a navigation waits up to 6 s for it;
+   * if analysis takes longer, that read returns `candidatesPending` and the next one has them.
+   */
+  private async candidates(page: RuntimePage, network: Array<Record<string, unknown>>): Promise<EndpointCandidate[] | null> {
+    const url = (await page.getCurrentUrl().catch(() => null)) ?? '';
+    const doc = url.split('#')[0];
+    let slot = this.ctx.state.recon.get(this.id);
+    if (!slot || slot.url !== doc) {
+      const promise = discoverEndpoints(page, { maxScripts: 25, fetchTimeoutMs: 4000, network }).then((r) => r.endpoints.slice(0, 40)).catch(() => [] as EndpointCandidate[]);
+      slot = { url: doc, promise }; this.ctx.state.recon.set(this.id, slot);
+      void promise.then((v) => { if (slot) slot.done = v; });
+    }
+    if (slot.done) return slot.done as EndpointCandidate[];
+    const winner = await Promise.race([slot.promise.then((v) => v), new Promise<null>((r) => setTimeout(() => r(null), 6000))]);
+    return winner as EndpointCandidate[] | null;
+  }
   async cookies(domain: string): Promise<unknown[]> { return this.use((p) => p.getCookies({ domain })); }
   /** Fetch JSON through the page (its cookies, its origin) — the network-first way to freeze a site: find the endpoint, call it directly. */
   async fetchJson(url: string, opts: Record<string, unknown> = {}): Promise<unknown> { this.ctx.state.trace.record({ kind: 'note', text: `fetchJson ${url.slice(0, 160)}`, page: this.id }); return this.use((p) => p.fetchJson(url, opts as never)); }

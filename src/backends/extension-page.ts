@@ -188,6 +188,7 @@ function definePageClass(lib: Lib): any {
       }
     }
     async engineEvaluate(js: string, timeoutMs?: number): Promise<unknown> { return (await this.send('exec', { code: js, world: 'engine', ...(timeoutMs && { timeoutMs }) })).data; }
+    async history(op: 'reload' | 'back' | 'forward'): Promise<{ url?: string; title?: string; timedOut?: boolean }> { return (await this.send('history', { historyOp: op, timeoutMs: 20_000 })).data as { url?: string; title?: string; timedOut?: boolean }; }
     async dialog(op: 'get' | 'accept' | 'dismiss', text?: string): Promise<{ dialog: DialogInfo | null; handled?: string }> { return (await this.send('dialog', { dialogOp: op, ...(text !== undefined && { text }), timeoutMs: 10_000 })).data as { dialog: DialogInfo | null; handled?: string }; }
     async act(spec: ActSpec): Promise<ActResult> { const budget = spec.timeoutMs ?? 3000; return (await this.send('act', { act: { ...spec, timeoutMs: budget }, timeoutMs: budget + 8000 })).data as ActResult; }
     async setVisibility(visible: boolean): Promise<void> { await this.bridge.send('visibility', { ...this.sessionOpts(), visible }); }

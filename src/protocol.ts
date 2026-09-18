@@ -20,6 +20,8 @@ export type Action =
   | 'session-name' | 'session-finalize' | 'user-tabs' | 'claim' | 'mark'
   // native JavaScript dialogs (alert/confirm/prompt/beforeunload) block the page; the agent sees and answers them explicitly
   | 'dialog'
+  // reload/back/forward driven by the browser (evaluating location.reload() never returns: the context dies mid-call)
+  | 'history'
   // atomic interaction at the runtime edge: locate → wait actionable → hit-test → real input → settle
   | 'act'
   // human visibility
@@ -41,6 +43,7 @@ export interface Command {
   url?: string;
   op?: 'list' | 'new' | 'close' | 'select';
   dialogOp?: 'get' | 'accept' | 'dismiss';
+  historyOp?: 'reload' | 'back' | 'forward';
   index?: number;
   domain?: string;
   format?: 'png' | 'jpeg';

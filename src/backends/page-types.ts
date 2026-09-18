@@ -30,6 +30,8 @@ export interface RuntimePage extends IPage {
   /** The interaction engine at this backend's edge (locate → wait → hit-test → real input → settle). */
   act(spec: ActSpec): Promise<ActResult>;
   /** Native JavaScript dialogs: read the pending one, or answer it (accept with optional prompt text / dismiss). */
+  /** Browser-driven reload / back / forward with a bounded load wait. */
+  history(op: 'reload' | 'back' | 'forward'): Promise<{ url?: string; title?: string; timedOut?: boolean }>;
   dialog(op: 'get' | 'accept' | 'dismiss', text?: string): Promise<{ dialog: DialogInfo | null; handled?: string }>;
   /** Evaluate in the engine's world (Playwright injected script available as globalThis.__opencliInjected). */
   engineEvaluate(js: string, timeoutMs?: number): Promise<unknown>;

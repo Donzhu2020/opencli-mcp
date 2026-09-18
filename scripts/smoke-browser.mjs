@@ -24,7 +24,7 @@ const opened = await call('tab_open', { url: 'https://example.com/' }, { show: 9
 const tab = opened.json?.tab;
 console.log('tab id =', tab);
 await call('tab_find', { tab, target: { role: 'link' } });
-await call('tab_act', { tab, action: 'click', target: { text: 'More information' }, observe: true }, { show: 700 });
+await call('tab_act', { tab, action: 'click', target: { role: 'link' } /* example.com's only link; its text drifted from 'More information' to 'Learn more' */, observe: true }, { show: 700 });
 await call('tab_wait', { tab, url: 'iana.org', timeout: 20 });
 await call('tab_observe', { tab, mode: 'state' }, { show: 400 });
 await call('tab_screenshot', { tab, annotate: true }, { show: 120 });

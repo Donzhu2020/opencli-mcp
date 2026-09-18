@@ -123,6 +123,18 @@ async function handleCommand(cmd: Command): Promise<Result> {
         const dialog = await executor.handleDialog(tabId, op === 'accept', cmd.text);
         return pageScoped(cmd.id, tabId, { handled: op, dialog });
       }
+      case 'history': {
+        const tabId = await sessions.resolveTab(s, cmd.page);
+        const op = cmd.historyOp ?? 'reload';
+        if (!executor.hasActiveNetworkCapture(tabId)) await executor.detach(tabId);
+        if (op === 'reload') await chrome.tabs.reload(tabId);
+        else if (op === 'back') await chrome.tabs.goBack(tabId);
+        else await chrome.tabs.goForward(tabId);
+        await new Promise((r) => setTimeout(r, 150)); // let the navigation start before polling status
+        const t = await waitForLoad(tabId, 15_000);
+        const lease = s.leases.get(tabId); if (lease) { lease.url = t.url; lease.title = t.title; }
+        return pageScoped(cmd.id, tabId, { op, url: t.url, title: t.title, timedOut: t.status !== 'complete' });
+      }
       case 'visibility': { if (typeof cmd.visible === 'boolean') await sessions.setVisibility(s, cmd.visible); return { id: cmd.id, ok: true, data: { visible: s.visible } }; }
       default: return { id: cmd.id, ok: false, error: `Unknown action: ${String(cmd.action)}`, errorCode: 'unknown_action' };
     }

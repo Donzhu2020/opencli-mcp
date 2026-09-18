@@ -91,9 +91,9 @@ export class Tab {
   }
   async url(): Promise<string | null> { return this.use((p) => p.getCurrentUrl()); }
   async title(): Promise<string | null> { return this.use((p) => p.evaluate<string>('document.title')); }
-  async back(): Promise<void> { await this.use((p) => p.evaluate('history.back()')); }
-  async forward(): Promise<void> { await this.use((p) => p.evaluate('history.forward()')); }
-  async reload(): Promise<void> { await this.use((p) => p.evaluate('location.reload()')); await this.wait({ time: 1 }); }
+  async back(): Promise<void> { await this.use((p) => p.history('back')); }
+  async forward(): Promise<void> { await this.use((p) => p.history('forward')); }
+  async reload(): Promise<void> { await this.use((p) => p.history('reload')); }
   async close(): Promise<void> { await this.use((p) => p.closeTab(this.id)); }
 
   async observe(opts: ObserveOptions = {}): Promise<{ url: string | null; title: string | null; state?: string; diff?: boolean; changed?: { added: number; removed: number }; image?: ImageValue }> {

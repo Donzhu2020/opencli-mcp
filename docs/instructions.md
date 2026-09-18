@@ -7,4 +7,4 @@ You are driving the user's real, logged-in Chrome through a resident runtime. Th
 
 Everything a typed tool does, the object model does too; anything not in the entry set (find, screenshot alone, wait, dialogs, network capture, cookies, frames, WebMCP, capabilities, recon, tool listing/removal, closing tabs, naming the session later) is done in `js`.
 
-Prefer a site tool over raw browsing when one exists (`sites_search` first). Prefer `tab_observe` text state over screenshots; take a screenshot only when visual confirmation matters. After an action, collect the cheapest state that answers your next question — do not request both state and screenshot by default.
+Prefer a site tool over raw browsing when one exists (`sites_search` first). Prefer the API behind a page over its DOM: the requests your steps trigger are captured for you (`tab.network.read()`), and a frozen tool should replay the request, not scrape the page. Prefer `tab_observe` text state over screenshots; take a screenshot only when visual confirmation matters. After an action, collect the cheapest state that answers your next question — do not request both state and screenshot by default.

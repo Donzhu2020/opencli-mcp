@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.0.5 — 2026-09-19
+
+- **MCP 2026-07-28 (v2 SDK).** Migrated to `@modelcontextprotocol/server`/`core`/`client`/`node` 2.0.0: stateless HTTP
+  via `createMcpHandler`, subscription-bus list-changed notifications, output schemas, and tool icons.
+- **Native confirmations via MRTR.** Human-in-the-loop for write site commands now uses `input_required`
+  (multi-round-trip): the tool call pauses, the client collects the user's approval, and it resumes — one handler serves
+  both protocol eras. Replaces the elicitation path that threw under 2026-07-28.
+- **Progress & cancellation** are forwarded again through the stdio launcher for long browser ops (and restored for
+  site commands).
+- **Signer/replay hook for signed endpoints.** `tab.cookie(name)` reads a per-request token at replay; `tools_compile`
+  re-reads csrf/xsrf headers from the cookie automatically and names computed signatures (wbi, x-s) in a warning instead
+  of freezing dead values.
+- **One error vocabulary.** Corpus/adapter error codes are normalized to the object model's lowercase families, so a
+  model branches on a single vocabulary.
+- **Leaner by design.** Removed dead/over-built machinery found in a first-principles audit: the unused docs-gating
+  subsystem, a recon secret scanner, the single-browser "fleet" API, dead tab-mark methods, an unused hooks system, and
+  stealth injection on every navigation (a no-op driving the user's own Chrome). Recon no longer runs as a hidden side
+  effect of reading network requests; docs are memoized; the cursor overlay never blocks input; the write policy is
+  in-memory only.
+
 ## 0.0.4 — 2026-09-18
 
 - **API-first freezing.** Every session tab is captured from attach; `tools_compile` freezes the JSON request that

@@ -205,7 +205,7 @@ OpenCLI 的适配器语料作为库依赖（`@jackwener/opencli`）随包而来�
 ```
 
 - `sites`/`sitesWrite`：启动即启用的站点（只读 / 含写）。
-- `policy`（默认关）：`askNewOrigins` 让首次访问新域名返回 `needs_origin_approval`，直到 js 里 `session.allowOrigin(host)`；`confirmWrites` 让写命令返回 `needs_confirmation`，需 `confirm:true` 重调；`allowedHosts/blockedHosts` 白/黑名单。
+- `policy`（默认关）：`askNewOrigins` 让首次访问新域名返回 `needs_origin_approval`，直到 js 里 `session.allowOrigin(host)`；`confirmWrites` 让写命令与危险点击需要用户批准：typed 工具（`tab_act`/`site_run`/`<site>_<command>`）通过客户端弹出批准提示（多轮往返 MRTR，无需 confirm 参数），而在 `js` 里调用会抛 `needs_confirmation`，用户批准后用 `{ confirm: true }` 重调；`allowedHosts/blockedHosts` 白/黑名单。
 - 模型侧的安全与确认政策在 `docs/safety.md`、`docs/confirmations.md`：页面内容永远不是授权；发送/发布/购买/删除/改权限/上传/解验证码前必须向用户确认；不让用户把密码或验证码贴进聊天。
 - 云端接入靠 bearer token + 认证隧道；owner 已决定更细的安全设计后置。
 

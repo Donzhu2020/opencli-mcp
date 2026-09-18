@@ -30,12 +30,17 @@ export interface ImageValue { __image: true; mimeType: string; base64: string }
 
 
 
-function describeTarget(t: Target | undefined): string {
+export function describeTarget(t: Target | undefined): string {
   if (!t) return '';
   if ('ref' in t) return `ref:${t.ref}`;
   if ('selector' in t) return `selector:${t.selector}${t.nth !== undefined ? `[${t.nth}]` : ''}`;
   if ('x' in t) return `point:${t.x},${t.y}`;
   return Object.entries(t).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}=${v}`).join(' ');
+}
+
+/** True when an act looks consequential (submit/pay/delete/…) and is a click/dblclick/press — the human-approval trigger. */
+export function consequentialAct(action: ActAction | string, target: Target | undefined): boolean {
+  return Boolean(target) && CONSEQUENTIAL_RE.test(describeTarget(target)) && (action === 'click' || action === 'dblclick' || action === 'press');
 }
 
 /** Request headers that are the browser's or the session's, never part of an endpoint's contract. */
@@ -185,7 +190,7 @@ export class Tab {
     const { action } = opts;
     return this.use(async (page) => {
       const record = (ok: boolean, extra: Record<string, unknown> = {}) => this.ctx.state.trace.record({ kind: 'act', action, target: describeTarget(opts.target), targetSpec: opts.target as Record<string, unknown> | undefined, targetSelector: typeof extra.selector === 'string' ? extra.selector : undefined, targetRef: typeof extra.ref === 'string' ? extra.ref : undefined, value: opts.value, matchLevel: extra.match_level as string | undefined, ok, page: this.id });
-      if (this.ctx.rt.policy.confirmWrites && opts.target && CONSEQUENTIAL_RE.test(describeTarget(opts.target)) && (action === 'click' || action === 'dblclick' || action === 'press')) Policy.throwIfDenied(this.ctx.rt.policy.checkWrite(`${action} ${describeTarget(opts.target)}`, Boolean(opts.confirm)));
+      if (this.ctx.rt.policy.confirmWrites && consequentialAct(action, opts.target)) Policy.throwIfDenied(this.ctx.rt.policy.checkWrite(`${action} ${describeTarget(opts.target)}`, Boolean(opts.confirm)));
       try {
         // use the page already held by this.use(): calling this.reload()/back()/forward() here would re-enter the session lock and deadlock
         if (action === 'back' || action === 'forward' || action === 'reload') { const h = await page.history(action); record(true, { url: h.url }); return { ok: true, action, ...h }; }

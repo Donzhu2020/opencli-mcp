@@ -2,10 +2,10 @@
  * MCP server per session: typed core tools, dynamic site tools, the `js` code-mode tool,
  * resources (docs, sites, tabs, trace) and prompts — all backed by the same object model.
  */
-import { McpServer, ResourceTemplate, type RegisteredTool } from '@modelcontextprotocol/server';
+import { McpServer, ResourceTemplate, inputRequired, inputResponse, type RegisteredTool, type InputRequiredResult } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Runtime } from '../runtime/runtime.js';
-import { createAgentApi, Tab, type AgentApi, type Target, type ActAction } from '../api/agent.js';
+import { createAgentApi, Tab, consequentialAct, describeTarget, type AgentApi, type Target, type ActAction } from '../api/agent.js';
 import { ActionError, errorEnvelope } from '../api/errors.js';
 import { JsSession, safeStringify } from './js-session.js';
 import { buildInstructions, listDocs, readDoc, requiredDocsFor, DOCS_MANIFEST, type DocContext } from '../docs/manifest.js';
@@ -15,6 +15,8 @@ import { readSiteKnowledge, writeSiteKnowledge } from '../sites/knowledge.js';
 
 type Content = Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>;
 type ToolResult = { content: Content; structuredContent?: Record<string, unknown>; isError?: boolean };
+// A tool handler either produces a normal result or asks the user via multi-round-trip (input_required, served on both eras by the SDK).
+type HandlerResult = ToolResult | InputRequiredResult;
 
 const targetSchema = z.object({
   ref: z.string().optional().describe('eN ref from tab_observe (or tab.find in js)'),
@@ -89,28 +91,41 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     if (!t) throw new ActionError('no_tab', 'No tab is open in this session', 'Call tab_open first (or tab_claim a user tab).');
     return t;
   };
-  const run = async (fn: () => Promise<ToolResult>): Promise<ToolResult> => { try { return await fn(); } catch (err) { return fail(err); } };
-  /** Ask the user through MCP elicitation when the host supports it; null = host cannot ask (fall back to the error shape). */
-  const elicitApproval = async (title: string, message: string): Promise<boolean | null> => {
-    const caps = server.server.getClientCapabilities();
-    if (!caps?.elicitation) return null;
-    try {
-      const r = await server.server.elicitInput({ message: `${title}: ${message}`, requestedSchema: { type: 'object', properties: { approve: { type: 'boolean', title: 'Approve this action', description: message } }, required: ['approve'] } });
-      return r.action === 'accept' && Boolean((r.content as { approve?: boolean } | undefined)?.approve);
-    } catch { return null; }
+  const run = async (fn: () => Promise<HandlerResult>): Promise<HandlerResult> => { try { return await fn(); } catch (err) { return fail(err); } };
+  /**
+   * Human-in-the-loop via multi-round-trip (MRTR): the first call returns an `input_required` result asking the user
+   * to approve; the client (or, on a 2025-era connection, the SDK's legacy shim) collects the answer and retries the
+   * same tool call carrying `inputResponses`. One path serves both eras — no bespoke confirm:true round-trip.
+   * Returns an InputRequiredResult when it still needs to ask, or a boolean once the user has answered.
+   */
+  const askApproval = (key: string, message: string, extra: Extra): InputRequiredResult | boolean => {
+    const view = inputResponse(extra.inputResponses, key);
+    if (view.kind === 'missing') {
+      return inputRequired({
+        inputRequests: {
+          [key]: inputRequired.elicit({
+            message,
+            requestedSchema: { type: 'object', properties: { approve: { type: 'boolean', title: 'Approve this action', description: message } }, required: ['approve'] },
+          }),
+        },
+      });
+    }
+    return view.kind === 'elicit' && view.action === 'accept' && Boolean((view.content as { approve?: boolean } | undefined)?.approve);
   };
-  type Extra = { signal?: AbortSignal; _meta?: { progressToken?: string | number }; sendNotification?: (n: { method: 'notifications/progress'; params: { progressToken: string | number; progress: number; total?: number; message?: string } }) => Promise<void> };
+  type Extra = { signal?: AbortSignal; _meta?: { progressToken?: string | number }; inputResponses?: Record<string, unknown>; sendNotification?: (n: { method: 'notifications/progress'; params: { progressToken: string | number; progress: number; total?: number; message?: string } }) => Promise<void> };
+  // v2 ServerContext carries request state under `mcpReq` (signal, _meta, inputResponses, notify) — lift the pieces we use.
+  const ctxExtra = (ctx: unknown): Extra => {
+    const m = (ctx as { mcpReq?: { signal?: AbortSignal; _meta?: { progressToken?: string | number }; inputResponses?: Record<string, unknown>; notify?: (n: unknown) => Promise<void> } }).mcpReq ?? {};
+    return { signal: m.signal, _meta: m._meta, inputResponses: m.inputResponses, sendNotification: m.notify ? (n) => m.notify!(n) : undefined };
+  };
   /** Run a long site command with progress heartbeats (when the host passed a progressToken) and cancellation. */
-  const runSiteWithProgress = async (site: string, command: string, args: Record<string, unknown>, extra: Extra): Promise<ToolResult> => {
-    const { confirm, ...rest } = args as { confirm?: boolean } & Record<string, unknown>;
+  const runSiteWithProgress = async (site: string, command: string, args: Record<string, unknown>, extra: Extra): Promise<HandlerResult> => {
+    const rest = args as Record<string, unknown>;
     const cmd = await rt.registry.resolve(site, command);
-    if (cmd.access === 'write') {
-      const d = rt.policy.checkWrite(`${site}/${command}`, Boolean(confirm));
-      if (!d.allowed) {
-        const approved = await elicitApproval(`${site} ${command}`, `Run ${site}/${command} with ${JSON.stringify(rest).slice(0, 300)}? This changes the user's account or sends data.`);
-        if (approved === null) throw new ActionError(d.code, d.message, d.hint, { retryable: d.retryable });
-        if (!approved) throw new ActionError('user_declined', `The user declined ${site}/${command}`, undefined, { retryable: false });
-      }
+    if (cmd.access === 'write' && rt.policy.confirmWrites) {
+      const decision = askApproval('approve', `Run ${site}/${command} with ${JSON.stringify(rest).slice(0, 300)}? This changes the user's account or sends data.`, extra);
+      if (typeof decision !== 'boolean') return decision; // still asking: hand the input_required result back to the client/shim
+      if (!decision) throw new ActionError('user_declined', `The user declined ${site}/${command}`, undefined, { retryable: false });
     }
     const token = extra._meta?.progressToken;
     const started = Date.now();
@@ -168,20 +183,29 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   }, async ({ tab, ...o }) => run(async () => { const t = await tabOf(tab); const { data, images } = stripImage({ tab: t.id, ...(await t.observe(o)) }); return ok(data, images); }));
   server.registerTool('tab_act', { outputSchema: OUT_TAB,
     title: 'Act on a tab', description: 'Perform one action: click, dblclick, hover, focus, fill (replace), type (append), press (key), select (option label/value), check/uncheck, upload (files), drag (to), scroll (target or direction), back/forward/reload. Waits for actionability, dispatches real input, returns matches_n/match_level and branchable error codes.',
-    inputSchema: { tab: z.string().optional(), action: z.enum(['click', 'dblclick', 'hover', 'focus', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'upload', 'drag', 'scroll', 'back', 'forward', 'reload']), target: targetSchema.optional(), value: z.string().optional().describe('text for fill/type, key for press, option for select'), files: z.array(z.string()).optional(), to: targetSchema.optional(), direction: z.enum(['up', 'down', 'left', 'right']).optional(), amount: z.number().optional(), settleMs: z.number().int().min(0).max(10_000).default(600).describe('wait for the DOM to settle after the action'), confirm: z.boolean().optional().describe('set true after the user approved a consequential action (needs_confirmation)'), observe: z.boolean().default(false).describe('also return the page state after the action') },
+    inputSchema: { tab: z.string().optional(), action: z.enum(['click', 'dblclick', 'hover', 'focus', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'upload', 'drag', 'scroll', 'back', 'forward', 'reload']), target: targetSchema.optional(), value: z.string().optional().describe('text for fill/type, key for press, option for select'), files: z.array(z.string()).optional(), to: targetSchema.optional(), direction: z.enum(['up', 'down', 'left', 'right']).optional(), amount: z.number().optional(), settleMs: z.number().int().min(0).max(10_000).default(600).describe('wait for the DOM to settle after the action'), observe: z.boolean().default(false).describe('also return the page state after the action') },
     annotations: { destructiveHint: true, openWorldHint: true },
-  }, async ({ tab, action, target, to, observe, ...rest }) => run(async () => {
-    const t = await tabOf(tab);
-    const r = await t.act({ action: action as ActAction, target: pickTarget(target), to: pickTarget(to), ...rest });
-    if (!observe) return ok({ tab: t.id, ...r });
-    const { data, images } = stripImage({ tab: t.id, ...r, after: await t.observe() });
-    return ok(data, images);
-  }));
+  }, async ({ tab, action, target, to, observe, ...rest }, extra) => {
+    const picked = pickTarget(target);
+    // Consequential clicks/presses ask the user to approve first via MRTR; approval obtained here satisfies the object-model gate.
+    if (rt.policy.confirmWrites && consequentialAct(action, picked)) {
+      const decision = askApproval('approve', `Confirm this action: ${action} ${describeTarget(picked)}? It may submit, purchase, delete or send data.`, ctxExtra(extra));
+      if (typeof decision !== 'boolean') return decision;
+      if (!decision) return fail(new ActionError('user_declined', `The user declined ${action} ${describeTarget(picked)}`, undefined, { retryable: false }));
+    }
+    return run(async () => {
+      const t = await tabOf(tab);
+      const r = await t.act({ action: action as ActAction, target: picked, to: pickTarget(to), confirm: true, ...rest });
+      if (!observe) return ok({ tab: t.id, ...r });
+      const { data, images } = stripImage({ tab: t.id, ...r, after: await t.observe() });
+      return ok(data, images);
+    });
+  });
   server.registerTool('tab_expect', { outputSchema: OUT_TAB, title: 'Expect', description: 'Assert what the page must show now: text / notText / url / title / selector / ref (with visible:false to require absence). Polls up to timeout seconds; fails with expectation_failed listing the failed checks and the current state. Recorded so tools_compile turns it into a checkpoint of the frozen flow.', inputSchema: { tab: z.string().optional(), text: z.string().optional(), notText: z.string().optional(), url: z.string().optional(), title: z.string().optional(), selector: z.string().optional(), ref: z.string().optional(), visible: z.boolean().optional(), timeout: z.number().default(5) } }, async ({ tab, timeout, ...what }) => run(async () => { const t = await tabOf(tab); return ok({ tab: t.id, ...(await t.expect(what, { timeoutMs: timeout * 1000 })) }); }));
 
   // ── sites ──
   server.registerTool('sites_search', { outputSchema: OUT_SEARCH, title: 'Search sites & commands', description: 'Find site commands by keyword or domain across the adapter corpus (160+ sites). Then site_run a command directly, or sites.enable(site) in js to get typed tools.', inputSchema: { query: z.string(), limit: z.number().int().max(100).default(20) }, annotations: { readOnlyHint: true } }, async ({ query, limit }) => run(async () => ok({ results: api.sites.search(query, limit) })));
-  server.registerTool('site_run', { title: 'Run a site command', description: 'Run any site command without enabling it as a tool (args as an object; see sites_search for names). Write commands may return needs_confirmation → re-call with args.confirm:true after the user approves.', inputSchema: { site: z.string(), command: z.string(), args: z.record(z.string(), z.unknown()).default({}) }, annotations: { openWorldHint: true } }, async ({ site, command, args }, extra) => run(() => runSiteWithProgress(site, command, args, extra as unknown as Extra)));
+  server.registerTool('site_run', { title: 'Run a site command', description: 'Run any site command without enabling it as a tool (args as an object; see sites_search for names). Write commands ask the user to approve first (the client shows an approval prompt); no confirm flag needed.', inputSchema: { site: z.string(), command: z.string(), args: z.record(z.string(), z.unknown()).default({}) }, annotations: { openWorldHint: true } }, async ({ site, command, args }, extra) => run(() => runSiteWithProgress(site, command, args, ctxExtra(extra))));
 
   // ── capabilities ──
 
@@ -231,10 +255,10 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
         const reg = server.registerTool(name, {
           title: `${site} ${cmd.name}`,
           description: `${cmd.description}${cmd.domain ? ` (${cmd.domain})` : ''} [${cmd.access}, ${String(cmd.strategy ?? 'public')}]${cmd.columns ? ` → columns: ${cmd.columns.join(', ')}` : ''}`,
-          inputSchema: argsToShape(cmd.args, { timeout: z.number().optional().describe('seconds'), ...(cmd.access === 'write' ? { confirm: z.boolean().optional().describe('set true after the user approved this write action') } : {}) }),
+          inputSchema: argsToShape(cmd.args, { timeout: z.number().optional().describe('seconds') }),
           annotations: { readOnlyHint: cmd.access === 'read', destructiveHint: cmd.access === 'write', openWorldHint: true },
           ...(cmd.domain ? { icons: [{ src: `https://${cmd.domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '')}/favicon.ico` }] } : {}),
-        }, async (args, extra) => run(() => runSiteWithProgress(site, cmd.name, args as Record<string, unknown>, extra as unknown as Extra)));
+        }, async (args, extra) => run(() => runSiteWithProgress(site, cmd.name, args as Record<string, unknown>, ctxExtra(extra))));
         siteTools.set(name, reg);
       }
     }

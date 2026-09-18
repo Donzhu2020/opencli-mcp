@@ -1,13 +1,13 @@
 /**
  * `opencli-mcp setup` — the whole first-run in one command, for a human at a terminal:
  *   1. install: Native Messaging host manifest(s) + the stable extension key
- *   2. print the one MCP configuration every client accepts (stdio command, or the HTTP endpoint for remote agents)
+ *   2. register with every MCP client that has a CLI for it (Claude Code, Codex) and print the standard configuration
+ *      for the rest (Cursor, Claude Desktop, …) — the runtime itself knows no client, MCP is the contract
  *   3. open chrome://extensions and put the unpacked-extension path on the clipboard
  *   4. wait for the extension to connect (it spawns the host) and report green
  * Everything it does is what `install` / `doctor` do; it only strings them together and talks in sentences instead of
- * JSON. The runtime knows no client: MCP is the contract, so the user gets the standard snippet and pastes it wherever
- * their client keeps it. Chrome cannot load an unpacked extension for us: that one click stays with the user until the
- * extension is on the Chrome Web Store.
+ * JSON. Chrome cannot load an unpacked extension for us: that one click stays with the user until the extension is on
+ * the Chrome Web Store.
  */
 import { execFileSync, spawn } from 'node:child_process';
 import { install, projectRoot } from './install.js';
@@ -26,6 +26,22 @@ function which(cmd: string): string | null {
 function stdioCommand(main: string): { command: string; args: string[] } {
   const bin = which('opencli-mcp');
   return bin ? { command: 'opencli-mcp', args: [] } : { command: 'node', args: [main] };
+}
+
+/** MCP clients that can be registered from the command line; everyone else gets the printed configuration. */
+const CLIENTS: Array<{ name: string; bin: string; get: string[]; add: (c: { command: string; args: string[] }) => string[] }> = [
+  { name: 'Claude Code', bin: 'claude', get: ['mcp', 'get', 'opencli-mcp'], add: (c) => ['mcp', 'add', '-s', 'user', 'opencli-mcp', '--', c.command, ...c.args] },
+  { name: 'Codex', bin: 'codex', get: ['mcp', 'get', 'opencli-mcp'], add: (c) => ['mcp', 'add', 'opencli-mcp', '--', c.command, ...c.args] },
+];
+function registerClients(c: { command: string; args: string[] }): string[] {
+  const out: string[] = [];
+  for (const cl of CLIENTS) {
+    if (!which(cl.bin)) continue;
+    try { execFileSync(cl.bin, cl.get, { stdio: 'ignore' }); out.push(`${cl.name}: already registered`); continue; } catch { /* not yet */ }
+    try { execFileSync(cl.bin, cl.add(c), { stdio: 'ignore' }); out.push(`${cl.name}: registered (restart it to see the tools)`); }
+    catch { out.push(`${cl.name}: registration failed — run: ${cl.bin} ${cl.add(c).join(' ')}`); }
+  }
+  return out;
 }
 
 function copyToClipboard(text: string): boolean {
@@ -54,8 +70,9 @@ export async function setup(opts: { waitMs?: number; noOpen?: boolean } = {}): P
 
   const c = stdioCommand(main);
   const port = readConfig().port ?? DEFAULT_PORT;
-  say('2/4  Add opencli-mcp to your MCP client (any client; the runtime does not care which):');
-  say(`       stdio  → ${JSON.stringify({ mcpServers: { 'opencli-mcp': { command: c.command, args: c.args } } })}`);
+  const registered = registerClients(c);
+  say(`2/4  MCP clients: ${registered.length ? registered.join('; ') : 'no CLI-registrable client found'}.`);
+  say(`       Any other client (Cursor, Claude Desktop, …): ${JSON.stringify({ mcpServers: { 'opencli-mcp': { command: c.command, args: c.args } } })}`);
   say(`       http   → http://127.0.0.1:${port}/mcp  with header  Authorization: Bearer <contents of ${TOKEN_FILE}>  (remote agents: put it behind an authenticated tunnel)`);
 
   const copied = copyToClipboard(r.extensionDir);

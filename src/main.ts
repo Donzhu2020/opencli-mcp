@@ -76,7 +76,7 @@ async function main(): Promise<void> {
     }
     case 'version': case '--version': case '-V': process.stdout.write(`${VERSION}\n`); return;
     default:
-      process.stderr.write(`Unknown command: ${cmd}\n${['stdio', 'host --native', 'serve [--port N] [--cdp ws://…] [--no-auth]', 'install [--browsers chrome,edge] [--user-data-dir /path/to/profile]', 'uninstall', 'doctor', 'extension-path', 'version'].map((c) => `  opencli-mcp ${c}`).join('\n')}\n`);
+      process.stderr.write(`Unknown command: ${cmd}\n${['stdio', 'host --native', 'serve [--port N] [--no-auth]', 'install [--browsers chrome,edge] [--user-data-dir /path/to/profile]', 'uninstall', 'doctor', 'extension-path', 'version'].map((c) => `  opencli-mcp ${c}`).join('\n')}\n`);
       process.exitCode = 2;
   }
 }

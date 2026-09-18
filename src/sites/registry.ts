@@ -8,7 +8,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { registerCommand, getRegistry, fullName, type CliCommand } from '@jackwener/opencli/registry';
-import { opencliClisDir, opencliManifestPath } from '../lib/opencli.js';
+import { opencliClisDir, opencliManifestPath, importDist } from '../lib/opencli.js';
 
 export interface ManifestEntry {
   site: string; name: string; aliases?: string[]; description: string; access: 'read' | 'write';
@@ -35,7 +35,15 @@ export class SiteRegistry {
   private readonly sourceOf = new Map<string, SourceKind>();
   loadedAt: number | null = null;
 
+  /** Sites that only ever ran through a direct CDP connection to an Electron desktop app — this runtime drives Chrome, so they are never registered. */
+  private excludedSites = new Set<string>();
+
   async load(): Promise<void> {
+    try {
+      const mod = await importDist('electron-apps.js') as { getAllElectronApps?: () => Record<string, unknown>; builtinApps?: Record<string, unknown> };
+      const apps = mod.getAllElectronApps?.() ?? mod.builtinApps ?? {};
+      this.excludedSites = new Set(Object.keys(apps));
+    } catch { this.excludedSites = new Set(); }
     this.registerManifest(opencliManifestPath, opencliClisDir, 'builtin');
     const userManifest = path.join(USER_OPENCLI_CLIS, 'adapter-manifest.json');
     if (fs.existsSync(userManifest)) this.registerManifest(userManifest, USER_OPENCLI_CLIS, 'user');
@@ -47,6 +55,7 @@ export class SiteRegistry {
     if (!fs.existsSync(manifestPath)) return;
     const entries = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as ManifestEntry[];
     for (const e of entries) {
+      if (this.excludedSites.has(e.site)) continue;
       const modulePath = e.modulePath ? path.join(dir, e.modulePath) : undefined;
       const raw = {
         ...e,

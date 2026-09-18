@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#1d4ed8"/>
+    </linearGradient>
+  </defs>
+  <!-- rounded-square app tile in the product's cursor blue -->
+  <rect x="8" y="8" width="112" height="112" rx="26" fill="url(#bg)"/>
+  <!-- a browser: title bar with three dots over a viewport -->
+  <rect x="30" y="30" width="68" height="54" rx="7" fill="#ffffff"/>
+  <rect x="30" y="30" width="68" height="15" rx="7" fill="#c7d2fe"/>
+  <rect x="30" y="40" width="68" height="5" fill="#c7d2fe"/>
+  <circle cx="39" cy="37.5" r="2.4" fill="#1d4ed8"/>
+  <circle cx="47" cy="37.5" r="2.4" fill="#1d4ed8"/>
+  <circle cx="55" cy="37.5" r="2.4" fill="#1d4ed8"/>
+  <!-- the automation cursor, same arrow as the overlay, driving the page -->
+  <path d="M60 56 L60 92 L70 82 L77 97 L84 93 L77 79 L91 79 Z" fill="#111827" stroke="#ffffff" stroke-width="4" stroke-linejoin="round"/>
+</svg>

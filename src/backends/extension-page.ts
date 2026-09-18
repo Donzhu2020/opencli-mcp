@@ -188,9 +188,20 @@ function definePageClass(lib: Lib): any {
       }
     }
     async engineEvaluate(js: string, timeoutMs?: number): Promise<unknown> { return (await this.send('exec', { code: js, world: 'engine', ...(timeoutMs && { timeoutMs }) })).data; }
-    async history(op: 'reload' | 'back' | 'forward'): Promise<{ url?: string; title?: string; timedOut?: boolean }> { return (await this.send('history', { historyOp: op, timeoutMs: 20_000 })).data as { url?: string; title?: string; timedOut?: boolean }; }
+    /** Live URL first; OpenCLI's sticky cache (a one-command-per-process habit) is only the fallback while a navigation is in flight. */
+    async getCurrentUrl(): Promise<string | null> {
+      try { const u = await this.evaluate<string>('location.href'); if (typeof u === 'string' && u) { this._lastUrl = u; return u; } } catch { /* mid-navigation */ }
+      return this._lastUrl ?? null;
+    }
+    async history(op: 'reload' | 'back' | 'forward'): Promise<{ url?: string; title?: string; timedOut?: boolean }> { const r = (await this.send('history', { historyOp: op, timeoutMs: 20_000 })).data as { url?: string; title?: string; timedOut?: boolean }; this._lastUrl = r.url ?? null; return r; }
     async dialog(op: 'get' | 'accept' | 'dismiss', text?: string): Promise<{ dialog: DialogInfo | null; handled?: string }> { return (await this.send('dialog', { dialogOp: op, ...(text !== undefined && { text }), timeoutMs: 10_000 })).data as { dialog: DialogInfo | null; handled?: string }; }
-    async act(spec: ActSpec): Promise<ActResult> { const budget = spec.timeoutMs ?? 3000; return (await this.send('act', { act: { ...spec, timeoutMs: budget }, timeoutMs: budget + 8000 })).data as ActResult; }
+    async act(spec: ActSpec): Promise<ActResult> {
+      const budget = spec.timeoutMs ?? 3000;
+      const r = (await this.send('act', { act: { ...spec, timeoutMs: budget }, timeoutMs: budget + 8000 })).data as ActResult;
+      // an action may navigate (link click, Enter in a form): the cached URL from goto is no longer trustworthy
+      if (r.navigated) this._lastUrl = r.url ?? null; else if (spec.kind === 'click' || spec.kind === 'dblclick' || spec.kind === 'press') this._lastUrl = null;
+      return r;
+    }
     async setVisibility(visible: boolean): Promise<void> { await this.bridge.send('visibility', { ...this.sessionOpts(), visible }); }
     async getVisibility(): Promise<boolean> { const r = await this.bridge.send('visibility', { ...this.sessionOpts() }); return Boolean((r.data as { visible?: boolean } | undefined)?.visible); }
   };

@@ -127,10 +127,10 @@ async function handleCommand(cmd: Command): Promise<Result> {
         const tabId = await sessions.resolveTab(s, cmd.page);
         const op = cmd.historyOp ?? 'reload';
         if (!executor.hasActiveNetworkCapture(tabId)) await executor.detach(tabId);
-        if (op === 'reload') await chrome.tabs.reload(tabId);
-        else if (op === 'back') await chrome.tabs.goBack(tabId);
-        else await chrome.tabs.goForward(tabId);
-        await new Promise((r) => setTimeout(r, 150)); // let the navigation start before polling status
+        // fire, do not await: with a debugger attached the reload/goBack promise can resolve only after the navigation, or never
+        const trigger = op === 'reload' ? chrome.tabs.reload(tabId) : op === 'back' ? chrome.tabs.goBack(tabId) : chrome.tabs.goForward(tabId);
+        trigger.catch((e) => console.warn(`[opencli-mcp] ${op} trigger: ${e instanceof Error ? e.message : String(e)}`));
+        await Promise.race([trigger, new Promise((r) => setTimeout(r, 300))]); // let the navigation start before polling status
         const t = await waitForLoad(tabId, 15_000);
         const lease = s.leases.get(tabId); if (lease) { lease.url = t.url; lease.title = t.title; }
         return pageScoped(cmd.id, tabId, { op, url: t.url, title: t.title, timedOut: t.status !== 'complete' });

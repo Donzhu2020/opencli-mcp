@@ -238,6 +238,15 @@ async function handleTabs(cmd: Command, s: Session): Promise<Result> {
       if (cmd.url && !isSafeNavigationUrl(cmd.url)) return { id: cmd.id, ok: false, error: 'Blocked URL scheme', errorCode: 'invalid_url' };
       const created = await sessions.createTab(s, cmd.url); // waits for the initial load when a URL is given
       const t = await chrome.tabs.get(created.tabId).catch(() => created.tab);
+      if (cmd.url) {
+        const detail = !t.url ? `did not commit (status ${t.status})` : await isErrorDocument(created.tabId).then((u) => (u ? `the browser shows its error page (${u})` : null));
+        if (detail) {
+          // do not hand the agent a dead tab: release it and report the failure the same way navigate does
+          s.leases.delete(created.tabId); if (s.preferredTabId === created.tabId) s.preferredTabId = null;
+          await chrome.tabs.remove(created.tabId).catch(() => {});
+          return notLoaded(cmd.id, cmd.url, detail);
+        }
+      }
       return { id: cmd.id, ok: true, page: created.page, data: { url: t.url, title: t.title } };
     }
     case 'close': {

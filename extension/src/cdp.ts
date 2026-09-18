@@ -69,6 +69,26 @@ const networkCaptures = new Map<number, NetworkCaptureState>();
 export interface PendingDialog { type: 'alert' | 'confirm' | 'prompt' | 'beforeunload'; message: string; defaultPrompt?: string; url?: string; openedAt: number }
 const dialogs = new Map<number, PendingDialog>();
 const dialogWaiters = new Map<number, Set<(d: PendingDialog) => void>>();
+/**
+ * Answering a dialog on the tab's root session does not work in practice: the input command whose handler opened the
+ * dialog is still in flight and chrome.debugger queues later commands behind it (~5s until Chrome gives up on the ack).
+ * A second, flat child session on the same page target is independent, so the answer goes through immediately.
+ */
+const dialogSessions = new Map<number, string>();
+
+async function ensureDialogSession(tabId: number): Promise<string | null> {
+  const cached = dialogSessions.get(tabId);
+  if (cached) return cached;
+  try {
+    const { targetInfo } = await sendDebuggerCommand({ tabId }, 'Target.getTargetInfo', undefined, 3_000) as { targetInfo: { targetId: string } };
+    const { sessionId } = await sendDebuggerCommand({ tabId }, 'Target.attachToTarget', { targetId: targetInfo.targetId, flatten: true }, 3_000) as { sessionId: string };
+    dialogSessions.set(tabId, sessionId);
+    return sessionId;
+  } catch (e) {
+    console.warn(`[opencli-mcp] no auxiliary session for tab ${tabId}: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  }
+}
 
 export function getDialog(tabId: number): PendingDialog | null { return dialogs.get(tabId) ?? null; }
 
@@ -83,7 +103,15 @@ function dialogOpenError(tabId: number, d: PendingDialog, method: string): Error
 
 export async function handleDialog(tabId: number, accept: boolean, promptText?: string): Promise<PendingDialog | null> {
   const d = dialogs.get(tabId) ?? null;
-  await sendDebuggerCommand({ tabId }, 'Page.handleJavaScriptDialog', { accept, ...(promptText !== undefined && { promptText }) }, 5_000);
+  const sessionId = dialogSessions.get(tabId) ?? null;
+  const target = sessionId ? ({ tabId, sessionId } as chrome.debugger.Debuggee) : { tabId };
+  try {
+    await sendDebuggerCommand(target, 'Page.handleJavaScriptDialog', { accept, ...(promptText !== undefined && { promptText }) }, 5_000);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/No dialog is showing/i.test(msg)) { dialogs.delete(tabId); throw Object.assign(new Error('the dialog is no longer showing'), { code: 'no_dialog', hint: 'It was closed by the page or the user; continue normally.' }); }
+    throw e;
+  }
   dialogs.delete(tabId);
   return d;
 }
@@ -254,6 +282,10 @@ export async function ensureAttached(tabId: number, aggressiveRetry: boolean = f
   }
   // Page events carry javascriptDialogOpening/Closed (dialog tracking) — must be enabled per attach
   await sendDebuggerCommand({ tabId }, 'Page.enable').catch(() => {});
+  // like the ChatGPT plugin: pages gate on document.hasFocus() even when the tab is not the active one
+  await sendDebuggerCommand({ tabId }, 'Emulation.setFocusEmulationEnabled', { enabled: true }, 3_000).catch(() => {});
+  // pre-open the auxiliary session now: once a dialog blocks the root session it cannot be created any more
+  await ensureDialogSession(tabId);
 
   // Restore network capture that the re-attach (detach + onDetach) tore down.
   // The detach always disables the CDP Network domain, so re-enable it and put
@@ -863,7 +895,7 @@ export function registerListeners(): void {
     else if (method === 'Page.javascriptDialogClosed') noteDialog(source.tabId, null);
   });
   chrome.tabs.onRemoved.addListener((tabId) => {
-    dialogs.delete(tabId); dialogWaiters.delete(tabId);
+    dialogs.delete(tabId); dialogWaiters.delete(tabId); dialogSessions.delete(tabId);
     attached.delete(tabId);
     networkCaptures.delete(tabId);
     tabFrameContexts.delete(tabId);
@@ -871,7 +903,7 @@ export function registerListeners(): void {
   });
   chrome.debugger.onDetach.addListener((source) => {
     if (source.tabId) {
-      dialogs.delete(source.tabId);
+      dialogs.delete(source.tabId); dialogSessions.delete(source.tabId);
       attached.delete(source.tabId);
       networkCaptures.delete(source.tabId);
       tabFrameContexts.delete(source.tabId);

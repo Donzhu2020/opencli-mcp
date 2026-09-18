@@ -316,7 +316,10 @@ export async function performAct(io: ActIO, spec: ActSpec): Promise<ActResult> {
   }
   if (navWait) { const nav: { navigated: boolean; url?: string } = await navWait.catch(() => ({ navigated: false })); if (nav.navigated) Object.assign(base, { navigated: true, url: nav.url }); }
   const settleMs = spec.settleMs ?? 600;
+  const actionDone = Date.now();
   if (settleMs > 0 && !(base as { navigated?: boolean }).navigated) { try { await io.evaluate(settleJs(settleMs, Math.min(200, settleMs)), settleMs + 1500); } catch { /* navigation in flight */ } }
+  const settled = Date.now();
+  Object.assign(base, { elapsedMs: settled - started, timings: { resolveMs: base.waitedMs, actionMs: actionDone - started - base.waitedMs, settleMs: settled - actionDone } });
   try { await io.evaluate(`(() => { const el = ${ACT_EL}; if (el) el.removeAttribute('data-opencli-act'); })()`, 1000); } catch { /* page changed */ }
   return base;
 }
@@ -325,12 +328,13 @@ export async function performAct(io: ActIO, spec: ActSpec): Promise<ActResult> {
 export function ariaSnapshotJs(): string {
   // Credential fields (password/otp/email/username/phone by type, autocomplete, id, name, placeholder, label, title — the
   // ChatGPT plugin's rule) never expose their value to the model: the rendered line keeps the field, drops the text.
-  return `(() => {
+  // String.raw: this is page code, so regex escapes and '\n' must reach the page verbatim.
+  return String.raw`(() => {
     const injected = globalThis.${ENGINE_GLOBAL};
     const text = injected.ariaSnapshot(document.body, { mode: 'ai' });
     const info = injected._lastAriaSnapshotForQuery && injected._lastAriaSnapshotForQuery.info;
     if (!info) return text;
-    const cred = /user[-_ ]?name|e[-_ ]?mail|one[-_ ]?time[-_ ]?code|password|passcode|passwd|\\botp\\b|\\b(?:2fa|mfa)\\b|phone|mobile|\\btel\\b|cvc|cvv|card[-_ ]?number|ssn/i;
+    const cred = /user[-_ ]?name|e[-_ ]?mail|one[-_ ]?time[-_ ]?code|password|passcode|passwd|\botp\b|\b(?:2fa|mfa)\b|phone|mobile|\btel\b|cvc|cvv|card[-_ ]?number|ssn/i;
     const isCred = (el) => { if (!el || !(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return false; if (el.type === 'password') return true; const hay = ['type', 'autocomplete', 'id', 'name', 'placeholder', 'aria-label', 'title'].map((a) => el.getAttribute(a) || '').join(' '); return cred.test(hay); };
     return text.split('\n').map((line) => {
       const m = /\[ref=(e\d+)\](:.*)?$/.exec(line);

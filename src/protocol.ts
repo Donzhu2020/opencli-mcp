@@ -111,7 +111,11 @@ export interface ActResult {
   method: 'cdp' | 'dom';
   hit: 'target' | 'ancestor' | 'other';
   tag: string;
+  /** ms spent resolving the target (visible/enabled/stable/hit-test) */
   waitedMs: number;
+  /** end-to-end ms and its breakdown: resolve → dispatch (input events + verification) → settle (DOM quiet wait) */
+  elapsedMs?: number;
+  timings?: { resolveMs: number; actionMs: number; settleMs: number };
   /** Playwright-generated selector for replay (tools_compile) */
   selector?: string;
   /** set when the action triggered a navigation that has now finished */

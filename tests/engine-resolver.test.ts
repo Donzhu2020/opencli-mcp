@@ -72,7 +72,7 @@ describe('frame probe (edge routing for cross-origin iframes)', () => {
     const doc = { querySelectorAll: (sel: string) => (sel === 'iframe,frame' ? [iframe] : []) };
     const ctx = vm.createContext({ [ENGINE_GLOBAL]: {}, document: doc });
     const r = vm.runInContext(frameProbeJs(0), ctx) as { found: boolean; sameOrigin: boolean; x: number; y: number };
-    expect(r).toMatchObject({ found: true, sameOrigin: false, x: 102, y: 203 });
+    expect(r).toMatchObject({ found: true, sameOrigin: false, x: 102, y: 203 }); // marked and measured regardless of origin
     expect(attrs.get(FRAME_MARK)).toBe('1');
     expect(vm.runInContext(frameProbeJs(3), ctx)).toEqual({ found: false });
   });
@@ -118,5 +118,17 @@ describe('find shares the act engine', () => {
     expect(r.selector).toBe('internal:attr=[placeholder="Nope"i]');
     expect(r.entries[0]).toMatchObject({ nth: 0, role: 'button', name: 'Click me', visible: true, selector: 'internal:role=button[name="Click me"i]' });
     expect(r.entries[1].visible).toBe(false);
+  });
+});
+
+describe('frame chains', () => {
+  it('normalizes frame steps outermost first, including Codex enter-frame chains', async () => {
+    const { frameSteps } = await import('../src/shared/engine.js');
+    expect(frameSteps(undefined)).toEqual([]);
+    expect(frameSteps('#outer')).toEqual(['#outer']);
+    expect(frameSteps(1)).toEqual([1]);
+    expect(frameSteps(['#outer', 0])).toEqual(['#outer', 0]);
+    expect(frameSteps('#outer >> iframe.card >> 2')).toEqual(['#outer', 'iframe.card', 2]);
+    expect(frameSteps('#outer >> internal:control=enter-frame >> #inner')).toEqual(['#outer', '#inner']);
   });
 });

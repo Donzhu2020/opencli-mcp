@@ -1,8 +1,9 @@
 /** Extension edge of the interaction engine: engine-world evaluation, CDP on the attached tab, cursor overlay, navigation wait. */
 import type { ActSpec, ActResult } from '../../src/protocol.js';
-import { performAct as run, ActError, frameProbeJs, FRAME_MARK } from '../../src/shared/engine';
+import type { FrameStep } from '../../src/protocol.js';
+import { performAct as run, ActError, frameProbeJs, frameSteps, FRAME_MARK } from '../../src/shared/engine';
 import * as executor from './cdp';
-import { evaluateInEngine, evaluateInFrameEngine, frameCall } from './world';
+import { evaluateInEngine, evaluateInWorld, frameCommand } from './world';
 
 export { ActError };
 
@@ -25,34 +26,44 @@ export function waitForNavigation(tabId: number, classifyMs: number, timeoutMs: 
 }
 
 /**
- * Cross-origin iframes live in another renderer: the same-origin path inside the resolver cannot reach them. Like the
- * plugin's enter-frame routing (targetForFrameOrAttach + DOM.getFrameOwner), map the marked <iframe> element to its
- * CDP frameId and run the engine in that frame's own target; input events still go to the tab, shifted by the iframe's box.
+ * Enter `target.frame` step by step, the way Codex chains `>> internal:control=enter-frame >>`: each step is resolved in
+ * the engine world of the frame reached so far (main → child → grandchild …), the marked <iframe> element is mapped to
+ * its CDP frameId with DOM.describeNode on that frame's own session, and the iframe's viewport offset accumulates.
+ * Same-origin, in-process cross-origin (data:/srcdoc) and out-of-process frames all route the same way.
  */
-async function routeFrame(tabId: number, frame: string | number, aggressive: boolean): Promise<{ frameId: string; offset: { x: number; y: number } } | null> {
-  const probe = await evaluateInEngine(tabId, frameProbeJs(frame), aggressive, 5_000) as { found: boolean; sameOrigin?: boolean; x?: number; y?: number; src?: string };
-  if (!probe.found) throw new ActError('frame_not_found', `no iframe matches ${JSON.stringify(frame)}`, 'Pass the css selector of the <iframe> or its 0-based index among iframes in the document.');
-  if (probe.sameOrigin) return null;
-  try {
-    const doc = await executor.sendDebuggerCommand({ tabId }, 'DOM.getDocument', { depth: 0 }) as { root: { nodeId: number } };
-    const q = await executor.sendDebuggerCommand({ tabId }, 'DOM.querySelector', { nodeId: doc.root.nodeId, selector: `[${FRAME_MARK}]` }) as { nodeId: number };
-    const { node } = await executor.sendDebuggerCommand({ tabId }, 'DOM.describeNode', { nodeId: q.nodeId }) as { node: { frameId?: string } };
-    if (!node.frameId) throw new ActError('frame_unreachable', 'the iframe element has no frame id', 'The frame may still be loading; observe and retry.');
-    return { frameId: node.frameId, offset: { x: probe.x ?? 0, y: probe.y ?? 0 } };
-  } finally {
-    await evaluateInEngine(tabId, `document.querySelectorAll('[${FRAME_MARK}]').forEach((n) => n.removeAttribute('${FRAME_MARK}'))`, aggressive, 2_000).catch(() => {});
+async function routeFrames(tabId: number, steps: FrameStep[], aggressive: boolean): Promise<{ frameId: string; offset: { x: number; y: number } } | null> {
+  if (!steps.length) return null;
+  let frameId: string | null = null;
+  const offset = { x: 0, y: 0 };
+  for (const [depth, step] of steps.entries()) {
+    const where = frameId === null ? 'the document' : `frame ${depth} (${steps[depth - 1]})`;
+    const probe = await evaluateInWorld(tabId, frameId, frameProbeJs(step), aggressive, 5_000) as { found: boolean; x?: number; y?: number };
+    if (!probe.found) throw new ActError('frame_not_found', `no iframe matches ${JSON.stringify(step)} in ${where}`, 'Pass the css selector of the <iframe> or its 0-based index among iframes in that frame; chain steps outermost first.');
+    const probedIn = frameId;
+    try {
+      const objectId = await evaluateInWorld(tabId, frameId, `document.querySelector('[${FRAME_MARK}]')`, aggressive, 5_000, false) as string | undefined;
+      if (!objectId) throw new ActError('frame_unreachable', `the iframe ${JSON.stringify(step)} vanished while routing`, 'Observe and retry.');
+      const { node } = await frameCommand(tabId, frameId, 'DOM.describeNode', { objectId }, aggressive, 5_000) as { node: { frameId?: string } };
+      await frameCommand(tabId, frameId, 'Runtime.releaseObject', { objectId }, aggressive, 2_000).catch(() => {});
+      if (!node.frameId) throw new ActError('frame_unreachable', `the iframe ${JSON.stringify(step)} has no frame id yet`, 'The frame may still be loading; observe and retry.');
+      offset.x += probe.x ?? 0; offset.y += probe.y ?? 0;
+      frameId = node.frameId;
+    } finally {
+      await evaluateInWorld(tabId, probedIn, `document.querySelectorAll('[${FRAME_MARK}]').forEach((n) => n.removeAttribute('${FRAME_MARK}'))`, aggressive, 2_000).catch(() => {});
+    }
   }
+  return frameId === null ? null : { frameId, offset };
 }
 
 export async function performAct(tabId: number, spec: ActSpec, opts: { aggressive: boolean; cursor?: (x: number, y: number) => Promise<unknown> }): Promise<ActResult> {
   await executor.ensureAttached(tabId, opts.aggressive);
-  const route = spec.target.frame !== undefined && !(typeof spec.target.x === 'number') ? await routeFrame(tabId, spec.target.frame, opts.aggressive) : null;
+  const route = typeof spec.target.x === 'number' ? null : await routeFrames(tabId, frameSteps(spec.target.frame), opts.aggressive);
   if (route) {
     const { frame: _frame, ...target } = spec.target;
     return run({
-      evaluate: (js, timeoutMs) => evaluateInFrameEngine(tabId, route.frameId, js, opts.aggressive, timeoutMs),
-      // DOM.* must address the frame's own target (node ids are per session); Input.* is dispatched on the tab and routed by Chrome
-      cdp: (method, params) => method.startsWith('DOM.') ? frameCall(tabId, route.frameId, method, params ?? {}, opts.aggressive) : executor.sendDebuggerCommand({ tabId }, method, params),
+      evaluate: (js, timeoutMs) => evaluateInWorld(tabId, route.frameId, js, opts.aggressive, timeoutMs),
+      // DOM.* must address the frame's own session (node ids are per session); Input.* is dispatched on the tab and routed by Chrome
+      cdp: (method, params) => method.startsWith('DOM.') ? frameCommand(tabId, route.frameId, method, params ?? {}, opts.aggressive) : executor.sendDebuggerCommand({ tabId }, method, params),
       cursor: opts.cursor,
       waitForNavigation: (classifyMs, timeoutMs) => waitForNavigation(tabId, classifyMs, timeoutMs),
       pointOffset: route.offset,

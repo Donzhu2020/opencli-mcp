@@ -15,9 +15,9 @@ import { discoverEndpoints, type DiscoverResult } from '../recon/discover.js';
 import { compileFromTrace, listDefinedTools, type ToolDefinition } from '../sites/define.js';
 import { buildInstructions, readDoc, type DocContext } from '../docs/manifest.js';
 import { ariaSnapshotJs, findJs, targetToSelector, fallbackSelector } from '../shared/engine.js';
-import type { DialogInfo } from '../protocol.js';
+import type { DialogInfo, FrameStep } from '../protocol.js';
 
-export type Target = ({ frame?: string | number }) & (
+export type Target = ({ frame?: FrameStep | FrameStep[] }) & (
   | { ref: number | string }
   | { selector: string; nth?: number }
   | { css: string; nth?: number }

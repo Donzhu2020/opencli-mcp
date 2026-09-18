@@ -5,7 +5,7 @@
  * check states (visible/enabled/editable) → scroll (three alignments) → wall-clock stable box → hit-test
  * (expectHitTarget) → cursor overlay → real CDP mouse/keyboard → parallel navigation wait → DOM settle.
  */
-import type { ActSpec, ActResult, ActTarget } from '../protocol.js';
+import type { ActSpec, ActResult, ActTarget, FrameStep } from '../protocol.js';
 
 export const ENGINE_GLOBAL = '__opencliInjected';
 
@@ -61,23 +61,9 @@ const ALIGNMENTS = [{ block: 'center', inline: 'center' }, { block: 'end', inlin
 export function resolveJs(selector: string, fallback: string | null, spec: ActSpec, alignment: { block: string; inline: string }): string {
   const strict = WRITE_KINDS.has(spec.kind);
   const states = spec.kind === 'hover' || spec.kind === 'focus' || spec.kind === 'scroll' ? ['visible'] : spec.kind === 'fill' || spec.kind === 'type' ? ['visible', 'enabled', 'editable'] : ['visible', 'enabled'];
-  const frame = spec.target.frame;
   return `(async () => {
-    let injected = globalThis.${ENGINE_GLOBAL};
-    let root = document; let offset = { x: 0, y: 0 };
-    const frameSpec = ${JSON.stringify(frame ?? null)};
-    if (frameSpec !== null) {
-      // enter a same-origin iframe the way the plugin's enter-frame does: locate the frame element, then run a fresh engine instance in its window
-      const frames = typeof frameSpec === 'number' ? [...document.querySelectorAll('iframe,frame')] : injected.querySelectorAll(injected.parseSelector(frameSpec), document);
-      const fe = typeof frameSpec === 'number' ? frames[frameSpec] : frames[0];
-      if (!fe) return { error: { code: 'frame_not_found', message: 'no iframe matches ' + String(frameSpec) } };
-      let fw = null; try { fw = fe.contentWindow; if (fw) fw.document; } catch { fw = null; }
-      if (!fw || !fw.document) return { error: { code: 'frame_cross_origin', message: 'the iframe is cross-origin and this backend cannot attach to its process', hint: 'The Chrome extension backend routes cross-origin frames to their own debugger target; the direct CDP backend does not.' } };
-      try { fe.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }); } catch {}
-      const fr = fe.getBoundingClientRect(); offset = { x: fr.left + fe.clientLeft, y: fr.top + fe.clientTop };
-      if (!fw.${ENGINE_GLOBAL}) fw.${ENGINE_GLOBAL} = new globalThis.${ENGINE_GLOBAL}Class(fw, { isUnderTest: false, sdkLanguage: 'javascript', frameSeq: 0, testIdAttributeName: 'data-testid', stableRafCount: 1, browserName: 'chromium', shouldPrependErrorPrefix: false, isUtilityWorld: true, customEngines: [] });
-      injected = fw.${ENGINE_GLOBAL}; root = fw.document;
-    }
+    const injected = globalThis.${ENGINE_GLOBAL};
+    const root = document;
     const strict = ${strict}; const states = ${JSON.stringify(states)}; const align = ${JSON.stringify(alignment)};
     const desc = (el) => { const r = el.getBoundingClientRect(); return { tag: el.tagName.toLowerCase(), role: el.getAttribute('role') || '', text: (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 80), ref: el.getAttribute('data-opencli-ref'), visible: injected.elementState(el, 'visible').matches === true, box: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) } }; };
     const locate = (sel) => { const parsed = injected.parseSelector(sel); return { parsed, matches: injected.querySelectorAll(parsed, root) }; };
@@ -102,14 +88,13 @@ export function resolveJs(selector: string, fallback: string | null, spec: ActSp
     const box = el.getBoundingClientRect();
     if (box.width <= 0 || box.height <= 0) return { error: { code: 'not_visible', message: 'element has no clickable box' }, retry: true };
     const lx = Math.max(0, box.left + box.width / 2), ly = Math.max(0, box.top + box.height / 2);
-    const x = lx + offset.x, y = ly + offset.y;
+    const x = lx, y = ly;
     if (x > innerWidth || y > innerHeight) return { error: { code: 'not_visible', message: 'element is outside the viewport' }, retry: true };
     const tag = el.tagName.toLowerCase();
     // Playwright's elementState throws for states that do not apply to the element (e.g. 'checked' on a text input); treat that as "not in this state"
     const state = (name) => { try { return injected.elementState(el, name).matches; } catch { return null; } };
     const checkable = tag === 'input' && (el.type === 'checkbox' || el.type === 'radio') || ['checkbox', 'radio', 'switch'].includes(el.getAttribute('role') || '');
     const hit = injected.expectHitTarget({ x: lx, y: ly }, el);
-    document.querySelectorAll('[data-opencli-act]').forEach((n) => n.removeAttribute('data-opencli-act'));
     root.querySelectorAll('[data-opencli-act]').forEach((n) => n.removeAttribute('data-opencli-act'));
     el.setAttribute('data-opencli-act', '1');
     let selectorForReplay = null; try { selectorForReplay = injected.generateSelector(el, { testIdAttributeName: 'data-testid' }).selector; } catch {}
@@ -117,8 +102,8 @@ export function resolveJs(selector: string, fallback: string | null, spec: ActSp
   })()`;
 }
 
-/** The element marked by the resolver — in the document or in any same-origin iframe entered. */
-const ACT_EL = `(document.querySelector('[data-opencli-act]') || [...document.querySelectorAll('iframe,frame')].map((f) => { try { return f.contentDocument && f.contentDocument.querySelector('[data-opencli-act]'); } catch { return null; } }).find(Boolean))`;
+/** The element marked by the resolver in the current world's document (frames are entered by routing the world, not in-page). */
+const ACT_EL = `document.querySelector('[data-opencli-act]')`;
 function settleJs(maxMs: number, quietMs: number): string {
   return `new Promise((res) => { const t0 = performance.now(); let last = performance.now(); const obs = new MutationObserver(() => { last = performance.now(); }); obs.observe(document, { subtree: true, childList: true, attributes: true, characterData: true }); const tick = () => { const now = performance.now(); if (now - last >= ${quietMs} || now - t0 >= ${maxMs}) { obs.disconnect(); res(Math.round(now - t0)); } else setTimeout(tick, 50); }; setTimeout(tick, 50); })`;
 }
@@ -154,6 +139,13 @@ export interface ActIO {
   pointOffset?: { x: number; y: number };
 }
 
+/** Normalize `target.frame` into ordered steps (outermost first). */
+export function frameSteps(frame: FrameStep | FrameStep[] | undefined): FrameStep[] {
+  if (frame === undefined) return [];
+  const list = Array.isArray(frame) ? frame : [frame];
+  return list.flatMap((f) => (typeof f === 'string' ? f.split(/\s*>>\s*(?:internal:control=enter-frame\s*>>\s*)?/).filter(Boolean).map((p) => (/^\d+$/.test(p) ? Number(p) : p)) : [f]));
+}
+
 /**
  * Query the same engine act uses (same selector compilation, same fallback, same visibility judgement) and describe
  * every match. Each entry carries a replayable `selector` (Playwright generateSelector) that act accepts as
@@ -187,9 +179,9 @@ export function findJs(selector: string, fallback: string | null, limit: number)
 export const FRAME_MARK = 'data-opencli-frame';
 
 /**
- * Main-world probe for `target.frame`: locate the iframe element and report whether the resolver can enter it
- * in-process (same-origin) or the edge must route to the frame's own target. Marks the element with FRAME_MARK
- * so the edge can map it to a CDP frameId (DOM.describeNode) without knowing its selector.
+ * Probe for one step of `target.frame`, run in the engine world of the frame being searched: locate the iframe element
+ * (css via the Playwright engine, or 0-based index), scroll it into view, mark it with FRAME_MARK so the edge can map
+ * it to a CDP frameId (DOM.describeNode on the marked element), and report its offset inside this frame's viewport.
  */
 export function frameProbeJs(frame: string | number): string {
   return `(() => {
@@ -200,11 +192,10 @@ export function frameProbeJs(frame: string | number): string {
     const fe = typeof spec === 'number' ? list[spec] : list[0];
     if (!fe) return { found: false };
     let sameOrigin = false; try { sameOrigin = Boolean(fe.contentWindow && fe.contentWindow.document); } catch { sameOrigin = false; }
-    if (sameOrigin) return { found: true, sameOrigin: true };
     try { fe.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }); } catch {}
     fe.setAttribute('${FRAME_MARK}', '1');
     const r = fe.getBoundingClientRect();
-    return { found: true, sameOrigin: false, x: r.left + fe.clientLeft, y: r.top + fe.clientTop, src: fe.src || '' };
+    return { found: true, sameOrigin, x: r.left + fe.clientLeft, y: r.top + fe.clientTop, src: fe.src || '' };
   })()`;
 }
 

@@ -34,10 +34,10 @@ async function ensureContext(tabId: number, aggressive: boolean): Promise<number
   return executionContextId;
 }
 
-async function evaluateIn(tabId: number, contextId: number, expression: string, timeoutMs?: number): Promise<unknown> {
-  const r = await executor.sendDebuggerCommand({ tabId }, 'Runtime.evaluate', { expression, contextId, awaitPromise: true, returnByValue: true, userGesture: true }, timeoutMs) as { result?: { value?: unknown }; exceptionDetails?: { exception?: { description?: string }; text?: string } };
+async function evaluateIn(tabId: number, contextId: number, expression: string, timeoutMs?: number, byValue = true): Promise<unknown> {
+  const r = await executor.sendDebuggerCommand({ tabId }, 'Runtime.evaluate', { expression, contextId, awaitPromise: true, returnByValue: byValue, userGesture: true }, timeoutMs) as { result?: { value?: unknown; objectId?: string }; exceptionDetails?: { exception?: { description?: string }; text?: string } };
   if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text ?? 'evaluate failed');
-  return r.result?.value;
+  return byValue ? r.result?.value : r.result?.objectId;
 }
 
 const frameHosts = new Map<string, 'target' | 'root'>();
@@ -66,10 +66,10 @@ async function ensureFrameContext(tabId: number, frameId: string, aggressive: bo
   return executionContextId;
 }
 
-async function evaluateInFrameCtx(tabId: number, frameId: string, contextId: number, expression: string, aggressive: boolean, timeoutMs?: number): Promise<unknown> {
-  const r = await frameCall(tabId, frameId, 'Runtime.evaluate', { expression, contextId, awaitPromise: true, returnByValue: true, userGesture: true }, aggressive, timeoutMs) as { result?: { value?: unknown }; exceptionDetails?: { exception?: { description?: string }; text?: string } };
+async function evaluateInFrameCtx(tabId: number, frameId: string, contextId: number, expression: string, aggressive: boolean, timeoutMs?: number, byValue = true): Promise<unknown> {
+  const r = await frameCall(tabId, frameId, 'Runtime.evaluate', { expression, contextId, awaitPromise: true, returnByValue: byValue, userGesture: true }, aggressive, timeoutMs) as { result?: { value?: unknown; objectId?: string }; exceptionDetails?: { exception?: { description?: string }; text?: string } };
   if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text ?? 'evaluate failed');
-  return r.result?.value;
+  return byValue ? r.result?.value : r.result?.objectId;
 }
 
 /** Evaluate in the engine world of an out-of-process iframe (its own debugger target), installing the engine on first use. */
@@ -80,6 +80,28 @@ export async function evaluateInFrameEngine(tabId: number, frameId: string, expr
     if (/Cannot find context|context was destroyed|engine_missing|not found|Inspected target navigated/i.test(msg)) { contexts.delete(key(tabId, frameId)); frameHosts.delete(key(tabId, frameId)); return run(); }
     throw err;
   }
+}
+
+/**
+ * Evaluate in the engine world of the main frame (frameId null) or of a child frame, by value or as a remote object id.
+ * The object id belongs to the session that owns the frame (root, or the OOPIF target) — pass the same frameId to
+ * `frameCommand` to use it with DOM.* there.
+ */
+export async function evaluateInWorld(tabId: number, frameId: string | null, expression: string, aggressive: boolean, timeoutMs?: number, byValue = true): Promise<unknown> {
+  const wrapped = `(() => { if (!globalThis.${ENGINE_GLOBAL}) throw new Error('engine_missing'); return (${expression}); })()`;
+  const run = async () => frameId === null
+    ? evaluateIn(tabId, await ensureContext(tabId, aggressive), wrapped, timeoutMs, byValue)
+    : evaluateInFrameCtx(tabId, frameId, await ensureFrameContext(tabId, frameId, aggressive), wrapped, aggressive, timeoutMs, byValue);
+  try { return await run(); } catch (err) {
+    const msg = (err as Error).message ?? '';
+    if (/Cannot find context|context was destroyed|engine_missing|not found|Inspected target navigated/i.test(msg)) { if (frameId === null) forgetTab(tabId); else { contexts.delete(key(tabId, frameId)); frameHosts.delete(key(tabId, frameId)); } return run(); }
+    throw err;
+  }
+}
+
+/** A CDP command on the session that owns the frame: root for the main frame and in-process frames, the OOPIF target otherwise. */
+export function frameCommand(tabId: number, frameId: string | null, method: string, params: Record<string, unknown>, aggressive: boolean, timeoutMs?: number): Promise<unknown> {
+  return frameId === null ? executor.sendDebuggerCommand({ tabId }, method, params, timeoutMs) : frameCall(tabId, frameId, method, params, aggressive, timeoutMs);
 }
 
 /** Evaluate in the engine world; installs the engine on first use and recovers from a destroyed context once. */

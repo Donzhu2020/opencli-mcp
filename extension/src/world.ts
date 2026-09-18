@@ -14,6 +14,7 @@ function key(tabId: number, frameId: string): string { return `${tabId}:${frameI
 
 export function forgetTab(tabId: number): void {
   for (const k of [...contexts.keys()]) if (k.startsWith(`${tabId}:`)) contexts.delete(k);
+  for (const k of [...frameHosts.keys()]) if (k.startsWith(`${tabId}:`)) frameHosts.delete(k);
 }
 
 async function mainFrameId(tabId: number): Promise<string> {
@@ -39,18 +40,34 @@ async function evaluateIn(tabId: number, contextId: number, expression: string, 
   return r.result?.value;
 }
 
+const frameHosts = new Map<string, 'target' | 'root'>();
+
+/**
+ * Send a command for a child frame: to the frame's own target when it is out-of-process, otherwise to the tab's root
+ * session (in-process cross-origin frames such as data:/sandboxed srcdoc/same-site have no target but accept
+ * Page.createIsolatedWorld and Runtime.evaluate by frameId/contextId there).
+ */
+export async function frameCall(tabId: number, frameId: string, method: string, params: Record<string, unknown>, aggressive: boolean, timeoutMs?: number): Promise<unknown> {
+  const k = key(tabId, frameId);
+  let host = frameHosts.get(k);
+  if (!host) { host = (await executor.hasFrameTarget(tabId, frameId, aggressive)) ? 'target' : 'root'; frameHosts.set(k, host); }
+  return host === 'target'
+    ? executor.sendCommandInFrameTarget(tabId, frameId, method, params, aggressive, timeoutMs)
+    : executor.sendDebuggerCommand({ tabId }, method, params, timeoutMs);
+}
+
 async function ensureFrameContext(tabId: number, frameId: string, aggressive: boolean): Promise<number> {
   const k = key(tabId, frameId);
   const cached = contexts.get(k);
   if (cached !== undefined) return cached;
-  const { executionContextId } = await executor.sendCommandInFrameTarget(tabId, frameId, 'Page.createIsolatedWorld', { frameId, worldName: WORLD_NAME, grantUniveralAccess: true }, aggressive) as { executionContextId: number };
+  const { executionContextId } = await frameCall(tabId, frameId, 'Page.createIsolatedWorld', { frameId, worldName: WORLD_NAME, grantUniveralAccess: true }, aggressive) as { executionContextId: number };
   contexts.set(k, executionContextId);
   await evaluateInFrameCtx(tabId, frameId, executionContextId, installEngineJs(INJECTED_SOURCE), aggressive, 15_000);
   return executionContextId;
 }
 
 async function evaluateInFrameCtx(tabId: number, frameId: string, contextId: number, expression: string, aggressive: boolean, timeoutMs?: number): Promise<unknown> {
-  const r = await executor.sendCommandInFrameTarget(tabId, frameId, 'Runtime.evaluate', { expression, contextId, awaitPromise: true, returnByValue: true, userGesture: true }, aggressive, timeoutMs) as { result?: { value?: unknown }; exceptionDetails?: { exception?: { description?: string }; text?: string } };
+  const r = await frameCall(tabId, frameId, 'Runtime.evaluate', { expression, contextId, awaitPromise: true, returnByValue: true, userGesture: true }, aggressive, timeoutMs) as { result?: { value?: unknown }; exceptionDetails?: { exception?: { description?: string }; text?: string } };
   if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text ?? 'evaluate failed');
   return r.result?.value;
 }
@@ -60,7 +77,7 @@ export async function evaluateInFrameEngine(tabId: number, frameId: string, expr
   const run = async () => { const ctx = await ensureFrameContext(tabId, frameId, aggressive); return evaluateInFrameCtx(tabId, frameId, ctx, `(() => { if (!globalThis.${ENGINE_GLOBAL}) throw new Error('engine_missing'); return (${expression}); })()`, aggressive, timeoutMs); };
   try { return await run(); } catch (err) {
     const msg = (err as Error).message ?? '';
-    if (/Cannot find context|context was destroyed|engine_missing|not found|Inspected target navigated/i.test(msg)) { contexts.delete(key(tabId, frameId)); return run(); }
+    if (/Cannot find context|context was destroyed|engine_missing|not found|Inspected target navigated/i.test(msg)) { contexts.delete(key(tabId, frameId)); frameHosts.delete(key(tabId, frameId)); return run(); }
     throw err;
   }
 }

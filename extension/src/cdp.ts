@@ -82,6 +82,8 @@ async function ensureDialogSession(tabId: number): Promise<string | null> {
   try {
     const { targetInfo } = await sendDebuggerCommand({ tabId }, 'Target.getTargetInfo', undefined, 3_000) as { targetInfo: { targetId: string } };
     const { sessionId } = await sendDebuggerCommand({ tabId }, 'Target.attachToTarget', { targetId: targetInfo.targetId, flatten: true }, 3_000) as { sessionId: string };
+    // Chromium hands a dialog only to sessions whose Page domain was enabled when it opened — enable now, not at answer time
+    await sendDebuggerCommand({ tabId, sessionId } as chrome.debugger.Debuggee, 'Page.enable', undefined, 3_000);
     dialogSessions.set(tabId, sessionId);
     return sessionId;
   } catch (e) {
@@ -109,7 +111,7 @@ export async function handleDialog(tabId: number, accept: boolean, promptText?: 
     await sendDebuggerCommand(target, 'Page.handleJavaScriptDialog', { accept, ...(promptText !== undefined && { promptText }) }, 5_000);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    if (/No dialog is showing/i.test(msg)) { dialogs.delete(tabId); throw Object.assign(new Error('the dialog is no longer showing'), { code: 'no_dialog', hint: 'It was closed by the page or the user; continue normally.' }); }
+    if (/No dialog is showing/i.test(msg)) throw Object.assign(new Error(sessionId ? 'the auxiliary session sees no dialog' : 'the dialog is no longer showing'), { code: 'no_dialog', hint: 'If dialog get still reports it, the answer session was attached after it opened; reload the extension and retry.' });
     throw e;
   }
   dialogs.delete(tabId);
@@ -664,6 +666,11 @@ async function resolveFrameTargetId(tabId: number, frameId: string, targetUrl?: 
     .map((target) => `${target.targetId || target.id || '?'} ${target.url || ''}`)
     .join('; ');
   throw new Error(`No iframe target found for frame ${frameId}${targetUrl ? ` (${targetUrl})` : ''}. Candidates: ${candidates || 'none'}`);
+}
+
+/** True when the frame renders in its own process (has an iframe debugger target); false for in-process cross-origin frames. */
+export async function hasFrameTarget(tabId: number, frameId: string, aggressiveRetry = false): Promise<boolean> {
+  try { await ensureFrameTarget(tabId, frameId, aggressiveRetry); return true; } catch { return false; }
 }
 
 export async function sendCommandInFrameTarget(

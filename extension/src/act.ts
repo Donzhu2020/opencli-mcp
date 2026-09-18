@@ -2,7 +2,7 @@
 import type { ActSpec, ActResult } from '../../src/protocol.js';
 import { performAct as run, ActError, frameProbeJs, FRAME_MARK } from '../../src/shared/engine';
 import * as executor from './cdp';
-import { evaluateInEngine, evaluateInFrameEngine } from './world';
+import { evaluateInEngine, evaluateInFrameEngine, frameCall } from './world';
 
 export { ActError };
 
@@ -37,7 +37,7 @@ async function routeFrame(tabId: number, frame: string | number, aggressive: boo
     const doc = await executor.sendDebuggerCommand({ tabId }, 'DOM.getDocument', { depth: 0 }) as { root: { nodeId: number } };
     const q = await executor.sendDebuggerCommand({ tabId }, 'DOM.querySelector', { nodeId: doc.root.nodeId, selector: `[${FRAME_MARK}]` }) as { nodeId: number };
     const { node } = await executor.sendDebuggerCommand({ tabId }, 'DOM.describeNode', { nodeId: q.nodeId }) as { node: { frameId?: string } };
-    if (!node.frameId) throw new Error('iframe element has no frameId');
+    if (!node.frameId) throw new ActError('frame_unreachable', 'the iframe element has no frame id', 'The frame may still be loading; observe and retry.');
     return { frameId: node.frameId, offset: { x: probe.x ?? 0, y: probe.y ?? 0 } };
   } finally {
     await evaluateInEngine(tabId, `document.querySelectorAll('[${FRAME_MARK}]').forEach((n) => n.removeAttribute('${FRAME_MARK}'))`, aggressive, 2_000).catch(() => {});
@@ -52,7 +52,7 @@ export async function performAct(tabId: number, spec: ActSpec, opts: { aggressiv
     return run({
       evaluate: (js, timeoutMs) => evaluateInFrameEngine(tabId, route.frameId, js, opts.aggressive, timeoutMs),
       // DOM.* must address the frame's own target (node ids are per session); Input.* is dispatched on the tab and routed by Chrome
-      cdp: (method, params) => method.startsWith('DOM.') ? executor.sendCommandInFrameTarget(tabId, route.frameId, method, params, opts.aggressive) : executor.sendDebuggerCommand({ tabId }, method, params),
+      cdp: (method, params) => method.startsWith('DOM.') ? frameCall(tabId, route.frameId, method, params ?? {}, opts.aggressive) : executor.sendDebuggerCommand({ tabId }, method, params),
       cursor: opts.cursor,
       waitForNavigation: (classifyMs, timeoutMs) => waitForNavigation(tabId, classifyMs, timeoutMs),
       pointOffset: route.offset,

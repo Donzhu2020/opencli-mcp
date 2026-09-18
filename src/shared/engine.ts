@@ -334,7 +334,7 @@ export function ariaSnapshotJs(): string {
     const text = injected.ariaSnapshot(document.body, { mode: 'ai' });
     const info = injected._lastAriaSnapshotForQuery && injected._lastAriaSnapshotForQuery.info;
     if (!info) return text;
-    const cred = /user[-_ ]?name|e[-_ ]?mail|one[-_ ]?time[-_ ]?code|password|passcode|passwd|\botp\b|\b(?:2fa|mfa)\b|phone|mobile|\btel\b|cvc|cvv|card[-_ ]?number|ssn/i;
+    const cred = /user[-_ ]?name|e[-_ ]?mail|one[-_ ]?time[-_ ]?code|password|passcode|passwd|\botp\b|\b(?:2fa|mfa)\b|phone|mobile|\btel\b|\bcc-|cvc|cvv|csc|card|credit|payment|security[-_ ]?code|\biban\b|account[-_ ]?number|routing|ssn|social[-_ ]?security/i;
     const isCred = (el) => { if (!el || !(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return false; if (el.type === 'password') return true; const hay = ['type', 'autocomplete', 'id', 'name', 'placeholder', 'aria-label', 'title'].map((a) => el.getAttribute(a) || '').join(' '); return cred.test(hay); };
     return text.split('\n').map((line) => {
       const m = /\[ref=(e\d+)\](:.*)?$/.exec(line);

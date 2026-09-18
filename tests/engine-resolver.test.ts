@@ -86,11 +86,12 @@ describe('aria snapshot generator', () => {
     const pw = new HTMLInputElement(); pw.type = 'password';
     const email = new HTMLInputElement(); email.attrs.set('autocomplete', 'email');
     const name = new HTMLInputElement(); name.attrs.set('name', 'display');
-    const info = new Map([['e1', { element: name }], ['e2', { element: pw }], ['e3', { element: email }]]);
-    const text = ['- textbox "Name" [ref=e1]: Alice', '- textbox "Password" [ref=e2]: hunter2', '- textbox "Email" [ref=e3]: a@b.c', '- button "Go" [ref=e4]'].join('\n');
+    const cc = new HTMLInputElement(); cc.attrs.set('autocomplete', 'cc-number');
+    const info = new Map([['e1', { element: name }], ['e2', { element: pw }], ['e3', { element: email }], ['e5', { element: cc }]]);
+    const text = ['- textbox "Name" [ref=e1]: Alice', '- textbox "Password" [ref=e2]: hunter2', '- textbox "Email" [ref=e3]: a@b.c', '- button "Go" [ref=e4]', '- textbox "Card" [ref=e5]: 4111111111111111'].join('\n');
     const injected = { ariaSnapshot: () => text, _lastAriaSnapshotForQuery: { info } };
     const ctx = vm.createContext({ [ENGINE_GLOBAL]: injected, document: { body: {} }, HTMLInputElement, HTMLTextAreaElement });
     const out = vm.runInContext(ariaSnapshotJs(), ctx) as string;
-    expect(out.split('\n')).toEqual(['- textbox "Name" [ref=e1]: Alice', '- textbox "Password" [ref=e2]: <redacted>', '- textbox "Email" [ref=e3]: <redacted>', '- button "Go" [ref=e4]']);
+    expect(out.split("\n")).toEqual(['- textbox "Name" [ref=e1]: Alice', '- textbox "Password" [ref=e2]: <redacted>', '- textbox "Email" [ref=e3]: <redacted>', '- button "Go" [ref=e4]', '- textbox "Card" [ref=e5]: <redacted>']);
   });
 });

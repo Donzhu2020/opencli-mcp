@@ -54,7 +54,8 @@ describe('tools_compile: frozen flows run on the agent engine with checkpoints',
     ];
     const def = compileFromTrace(trace, { site: 'shop', name: 'search', description: 'Search', inputs: { term: 'red shoes' } });
     const f = def.func!;
-    expect(f).toContain('tab.fetchJson("https://shop.example/graphql", { method: "POST", headers: {"content-type":"application/json","x-csrf-token":"abc","accept":"*/*"}, body: JSON.stringify({"query":"q","variables":{"term":args.term}}) })');
+    expect(f).toContain('tab.fetchJson("https://shop.example/graphql", { method: "POST", headers: {"content-type":"application/json","accept":"*/*"}, body: JSON.stringify({"query":"q","variables":{"term":args.term}}) })'); // the CSRF token is per-session: named, not frozen
+    expect(def.warnings?.some((w) => /x-csrf-token/.test(w) && /not frozen/.test(w))).toBe(true);
     expect(f).not.toContain('telemetry'); // the biggest response is not the answer; the one carrying the extracted values is
     expect(def.warnings?.some((w) => /matched 4 word/.test(w))).toBe(true);
     expect(def.warnings?.some((w) => /Authorization header/.test(w))).toBe(true);

@@ -224,8 +224,16 @@ export function compileFromTrace(trace: TraceEvent[], opts: { site: string; name
     // contract (x-*, content-type, accept…), the body — with the declared inputs parameterized where they occurred
     const init: string[] = [];
     if (e.method && e.method !== 'GET') init.push(`method: ${JSON.stringify(e.method)}`);
-    const headers = Object.fromEntries(Object.entries(e.requestHeaders ?? {}).filter(([k]) => /^(content-type|accept|x-.*|apikey|api-key|client-id)$/i.test(k)));
+    // contract headers travel with the tool; a header whose value looks like a token or a signature (long, high-entropy)
+    // is computed per request/session by the page and must not be frozen — it is named so the author can fetch it at run time
+    const headers: Record<string, string> = {}; const tokenLike: string[] = [];
+    for (const [k, v] of Object.entries(e.requestHeaders ?? {})) {
+      if (!/^(content-type|accept|x-.*|apikey|api-key|client-id)$/i.test(k)) continue;
+      if (/^x-(csrf|xsrf|client-transaction|signature|sign|nonce|timestamp|token|auth|session|guest-token|ct0)/i.test(k) || (v.length >= 32 && /^[A-Za-z0-9+/=_%.-]+$/.test(v) && !/^(application|text|multipart)\//.test(v))) { tokenLike.push(k); continue; }
+      headers[k] = v;
+    }
     if (Object.keys(headers).length) init.push(`headers: ${JSON.stringify(headers)}`);
+    if (tokenLike.length) warnings.push(`request header(s) ${tokenLike.join(', ')} look like per-request tokens/signatures computed by the page and are not frozen; if the endpoint needs them, read them in the tool at run time (cookie, page state or a page function) before tab.fetchJson`);
     if (e.postData) init.push(`body: ${bodyLit(e.postData, e.requestHeaders?.['content-type'], inputs, lit)}`);
     body.push(`  const data = await tab.fetchJson(${urlLit(e.url, inputs, lit)}${init.length ? `, { ${init.join(', ')} }` : ''});`);
     body.push(`  return data;`);

@@ -28,7 +28,13 @@ export class Browser {
       this.ctx.state.finalized = false; // new tabs after a finalize are the session's again
       this.ctx.state.selected = id;
       this.ctx.state.trace.record({ kind: 'goto', url: url ?? 'about:blank', page: id });
-      return new Tab(id, this.ctx, await this.ctx.rt.pageFor(this.ctx.sessionId, id));
+      const tab = new Tab(id, this.ctx, await this.ctx.rt.pageFor(this.ctx.sessionId, id));
+      if (url) {
+        // another extension may have taken the navigation over (interstitial, redirect to its own page): say so, do not hand out a tab the debugger cannot attach to
+        const landed = await tab.url().catch(() => null);
+        if (landed && /^(chrome-extension|chrome-error|chrome):/.test(landed)) { await tab.close().catch(() => {}); throw new ActionError('page_not_loaded', `navigation to ${url} ended on ${landed}`, 'Another Chrome extension intercepted this site (redirect or interstitial); disable it for this site or open the page manually and claim the tab.'); }
+      }
+      return tab;
     },
     list: async (): Promise<Array<{ id: string; url?: string; title?: string; active?: boolean }>> => {
       const page = await this.page();

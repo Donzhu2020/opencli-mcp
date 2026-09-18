@@ -41,8 +41,19 @@ async function proxyToHost(host: string, port: number, token: string, version: s
     instructions: client.getInstructions(),
   });
   server.setRequestHandler('tools/list', async (r) => client.listTools(r.params));
-  // long browser ops can run up to 30 min; progress/cancellation forwarding is handled by the transport in 2026-07-28
-  server.setRequestHandler('tools/call', async (r) => client.callTool(r.params, { timeout: 1_800_000, resetTimeoutOnProgress: true }));
+  // Long browser ops can run up to 30 min. Forward the client's progress token and abort signal so
+  // the host's progress notifications reach the client and client cancellation stops the host call.
+  server.setRequestHandler('tools/call', async (r, ctx) => {
+    const progressToken = (r.params as { _meta?: { progressToken?: string | number } })._meta?.progressToken;
+    return client.callTool(r.params, {
+      timeout: 1_800_000,
+      resetTimeoutOnProgress: true,
+      signal: ctx.mcpReq.signal,
+      ...(progressToken !== undefined
+        ? { onprogress: (p) => { void ctx.mcpReq.notify({ method: 'notifications/progress', params: { ...p, progressToken } }); } }
+        : {}),
+    });
+  });
   server.setRequestHandler('resources/list', async (r) => client.listResources(r.params));
   server.setRequestHandler('resources/templates/list', async (r) => client.listResourceTemplates(r.params));
   server.setRequestHandler('resources/read', async (r) => client.readResource(r.params));

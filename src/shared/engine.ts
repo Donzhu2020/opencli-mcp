@@ -71,7 +71,7 @@ export function resolveJs(selector: string, fallback: string | null, spec: ActSp
       const fe = typeof frameSpec === 'number' ? frames[frameSpec] : frames[0];
       if (!fe) return { error: { code: 'frame_not_found', message: 'no iframe matches ' + String(frameSpec) } };
       let fw = null; try { fw = fe.contentWindow; if (fw) fw.document; } catch { fw = null; }
-      if (!fw || !fw.document) return { error: { code: 'frame_cross_origin', message: 'the iframe is cross-origin; use tab_evaluate with frame index for read access', hint: 'Cross-origin frames need a separate debugger target; not supported by act yet.' } };
+      if (!fw || !fw.document) return { error: { code: 'frame_cross_origin', message: 'the iframe is cross-origin and this backend cannot attach to its process', hint: 'The Chrome extension backend routes cross-origin frames to their own debugger target; the direct CDP backend does not.' } };
       try { fe.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }); } catch {}
       const fr = fe.getBoundingClientRect(); offset = { x: fr.left + fe.clientLeft, y: fr.top + fe.clientTop };
       if (!fw.${ENGINE_GLOBAL}) fw.${ENGINE_GLOBAL} = new globalThis.${ENGINE_GLOBAL}Class(fw, { isUnderTest: false, sdkLanguage: 'javascript', frameSeq: 0, testIdAttributeName: 'data-testid', stableRafCount: 1, browserName: 'chromium', shouldPrependErrorPrefix: false, isUtilityWorld: true, customEngines: [] });
@@ -149,6 +149,33 @@ export interface ActIO {
   cursor?(x: number, y: number): Promise<unknown>;
   /** Resolve after a navigation the action triggered has finished (or when none started within classifyMs). */
   waitForNavigation?(classifyMs: number, timeoutMs: number): Promise<{ navigated: boolean; url?: string }>;
+  /** When `evaluate` runs inside an out-of-process iframe, the iframe's position in the top viewport: input events are dispatched on the tab, so resolved points are shifted by this. */
+  pointOffset?: { x: number; y: number };
+}
+
+/** Marker the edge sets on an <iframe> element it is about to route into (cross-origin frames need their own debugger target). */
+export const FRAME_MARK = 'data-opencli-frame';
+
+/**
+ * Main-world probe for `target.frame`: locate the iframe element and report whether the resolver can enter it
+ * in-process (same-origin) or the edge must route to the frame's own target. Marks the element with FRAME_MARK
+ * so the edge can map it to a CDP frameId (DOM.describeNode) without knowing its selector.
+ */
+export function frameProbeJs(frame: string | number): string {
+  return `(() => {
+    const injected = globalThis.${ENGINE_GLOBAL};
+    const spec = ${JSON.stringify(frame)};
+    document.querySelectorAll('[${FRAME_MARK}]').forEach((n) => n.removeAttribute('${FRAME_MARK}'));
+    const list = typeof spec === 'number' ? [...document.querySelectorAll('iframe,frame')] : injected.querySelectorAll(injected.parseSelector(spec), document);
+    const fe = typeof spec === 'number' ? list[spec] : list[0];
+    if (!fe) return { found: false };
+    let sameOrigin = false; try { sameOrigin = Boolean(fe.contentWindow && fe.contentWindow.document); } catch { sameOrigin = false; }
+    if (sameOrigin) return { found: true, sameOrigin: true };
+    try { fe.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' }); } catch {}
+    fe.setAttribute('${FRAME_MARK}', '1');
+    const r = fe.getBoundingClientRect();
+    return { found: true, sameOrigin: false, x: r.left + fe.clientLeft, y: r.top + fe.clientTop, src: fe.src || '' };
+  })()`;
 }
 
 async function mouse(io: ActIO, type: 'mouseMoved' | 'mousePressed' | 'mouseReleased', x: number, y: number, clickCount = 0, button: 'left' | 'none' = 'left'): Promise<void> {
@@ -195,6 +222,7 @@ export async function performAct(io: ActIO, spec: ActSpec): Promise<ActResult> {
   const timeoutMs = spec.timeoutMs ?? 3000;
   const started = Date.now();
   const r = await resolve(io, spec, spec.target, timeoutMs, started);
+  if (io.pointOffset) { r.x += io.pointOffset.x; r.y += io.pointOffset.y; }
   if (spec.cursor && io.cursor) await io.cursor(r.x, r.y).catch(() => {});
   const base: ActResult = { ok: true, kind: spec.kind, ref: r.ref, matches_n: r.matches_n, visible_n: r.matches_n, match_level: 'exact', point: { x: Math.round(r.x), y: Math.round(r.y) }, method: 'cdp', hit: r.hit, tag: r.tag, waitedMs: Date.now() - started, selector: r.selector ?? undefined };
   const engineFor = `((el) => (el && el.ownerDocument && el.ownerDocument.defaultView && el.ownerDocument.defaultView.${ENGINE_GLOBAL}) || globalThis.${ENGINE_GLOBAL})`;

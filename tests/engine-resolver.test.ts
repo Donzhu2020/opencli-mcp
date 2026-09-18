@@ -63,3 +63,17 @@ describe('page-side resolver executes without reference errors', () => {
     expect((r.error as { code: string }).code).toBe('not_found');
   });
 });
+
+describe('frame probe (edge routing for cross-origin iframes)', () => {
+  it('marks a cross-origin iframe and reports its viewport offset', async () => {
+    const { frameProbeJs, FRAME_MARK } = await import('../src/shared/engine.js');
+    const attrs = new Map<string, string>();
+    const iframe = { contentWindow: { get document() { throw new Error('cross-origin'); } }, clientLeft: 2, clientTop: 3, src: 'https://other.example/', scrollIntoView: () => {}, getBoundingClientRect: () => ({ left: 100, top: 200, width: 300, height: 150 }), setAttribute: (k: string, v: string) => attrs.set(k, v), removeAttribute: (k: string) => attrs.delete(k) };
+    const doc = { querySelectorAll: (sel: string) => (sel === 'iframe,frame' ? [iframe] : []) };
+    const ctx = vm.createContext({ [ENGINE_GLOBAL]: {}, document: doc });
+    const r = vm.runInContext(frameProbeJs(0), ctx) as { found: boolean; sameOrigin: boolean; x: number; y: number };
+    expect(r).toMatchObject({ found: true, sameOrigin: false, x: 102, y: 203 });
+    expect(attrs.get(FRAME_MARK)).toBe('1');
+    expect(vm.runInContext(frameProbeJs(3), ctx)).toEqual({ found: false });
+  });
+});

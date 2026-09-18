@@ -291,7 +291,7 @@ async function handleCdp(cmd: Command, s: Session): Promise<Result> {
   const routeFrameId = typeof params.frameId === 'string' && params.sessionId === 'target' ? params.frameId : undefined;
   const { sessionId: _sid, frameId: _fid, targetUrl, ...rest } = params as Record<string, unknown>;
   const data = routeFrameId
-    ? await executor.sendCommandInFrameTarget(tabId, routeFrameId, cmd.cdpMethod, rest, s.surface === 'browser', commandTimeoutMs(cmd) ?? 30_000, typeof targetUrl === 'string' ? targetUrl : undefined)
+    ? await executor.sendCommandInFrameTarget(tabId, routeFrameId, cmd.cdpMethod, rest, s.surface === 'browser', commandTimeoutMs(cmd) ?? 30_000)
     : await executor.sendDebuggerCommand({ tabId }, cmd.cdpMethod, _fid !== undefined ? { ...rest, frameId: _fid } : rest, commandTimeoutMs(cmd));
   return pageScoped(cmd.id, tabId, data);
 }

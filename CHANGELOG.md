@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.0.4 — 2026-09-18
+
+- **API-first freezing.** Every session tab is captured from attach; `tools_compile` freezes the JSON request that
+  actually carried the data (method, contract headers and body, inputs parameterized; per-request tokens and credentials
+  are named, not frozen) instead of scraping the DOM, and falls back to UI steps with an explanation. `recon.discover`
+  candidates are returned by `tab.network.read()` by default. Captured evidence lives in its own bounded store, never in
+  the step trace.
+- **Stable observe refs.** `eN` refs are pinned to the element and survive a node inserted above them, so a held ref does
+  not break and the diff stays clean.
+- **One transport.** Local and remote clients use the same loopback HTTP endpoint with a bearer token; default port 19991.
+- **One-command, client-agnostic setup.** `opencli-mcp setup` writes the host manifest, registers with Claude Code and
+  Codex when their CLIs are present, prints the standard config for any other client, and opens `chrome://extensions`.
+- **New extension icon.**
+- **Hardening (architecture review).** Frozen-tool code generation is injection-safe; the network dedup key is stable and
+  bounded; the stable-ref map is pruned everywhere; harvesting can never fail a step; the site executor reads the error
+  envelope at its real shape; dead fields and stale docs removed.
+
 ## 0.0.3 — 2026-09-18
 
 - The extension ID is fixed by the project: the public key lives in `extension/manifest.json`, so the ID is

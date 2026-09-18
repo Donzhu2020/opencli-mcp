@@ -1,4 +1,4 @@
-## API reference (generated from src/api/agent.ts — do not edit)
+## API reference (generated from src/api/{api,browser,tab}.ts — do not edit)
 
 In `js` the globals are `agent`, `sites`, `recon`, `tools`, `session` (the members of `AgentApi`) plus `nodeRepl` and `Tab`. Everything below is the whole model-facing surface; typed entry tools are projections of it.
 

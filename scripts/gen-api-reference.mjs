@@ -5,16 +5,16 @@ import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
-const entry = resolve(root, 'src/api/agent.ts');
-const program = ts.createProgram([entry], {
+const entries = ['src/api/api.ts', 'src/api/browser.ts', 'src/api/tab.ts'].map((f) => resolve(root, f));
+const program = ts.createProgram(entries, {
   target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext,
   strict: true, skipLibCheck: true, noEmit: true, lib: ['lib.es2022.d.ts', 'lib.dom.d.ts'],
 });
 const checker = program.getTypeChecker();
-const sf = program.getSourceFile(entry);
 const FLAGS = ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.UseAliasDefinedOutsideCurrentScope | ts.TypeFormatFlags.WriteArrayAsGenericType;
 
 const doc = (sym) => { const parts = sym?.getDocumentationComment?.(checker) ?? []; return ts.displayPartsToString(parts).replace(/\s+/g, ' ').trim(); };
+let sf; // current source file while scanning
 const fmtType = (t) => checker.typeToString(t, undefined, FLAGS);
 const sigText = (sig) => {
   const params = sig.getParameters().map((p) => {
@@ -48,7 +48,7 @@ function memberLines(type, indent, depth) {
 const sections = [];
 const wanted = new Map([['AgentApi', 'interface'], ['Browser', 'class'], ['Tab', 'class']]);
 const aliases = ['Target', 'ActAction', 'ActOptions', 'ObserveOptions'];
-ts.forEachChild(sf, (node) => {
+for (const entry of entries) { sf = program.getSourceFile(entry); ts.forEachChild(sf, (node) => {
   if ((ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node)) && node.name && wanted.has(node.name.text)) {
     const sym = checker.getSymbolAtLocation(node.name);
     const type = ts.isClassDeclaration(node) ? checker.getDeclaredTypeOfSymbol(sym) : checker.getTypeAtLocation(node);
@@ -58,13 +58,13 @@ ts.forEachChild(sf, (node) => {
   if ((ts.isTypeAliasDeclaration(node) || ts.isInterfaceDeclaration(node)) && aliases.includes(node.name.text)) {
     sections.push(node.getText(sf).replace(/\s*\/\*\*[^*]*\*\/\s*/g, ' ').replace(/\n\s+/g, '\n  '));
   }
-});
+}); }
 // keep a stable order: the entry object first, then Browser, Tab, then the value types
 const order = ['interface AgentApi', 'class Browser', 'class Tab', 'type Target', 'type ActAction', 'interface ActOptions', 'interface ObserveOptions'];
 const key = (s) => s.replace(/^\/\/.*\n/, '').replace(/^export /, '');
 sections.sort((a, b) => order.findIndex((k) => key(a).startsWith(k)) - order.findIndex((k) => key(b).startsWith(k)));
 const clean = (s) => s.replace(/ \| undefined/g, '').replace(/^export /gm, '');
-const md = `## API reference (generated from src/api/agent.ts — do not edit)
+const md = `## API reference (generated from src/api/{api,browser,tab}.ts — do not edit)
 
 In \`js\` the globals are \`agent\`, \`sites\`, \`recon\`, \`tools\`, \`session\` (the members of \`AgentApi\`) plus \`nodeRepl\` and \`Tab\`. Everything below is the whole model-facing surface; typed entry tools are projections of it.
 

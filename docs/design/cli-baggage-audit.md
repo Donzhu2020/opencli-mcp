@@ -34,3 +34,7 @@ runtime that replaces it is the design in the essence report: a resident object 
 - `tab_find` vs `tab_observe`: if agents never call find after observe, delete find.
 - `site_run` vs `sites_enable`: if hosts all support `tools/list_changed`, delete `site_run`.
 - Cursor overlay: keep only if humans actually watch (it costs one content-script injection per tab).
+
+- 2026-09-18 c763a5b — OpenCLI `BasePage.getCurrentUrl` sticky URL cache: a one-command-per-process compensation; in a
+  long-lived session it made `wait({url})` and `observe.url` blind to navigations. Extension backend now reads the live
+  `location.href` and uses the cache only while a navigation is in flight.

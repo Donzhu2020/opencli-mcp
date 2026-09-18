@@ -19,6 +19,12 @@ await build({
   bundle: true, format: 'iife', target: 'chrome120', platform: 'browser',
   outfile: resolve(out, 'content/cursor.js'), sourcemap: false, logLevel: 'warning',
 });
+// page-side engine module: installed by the service worker into the isolated world of every frame (see extension/src/world.ts)
+await build({
+  entryPoints: [resolve(ext, 'src/page/index.ts')],
+  bundle: true, format: 'iife', target: 'chrome120', platform: 'browser',
+  outfile: resolve(out, 'page.js'), sourcemap: false, logLevel: 'warning',
+});
 const manifest = JSON.parse(readFileSync(resolve(ext, 'manifest.json'), 'utf8'));
 const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
 manifest.version = pkg.version;

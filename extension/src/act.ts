@@ -1,9 +1,9 @@
 /** Extension edge of the interaction engine: engine-world evaluation, CDP on the attached tab, cursor overlay, navigation wait. */
 import type { ActSpec, ActResult } from '../../src/protocol.js';
 import type { FrameStep } from '../../src/protocol.js';
-import { performAct as run, ActError, frameProbeJs, frameSteps, FRAME_MARK } from '../../src/shared/engine';
+import { performAct as run, ActError, frameSteps, FRAME_MARK } from '../../src/shared/engine';
 import * as executor from './cdp';
-import { evaluateInEngine, evaluateInWorld, frameCommand } from './world';
+import { callPage, evaluateInWorld, frameCommand } from './world';
 
 export { ActError };
 
@@ -37,7 +37,7 @@ async function routeFrames(tabId: number, steps: FrameStep[], aggressive: boolea
   const offset = { x: 0, y: 0 };
   for (const [depth, step] of steps.entries()) {
     const where = frameId === null ? 'the document' : `frame ${depth} (${steps[depth - 1]})`;
-    const probe = await evaluateInWorld(tabId, frameId, frameProbeJs(step), aggressive, 5_000) as { found: boolean; x?: number; y?: number };
+    const probe = await callPage(tabId, frameId, 'frameProbe', { step }, aggressive, 5_000) as { found: boolean; x?: number; y?: number };
     if (!probe.found) throw new ActError('frame_not_found', `no iframe matches ${JSON.stringify(step)} in ${where}`, 'Pass the css selector of the <iframe> or its 0-based index among iframes in that frame; chain steps outermost first.');
     const probedIn = frameId;
     try {
@@ -49,7 +49,7 @@ async function routeFrames(tabId: number, steps: FrameStep[], aggressive: boolea
       offset.x += probe.x ?? 0; offset.y += probe.y ?? 0;
       frameId = node.frameId;
     } finally {
-      await evaluateInWorld(tabId, probedIn, `document.querySelectorAll('[${FRAME_MARK}]').forEach((n) => n.removeAttribute('${FRAME_MARK}'))`, aggressive, 2_000).catch(() => {});
+      await callPage(tabId, probedIn, 'clearFrameMark', undefined, aggressive, 2_000).catch(() => {});
     }
   }
   return frameId === null ? null : { frameId, offset };
@@ -61,7 +61,7 @@ export async function performAct(tabId: number, spec: ActSpec, opts: { aggressiv
   if (route) {
     const { frame: _frame, ...target } = spec.target;
     return run({
-      evaluate: (js, timeoutMs) => evaluateInWorld(tabId, route.frameId, js, opts.aggressive, timeoutMs),
+      call: (fn, args, timeoutMs) => callPage(tabId, route.frameId, fn, args, opts.aggressive, timeoutMs),
       // DOM.* must address the frame's own session (node ids are per session); Input.* is dispatched on the tab and routed by Chrome
       cdp: (method, params) => method.startsWith('DOM.') ? frameCommand(tabId, route.frameId, method, params ?? {}, opts.aggressive) : executor.sendDebuggerCommand({ tabId }, method, params),
       cursor: opts.cursor,
@@ -70,7 +70,7 @@ export async function performAct(tabId: number, spec: ActSpec, opts: { aggressiv
     }, { ...spec, target });
   }
   return run({
-    evaluate: (js, timeoutMs) => evaluateInEngine(tabId, js, opts.aggressive, timeoutMs),
+    call: (fn, args, timeoutMs) => callPage(tabId, null, fn, args, opts.aggressive, timeoutMs),
     cdp: (method, params) => executor.sendDebuggerCommand({ tabId }, method, params),
     cursor: opts.cursor,
     waitForNavigation: (classifyMs, timeoutMs) => waitForNavigation(tabId, classifyMs, timeoutMs),

@@ -5,7 +5,7 @@ Top-level `const`/`let` persist across calls (they become session globals). The 
 ```js
 const browser = await agent.browsers.getDefault();
 const tab = await browser.tabs.new('https://news.ycombinator.com');
-const state = await tab.observe();            // text state with [N] refs
+const state = await tab.observe();            // accessibility snapshot with [ref=eN] refs
 await tab.act({ target: { text: 'new' }, action: 'click' });
 const titles = await tab.evaluate('[...document.querySelectorAll(".titleline a")].map(a => a.textContent)');
 await sites.enable('hackernews');

@@ -5,7 +5,15 @@
  */
 import * as executor from './cdp';
 import { INJECTED_SOURCE } from '../../src/shared/injected-source';
-import { ENGINE_GLOBAL, installEngineJs } from '../../src/shared/engine';
+import { ENGINE_GLOBAL, PAGE_GLOBAL, installEngineJs, pageCallJs } from '../../src/shared/engine';
+
+/** The bundled page module (extension/dist/page.js), read once from the extension package. */
+let pageModule: Promise<string> | null = null;
+function pageModuleSource(): Promise<string> {
+  pageModule ??= fetch(chrome.runtime.getURL('page.js')).then((r) => r.text());
+  return pageModule;
+}
+const READY = `(globalThis.${ENGINE_GLOBAL} && globalThis.${PAGE_GLOBAL})`;
 
 const WORLD_NAME = 'opencli-mcp-engine';
 const contexts = new Map<string, number>(); // `${tabId}:${frameId}` → executionContextId
@@ -30,7 +38,7 @@ async function ensureContext(tabId: number, aggressive: boolean): Promise<number
   if (cached !== undefined) return cached;
   const { executionContextId } = await executor.sendDebuggerCommand({ tabId }, 'Page.createIsolatedWorld', { frameId, worldName: WORLD_NAME, grantUniveralAccess: true }) as { executionContextId: number };
   contexts.set(k, executionContextId);
-  await evaluateIn(tabId, executionContextId, installEngineJs(INJECTED_SOURCE), 15_000);
+  await evaluateIn(tabId, executionContextId, installEngineJs(INJECTED_SOURCE, await pageModuleSource()), 15_000);
   return executionContextId;
 }
 
@@ -62,7 +70,7 @@ async function ensureFrameContext(tabId: number, frameId: string, aggressive: bo
   if (cached !== undefined) return cached;
   const { executionContextId } = await frameCall(tabId, frameId, 'Page.createIsolatedWorld', { frameId, worldName: WORLD_NAME, grantUniveralAccess: true }, aggressive) as { executionContextId: number };
   contexts.set(k, executionContextId);
-  await evaluateInFrameCtx(tabId, frameId, executionContextId, installEngineJs(INJECTED_SOURCE), aggressive, 15_000);
+  await evaluateInFrameCtx(tabId, frameId, executionContextId, installEngineJs(INJECTED_SOURCE, await pageModuleSource()), aggressive, 15_000);
   return executionContextId;
 }
 
@@ -88,7 +96,7 @@ export async function evaluateInFrameEngine(tabId: number, frameId: string, expr
  * `frameCommand` to use it with DOM.* there.
  */
 export async function evaluateInWorld(tabId: number, frameId: string | null, expression: string, aggressive: boolean, timeoutMs?: number, byValue = true): Promise<unknown> {
-  const wrapped = `(() => { if (!globalThis.${ENGINE_GLOBAL}) throw new Error('engine_missing'); return (${expression}); })()`;
+  const wrapped = `(() => { if (!${READY}) throw new Error('engine_missing'); return (${expression}); })()`;
   const run = async () => frameId === null
     ? evaluateIn(tabId, await ensureContext(tabId, aggressive), wrapped, timeoutMs, byValue)
     : evaluateInFrameCtx(tabId, frameId, await ensureFrameContext(tabId, frameId, aggressive), wrapped, aggressive, timeoutMs, byValue);
@@ -99,6 +107,11 @@ export async function evaluateInWorld(tabId: number, frameId: string | null, exp
   }
 }
 
+/** Call one page-module function (extension/src/page) in the main frame's world or a child frame's world. */
+export function callPage(tabId: number, frameId: string | null, fn: string, args: unknown, aggressive: boolean, timeoutMs?: number): Promise<unknown> {
+  return evaluateInWorld(tabId, frameId, pageCallJs(fn, args), aggressive, timeoutMs);
+}
+
 /** A CDP command on the session that owns the frame: root for the main frame and in-process frames, the OOPIF target otherwise. */
 export function frameCommand(tabId: number, frameId: string | null, method: string, params: Record<string, unknown>, aggressive: boolean, timeoutMs?: number): Promise<unknown> {
   return frameId === null ? executor.sendDebuggerCommand({ tabId }, method, params, timeoutMs) : frameCall(tabId, frameId, method, params, aggressive, timeoutMs);
@@ -106,7 +119,7 @@ export function frameCommand(tabId: number, frameId: string | null, method: stri
 
 /** Evaluate in the engine world; installs the engine on first use and recovers from a destroyed context once. */
 export async function evaluateInEngine(tabId: number, expression: string, aggressive: boolean, timeoutMs?: number): Promise<unknown> {
-  const run = async () => { const ctx = await ensureContext(tabId, aggressive); return evaluateIn(tabId, ctx, `(() => { if (!globalThis.${ENGINE_GLOBAL}) throw new Error('engine_missing'); return (${expression}); })()`, timeoutMs); };
+  const run = async () => { const ctx = await ensureContext(tabId, aggressive); return evaluateIn(tabId, ctx, `(() => { if (!${READY}) throw new Error('engine_missing'); return (${expression}); })()`, timeoutMs); };
   try { return await run(); } catch (err) {
     const msg = (err as Error).message ?? '';
     if (/Cannot find context|context was destroyed|engine_missing|not found|Inspected target navigated/i.test(msg)) { forgetTab(tabId); return run(); }

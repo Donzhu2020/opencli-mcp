@@ -14,7 +14,8 @@ import { Policy } from '../runtime/policy.js';
 import { discoverEndpoints, type DiscoverResult } from '../recon/discover.js';
 import { compileFromTrace, listDefinedTools, type ToolDefinition } from '../sites/define.js';
 import { buildInstructions, readDoc, type DocContext } from '../docs/manifest.js';
-import { ariaSnapshotJs, findJs, targetToSelector, fallbackSelector } from '../shared/engine.js';
+import { targetToSelector, fallbackSelector } from '../shared/engine.js';
+import type { FindEntry, FindResult, ElementAtResult } from '../shared/page-contract.js';
 import type { DialogInfo, FrameStep } from '../protocol.js';
 
 export type Target = ({ frame?: FrameStep | FrameStep[] }) & (
@@ -29,25 +30,11 @@ export type ActAction = 'click' | 'dblclick' | 'hover' | 'focus' | 'fill' | 'typ
 export interface ActOptions { target?: Target; action: ActAction; value?: string; files?: string[]; to?: Target; direction?: 'up' | 'down' | 'left' | 'right'; amount?: number; timeoutMs?: number; settleMs?: number; confirm?: boolean }
 const CONSEQUENTIAL_RE = /(submit|pay|purchase|buy|checkout|place order|delete|remove|send|post|publish|confirm|transfer|apply)/i;
 
-export interface ObserveOptions { mode?: 'state' | 'screenshot' | 'both'; source?: 'dom' | 'ax' | 'aria'; diff?: boolean; interactive?: boolean; /** only elements intersecting the viewport (what a screenshot shows); default includes 800px around it */ viewport?: boolean; compact?: boolean; maxDepth?: number; maxTextLength?: number; annotate?: boolean; fullPage?: boolean }
+export interface ObserveOptions { mode?: 'state' | 'screenshot' | 'both'; /** return only the change since the previous observe when the page moved a little (default true) */ diff?: boolean; /** only the subtree on screen right now (what a screenshot shows) */ viewport?: boolean; /** overlay eN labels on the screenshot */ annotate?: boolean; fullPage?: boolean }
 
 export interface ImageValue { __image: true; mimeType: string; base64: string }
 
-type Lib = {
-  waitForDomStableJs: (maxMs: number, quietMs: number) => string;
-  formatSnapshot: (raw: string, opts?: Record<string, unknown>) => string;
-  buildSemanticFindJs: (opts: Record<string, unknown>) => string;
-  buildFindJs: (selector: string, opts?: Record<string, unknown>) => string;
-  isFindError: (r: unknown) => r is { error: { code: string; message: string; hint?: string } };
-};
-let libPromise: Promise<Lib> | null = null;
-function lib(): Promise<Lib> {
-  if (!libPromise) libPromise = Promise.all([importDist('snapshotFormatter.js'), importDist('browser/find.js'), importDist('browser/dom-helpers.js')])
-    .then(([sf, fd, dh]) => ({ waitForDomStableJs: dh.waitForDomStableJs, formatSnapshot: sf.formatSnapshot, buildSemanticFindJs: fd.buildSemanticFindJs, buildFindJs: fd.buildFindJs, isFindError: fd.isFindError }));
-  return libPromise;
-}
 
-interface FindEntry { nth: number; ref: number | null; selector?: string | null; tag: string; role: string; name?: string; text: string; attrs: Record<string, string>; visible: boolean; enabled?: boolean | null; editable?: boolean | null; box?: { x: number; y: number; w: number; h: number } }
 
 function describeTarget(t: Target | undefined): string {
   if (!t) return '';
@@ -99,22 +86,13 @@ export class Tab {
 
   async observe(opts: ObserveOptions = {}): Promise<{ url: string | null; title: string | null; state?: string; diff?: boolean; changed?: { added: number; removed: number }; image?: ImageValue }> {
     const mode = opts.mode ?? 'state';
-    const L = await lib();
     return this.use(async (page) => {
       const meta = await this.info(page);
       const out: { url: string | null; title: string | null; state?: string; diff?: boolean; changed?: { added: number; removed: number }; image?: ImageValue } = { ...meta };
       if (mode === 'state' || mode === 'both') {
-        const source = opts.source ?? 'dom';
-        const snapOpts = { interactive: opts.interactive, compact: opts.compact ?? true, maxDepth: opts.maxDepth, maxTextLength: opts.maxTextLength, source: source === 'aria' ? 'dom' : source, ...(opts.viewport && { viewportExpand: 0 }) };
-        let text: string;
-        if (source === 'aria') {
-          // Playwright's agent-facing accessibility snapshot; its [ref=eN] refs are valid act targets ({ref:'e12'})
-          text = String(await page.engineEvaluate(ariaSnapshotJs()));
-        } else {
-          const raw = await page.snapshot(snapOpts);
-          text = typeof raw === 'string' ? L.formatSnapshot(raw, snapOpts) : JSON.stringify(raw, null, 2);
-        }
-        const key = `${this.id}:${snapOpts.source}:${opts.viewport ? 'vp' : 'all'}`;
+        // one state source: Playwright's aria snapshot (credential values redacted); its [ref=eN] are the act targets
+        let text = String(await page.pageCall('aria', { viewport: Boolean(opts.viewport) }));
+        const key = `${this.id}:${opts.viewport ? 'vp' : 'all'}`;
         const prev = this.ctx.state.lastObserve.get(key);
         this.ctx.state.lastObserve.set(key, text);
         const diffOn = opts.diff !== false;
@@ -123,33 +101,34 @@ export class Tab {
           if (d.changedRatio < 0.6) { out.diff = true; out.changed = { added: d.added, removed: d.removed }; text = d.text || '(no visible change)'; }
         } else if (diffOn && prev === text) { out.diff = true; out.changed = { added: 0, removed: 0 }; text = '(unchanged since last observe)'; }
         out.state = text;
-        this.ctx.state.trace.record({ kind: 'observe', mode: source, page: this.id, summary: meta.title ?? undefined });
+        this.ctx.state.trace.record({ kind: 'observe', mode: 'aria', page: this.id, summary: meta.title ?? undefined });
       }
-      if (mode === 'screenshot' || mode === 'both') out.image = await this.screenshot({ annotate: opts.annotate, fullPage: opts.fullPage });
+      if (mode === 'screenshot' || mode === 'both') out.image = await this.screenshotOn(page, { annotate: opts.annotate, fullPage: opts.fullPage });
       return out;
     });
   }
 
   async screenshot(opts: { fullPage?: boolean; annotate?: boolean; format?: 'png' | 'jpeg'; quality?: number } = {}): Promise<ImageValue> {
-    return this.use(async (page) => {
-      const b64 = opts.annotate ? await page.annotatedScreenshot({ fullPage: opts.fullPage, format: opts.format, quality: opts.quality }) : await page.screenshot({ fullPage: opts.fullPage, format: opts.format, quality: opts.quality });
+    return this.use((page) => this.screenshotOn(page, opts));
+  }
+  private async screenshotOn(page: RuntimePage, opts: { fullPage?: boolean; annotate?: boolean; format?: 'png' | 'jpeg'; quality?: number }): Promise<ImageValue> {
+    // annotate = eN labels of the last aria snapshot drawn by the page module for the capture only
+    if (opts.annotate) await page.pageCall('annotate');
+    try {
+      const b64 = await page.screenshot({ fullPage: opts.fullPage, format: opts.format, quality: opts.quality });
       return { __image: true, mimeType: opts.format === 'jpeg' ? 'image/jpeg' : 'image/png', base64: b64 };
-    });
+    } finally { if (opts.annotate) await page.pageCall('unannotate').catch(() => {}); }
   }
 
-  async find(target: Target & { limit?: number }): Promise<{ matches_n: number; visible_n?: number; selector?: string; entries: FindEntry[] }> {
+  async find(target: Target & { limit?: number }): Promise<FindResult | ElementAtResult> {
     return this.use(async (page) => {
-      if ('x' in target) {
-        // element at a viewport point (screenshot coordinates) → locator-oriented description, like Codex's elementInfo
-        const r = await page.evaluateWithArgs(`(() => { const el = document.elementFromPoint(x, y); if (!el) return { matches_n: 0, entries: [] }; const chain = []; let n = el; while (n && n !== document.body && chain.length < 4) { chain.push(n); n = n.parentElement; } const desc = (e, i) => { const r = e.getBoundingClientRect(); return { nth: i, ref: Number(e.getAttribute('data-opencli-ref')) || 0, tag: e.tagName.toLowerCase(), role: e.getAttribute('role') || '', text: (e.innerText || e.textContent || '').trim().slice(0, 120), attrs: Object.fromEntries(['id','class','name','type','placeholder','aria-label','title','href','data-testid'].filter((a) => e.getAttribute(a)).map((a) => [a, e.getAttribute(a)])), visible: r.width > 0 && r.height > 0, box: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) } }; }; return { matches_n: chain.length, entries: chain.map(desc) }; })()`, { x: target.x, y: target.y }) as { matches_n: number; entries: FindEntry[] };
-        return r;
-      }
+      // a viewport point (screenshot coordinates) → the element there and its ancestors, as locators
+      if ('x' in target) return await page.pageCall('elementAt', { x: target.x, y: target.y }) as ElementAtResult;
       // same engine and the same compiled selector as act: what find lists is exactly what act would resolve
       const spec = target as Record<string, unknown>;
       const selector = targetToSelector(spec);
-      if (!selector) throw new ActionError('invalid_target', 'find needs selector, css, ref, a semantic locator (role/name/label/text/testid), or a point {x,y}');
-      const r = await page.engineEvaluate(findJs(selector, fallbackSelector(spec), target.limit ?? 20));
-      return r as { matches_n: number; visible_n: number; selector: string; entries: FindEntry[] };
+      if (!selector) throw new ActionError('invalid_target', 'find needs selector, css, an aria ref (eN), a semantic locator (role/name/label/text/testid), or a point {x,y}');
+      return await page.pageCall('find', { selector, fallback: fallbackSelector(spec), limit: target.limit ?? 20 }) as FindResult;
     });
   }
 

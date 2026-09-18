@@ -9,6 +9,7 @@ import { importDist } from '../lib/opencli.js';
 import { buildEvaluateExpression } from '@jackwener/opencli/browser/utils';
 import type { RuntimePage } from './page-types.js';
 import type { Command, ActSpec, ActResult, DialogInfo } from '../protocol.js';
+import { pageCallJs } from '../shared/engine.js';
 
 export interface ExtensionPageOptions {
   session: string;
@@ -187,7 +188,7 @@ function definePageClass(lib: Lib): any {
         if (!(err instanceof BrowserCommandError)) throw err; /* overlay is best-effort */
       }
     }
-    async engineEvaluate(js: string, timeoutMs?: number): Promise<unknown> { return (await this.send('exec', { code: js, world: 'engine', ...(timeoutMs && { timeoutMs }) })).data; }
+    async pageCall(fn: string, args?: unknown, timeoutMs?: number): Promise<unknown> { return (await this.send('exec', { code: pageCallJs(fn, args), world: 'engine', ...(timeoutMs && { timeoutMs }) })).data; }
     /** Live URL first; OpenCLI's sticky cache (a one-command-per-process habit) is only the fallback while a navigation is in flight. */
     async getCurrentUrl(): Promise<string | null> {
       try { const u = await this.evaluate('location.href') as unknown; if (typeof u === 'string' && u) { this._lastUrl = u; return u; } } catch { /* mid-navigation */ }

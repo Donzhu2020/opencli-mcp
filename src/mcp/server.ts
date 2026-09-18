@@ -17,7 +17,7 @@ type Content = Array<{ type: 'text'; text: string } | { type: 'image'; data: str
 type ToolResult = { content: Content; structuredContent?: Record<string, unknown>; isError?: boolean };
 
 const targetSchema = z.object({
-  ref: z.union([z.number(), z.string()]).optional().describe('numeric [N] ref from tab_observe/tab_find, or eN from an aria observe'),
+  ref: z.string().optional().describe('eN ref from tab_observe / tab_find'),
   selector: z.string().optional().describe('raw Playwright selector, e.g. the selector returned by tab_find'),
   css: z.string().optional().describe('CSS selector; add nth for multiple matches'),
   nth: z.number().int().optional(),
@@ -157,8 +157,8 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     return ok(data, images);
   }));
   server.registerTool('tab_observe', {
-    title: 'Observe a tab', description: 'Current page state as text with [N] refs (diff vs the previous observe when the page changed only a little), and/or a screenshot. Prefer state over screenshot.',
-    inputSchema: { tab: z.string().optional(), mode: z.enum(['state', 'screenshot', 'both']).default('state'), source: z.enum(['dom', 'ax', 'aria']).default('dom').describe('dom: budgeted text with [N] refs; ax: accessibility tree; aria: Playwright aria snapshot with [ref=eN] refs usable as act targets'), diff: z.boolean().default(true), interactive: z.boolean().optional().describe('only interactive elements'), viewport: z.boolean().optional().describe('dom source: only elements on screen right now (matches the screenshot); default also includes 800px around the viewport'), maxTextLength: z.number().int().optional(), maxDepth: z.number().int().optional(), annotate: z.boolean().default(false).describe('overlay [N] labels on the screenshot'), fullPage: z.boolean().default(false) },
+    title: 'Observe a tab', description: 'Current page state as an accessibility snapshot with [ref=eN] refs (diff vs the previous observe when the page changed only a little), and/or a screenshot. Refs are tab_act targets ({ref:"e12"}). Prefer state over screenshot.',
+    inputSchema: { tab: z.string().optional(), mode: z.enum(['state', 'screenshot', 'both']).default('state'), diff: z.boolean().default(true), viewport: z.boolean().optional().describe('only the subtree on screen right now (what a screenshot shows)'), annotate: z.boolean().default(false).describe('overlay eN labels on the screenshot'), fullPage: z.boolean().default(false) },
     annotations: { readOnlyHint: true },
   }, async ({ tab, ...o }) => run(async () => { const t = await tabOf(tab); const { data, images } = stripImage({ tab: t.id, ...(await t.observe(o)) }); return ok(data, images); }));
   server.registerTool('tab_find', { title: 'Find elements', description: 'Query elements with the same engine and locator semantics tab_act uses (css, selector, ref, role/name/label/text/testid), or describe the element under a point {x,y} (screenshot coordinates). Each entry has a replayable selector: pass it to tab_act as {selector}.', inputSchema: { tab: z.string().optional(), target: targetSchema, limit: z.number().int().max(100).default(20) }, annotations: { readOnlyHint: true } }, async ({ tab, target, limit }) => run(async () => {

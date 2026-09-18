@@ -8,6 +8,7 @@ type Badge = 'active' | 'deliverable' | 'handoff' | null;
 const ROOT_ID = 'opencli-mcp-overlay-root';
 let host: HTMLElement | null = null;
 let cursor: HTMLElement | null = null;
+let keeper: MutationObserver | null = null;
 let pos = { x: -100, y: -100 };
 let anim: number | null = null;
 let originalIcons: Array<{ el: HTMLLinkElement; href: string }> | null = null;
@@ -28,7 +29,8 @@ function ensureOverlay(): HTMLElement {
   cursor.appendChild(img);
   shadow.append(style, cursor);
   document.documentElement.appendChild(host);
-  new MutationObserver(() => { if (host && !document.documentElement.contains(host)) document.documentElement.appendChild(host); }).observe(document.documentElement, { childList: true });
+  keeper = new MutationObserver(() => { if (host && !document.documentElement.contains(host)) document.documentElement.appendChild(host); });
+  keeper.observe(document.documentElement, { childList: true });
   return cursor;
 }
 
@@ -79,9 +81,17 @@ function setBadge(badge: Badge): void {
 
 type CursorState = { x: number; y: number; seq: number; visible: boolean; animate?: boolean } | null;
 
-/** Render the background-owned state: hidden → fade out; visible → glide (or jump) to the point, then report arrival with the sequence. */
+/** The session is done with this tab: tear the overlay down completely (observer off, animation cancelled, root removed). */
+function dispose(): void {
+  keeper?.disconnect(); keeper = null;
+  if (anim) { cancelAnimationFrame(anim); anim = null; }
+  host?.remove(); host = null; cursor = null; pos = { x: -100, y: -100 };
+}
+
+/** Render the background-owned state: null → dispose; hidden → fade out (position kept); visible → glide (or jump) to the point, then report arrival with the sequence. */
 function render(state: CursorState): Promise<{ arrived: boolean; seq?: number }> {
-  if (!state || !state.visible) { if (cursor) cursor.classList.remove('on'); if (state) pos = { x: state.x, y: state.y }; return Promise.resolve({ arrived: false }); }
+  if (!state) { dispose(); return Promise.resolve({ arrived: false }); }
+  if (!state.visible) { if (cursor) cursor.classList.remove('on'); pos = { x: state.x, y: state.y }; return Promise.resolve({ arrived: false }); }
   return moveTo(state.x, state.y, state.animate === true && document.visibilityState === 'visible').then(() => ({ arrived: true, seq: state.seq }));
 }
 

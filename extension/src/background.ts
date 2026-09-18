@@ -126,7 +126,6 @@ async function handleCommand(cmd: Command): Promise<Result> {
       case 'history': {
         const tabId = await sessions.resolveTab(s, cmd.page);
         const op = cmd.historyOp ?? 'reload';
-        if (!executor.hasActiveNetworkCapture(tabId)) await executor.detach(tabId);
         // fire, do not await: with a debugger attached the reload/goBack promise can resolve only after the navigation, or never
         const trigger = op === 'reload' ? chrome.tabs.reload(tabId) : op === 'back' ? chrome.tabs.goBack(tabId) : chrome.tabs.goForward(tabId);
         trigger.catch((e) => console.warn(`[opencli-mcp] ${op} trigger: ${e instanceof Error ? e.message : String(e)}`));
@@ -210,7 +209,6 @@ async function handleNavigate(cmd: Command, s: Session): Promise<Result> {
     if (errDoc) return notLoaded(cmd.id, target, `the browser shows its error page (${errDoc})`);
     return pageScoped(cmd.id, tabId, { title: t.title, url: t.url, timedOut: t.status !== 'complete' });
   }
-  if (!executor.hasActiveNetworkCapture(tabId)) await executor.detach(tabId);
   const beforeNorm = normalizeUrl(before.url);
   let navError: string | null = null;
   const onErr = (d: chrome.webNavigation.WebNavigationFramedErrorCallbackDetails) => { if (d.tabId === tabId && d.frameId === 0) navError = d.error; };

@@ -7,6 +7,27 @@ export class ActionError extends Error {
   toJSON(): Record<string, unknown> { return { code: this.code, message: this.message, ...(this.hint && { hint: this.hint }), ...this.data }; }
 }
 
+// The corpus/adapter layer (OpenCLI) speaks SCREAMING_SNAKE / CamelCase; the object model speaks lowercase snake_case.
+// One vocabulary is strictly more agent-friendly, so site errors are normalized to the object-model families here.
+const CORPUS_CODE_MAP: Record<string, string> = {
+  TIMEOUT: 'timeout',
+  COMMAND_EXEC: 'command_failed',
+  BROWSER_CONNECT: 'browser_unavailable',
+  TARGETERROR: 'not_found',
+  VALIDATION: 'invalid_args',
+  INVALID_ARGS: 'invalid_args',
+  NAVIGATION: 'page_not_loaded',
+};
+/** Map a corpus/adapter error code to the object-model vocabulary; leave already-lowercase codes untouched. */
+export function normalizeErrorCode(code: string | undefined | null): string {
+  const c = (code ?? '').trim();
+  if (!c) return 'error';
+  const mapped = CORPUS_CODE_MAP[c.toUpperCase()];
+  if (mapped) return mapped;
+  if (c === c.toLowerCase()) return c; // already our vocabulary
+  return c.replace(/([a-z0-9])([A-Z])/g, '$1_$2').replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').toLowerCase();
+}
+
 export function errorEnvelope(err: unknown): { ok: false; error: Record<string, unknown> } {
   if (err instanceof ActionError) return { ok: false, error: err.toJSON() };
   const e = err as { code?: string; message?: string; hint?: string; name?: string; data?: unknown };

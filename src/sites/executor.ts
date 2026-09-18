@@ -8,6 +8,7 @@ import { executePipeline } from '@jackwener/opencli/pipeline';
 import { toEnvelope } from '@jackwener/opencli/errors';
 import { emitHook, type HookContext } from './hooks.js';
 import { coerceArgs } from './schema.js';
+import { ActionError, normalizeErrorCode } from '../api/errors.js';
 import type { RuntimePage } from '../backends/page-types.js';
 
 export interface PageProvider {
@@ -104,9 +105,12 @@ export async function runSiteCommand(
     const env = (toEnvelope(err) as { error?: { code?: string; message?: string; help?: string } }).error ?? {};
     const anyErr = err as { code?: string; hint?: string; message?: string; step?: number; label?: string; state?: string; expect?: unknown; failed?: string[]; extra?: { expect?: unknown; state?: string; failed?: string[] } };
     const details = anyErr.step !== undefined ? { step: anyErr.step, label: anyErr.label, state: anyErr.state, ...(anyErr.expect !== undefined && { expect: anyErr.expect, failed: anyErr.failed }) } : anyErr.extra?.expect !== undefined ? { expect: anyErr.extra.expect, failed: anyErr.extra.failed, state: anyErr.extra.state } : undefined;
+    // Frozen tools throw ActionError in the object-model vocabulary — keep that code verbatim; otherwise normalize the
+    // corpus/adapter code (SCREAMING_SNAKE / CamelCase) to the same lowercase families, so a model branches on one vocabulary.
+    const rawCode = err instanceof ActionError ? err.code : (env.code ?? anyErr.code ?? 'COMMAND_EXEC');
     return {
       ok: false, site: cmd.site, name: cmd.name, elapsedMs: Date.now() - started,
-      error: { code: String(env.code ?? anyErr.code ?? 'COMMAND_EXEC'), message: String(env.message ?? anyErr.message ?? err), hint: env.help ?? anyErr.hint, ...(details && { details }) },
+      error: { code: normalizeErrorCode(String(rawCode)), message: String(env.message ?? anyErr.message ?? err), hint: env.help ?? anyErr.hint, ...(details && { details }) },
     };
   }
 }

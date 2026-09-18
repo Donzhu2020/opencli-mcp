@@ -4,7 +4,7 @@
  * candidates with dynamic network evidence into a ledger: seen-in-network > api-shaped static > other.
  * Candidates are evidence, not contracts: `EXPR` marks unknown dynamic parts.
  */
-import { JsAnalyzer, EXPR, type UrlMatch, type SecretMatch } from './analyzer.js';
+import { JsAnalyzer, EXPR, type UrlMatch } from './analyzer.js';
 import type { RuntimePage } from '../backends/page-types.js';
 
 export interface EndpointCandidate {
@@ -24,7 +24,6 @@ export interface DiscoverResult {
   pageUrl: string | null;
   scripts: Array<{ url: string; bytes: number; analyzed: boolean; error?: string }>;
   endpoints: EndpointCandidate[];
-  secrets: SecretMatch[];
   networkEntries: number;
 }
 
@@ -46,7 +45,6 @@ export async function discoverEndpoints(page: RuntimePage, opts: { maxScripts?: 
 
   const scripts: DiscoverResult['scripts'] = [];
   const urls: UrlMatch[] = [];
-  const secrets: SecretMatch[] = [];
   let inlineIdx = 0;
   const external = listed.filter((s) => s.src && !THIRD_PARTY_NOISE.test(s.src)).slice(0, maxScripts);
   const inline = opts.includeInline === false ? [] : listed.filter((s) => !s.src && s.inline && s.inline.length > 50);
@@ -55,7 +53,7 @@ export async function discoverEndpoints(page: RuntimePage, opts: { maxScripts?: 
     const name = `inline#${++inlineIdx}`;
     const r = analyzer.analyze(s.inline!, { filename: name });
     scripts.push({ url: name, bytes: s.inline!.length, analyzed: true });
-    urls.push(...r.urls); secrets.push(...r.secrets);
+    urls.push(...r.urls);
   }
   await Promise.all(external.map(async (s) => {
     const entry: DiscoverResult['scripts'][number] = { url: s.src, bytes: 0, analyzed: false };
@@ -70,7 +68,7 @@ export async function discoverEndpoints(page: RuntimePage, opts: { maxScripts?: 
       entry.bytes = text.length;
       const r = analyzer.analyze(text, { filename: s.src });
       entry.analyzed = true;
-      urls.push(...r.urls); secrets.push(...r.secrets);
+      urls.push(...r.urls);
     } catch (err) {
       entry.error = (err as Error).message;
     }
@@ -119,7 +117,5 @@ export async function discoverEndpoints(page: RuntimePage, opts: { maxScripts?: 
     merged.set(key, { url: rest.join(' '), method, type: 'network', kind: /json|graphql|x-component/.test(ct) ? 'api' : 'unknown', queryParams: [], bodyParams: [], evidence: 'network', network: net, sources: [], score: 90 });
   }
   const endpoints = [...merged.values()].sort((a, b) => b.score - a.score).slice(0, 300);
-  const seenSecrets = new Set<string>();
-  const uniqueSecrets = secrets.filter((s) => { const k = `${s.kind}|${s.preview}|${s.filename}`; if (seenSecrets.has(k)) return false; seenSecrets.add(k); return true; });
-  return { pageUrl, scripts, endpoints, secrets: uniqueSecrets, networkEntries };
+  return { pageUrl, scripts, endpoints, networkEntries };
 }

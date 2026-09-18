@@ -26,8 +26,6 @@ describe('JsAnalyzer (jsluice port)', () => {
     expect(byType[`locationAssignment:/login?redirect=${EXPR}&method=oauth`].queryParams).toEqual(['method', 'redirect']);
     expect(byType['websocket:wss://stream.example.com/feed']).toBeTruthy();
     expect(r.urls.some((u) => u.url === 'https://api.example.com' && u.type === 'string')).toBe(true);
-    expect(r.secrets.map((s) => s.kind)).toEqual(expect.arrayContaining(['keyed_secret', 'aws_access_key']));
-    for (const s of r.secrets) expect(s.preview).not.toContain('1234567890abcdef');
   });
   it('tolerates broken/minified input', async () => {
     const a = await JsAnalyzer.create();

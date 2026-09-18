@@ -1,7 +1,7 @@
 /**
  * Docs-as-interface. A documents manifest (Codex documents.json style) decides which markdown
- * is delivered as server `instructions`, which is attached to tool results on demand, and which
- * tools require a doc to have been read (`requiredFor`).
+ * is delivered as server `instructions` and which is attached to tool results on demand.
+ * Docs are static files bundled with the server, so disk reads are memoized.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,7 +13,6 @@ export interface DocEntry {
   mode: DocMode;
   description?: string;
   when?: { backends?: Array<'extension' | 'none'>; capabilities?: string[] };
-  requiredFor?: string[];
 }
 export interface DocContext { backend: 'extension' | 'none'; capabilities: string[] }
 
@@ -34,17 +33,25 @@ export const DOCS_MANIFEST: DocEntry[] = [
   { name: 'troubleshooting', mode: 'lookup', description: 'read when the browser bridge fails' },
 ];
 
+let docsDirCache: string | undefined;
 function docsDir(): string {
+  if (docsDirCache) return docsDirCache;
   const here = path.dirname(fileURLToPath(import.meta.url));
   for (const c of [path.resolve(here, '../../docs'), path.resolve(here, '../../../docs'), path.resolve(here, '../docs')]) {
-    if (fs.existsSync(path.join(c, 'instructions.md'))) return c;
+    if (fs.existsSync(path.join(c, 'instructions.md'))) { docsDirCache = c; return c; }
   }
-  return path.resolve(here, '../../docs');
+  docsDirCache = path.resolve(here, '../../docs');
+  return docsDirCache;
 }
 
+const docCache = new Map<string, string | null>();
 export function readDoc(name: string): string | null {
+  const hit = docCache.get(name);
+  if (hit !== undefined) return hit;
   const file = path.join(docsDir(), `${name}.md`);
-  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+  const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+  docCache.set(name, text);
+  return text;
 }
 
 export function listDocs(ctx: DocContext): Array<DocEntry & { available: boolean }> {
@@ -57,8 +64,12 @@ export function applies(d: DocEntry, ctx: DocContext): boolean {
   return true;
 }
 
-/** Concatenate all `included` docs that apply → MCP server instructions. */
+const instructionsCache = new Map<string, string>();
+/** Concatenate all `included` docs that apply → MCP server instructions (memoized per context). */
 export function buildInstructions(ctx: DocContext): string {
+  const key = `${ctx.backend}|${[...ctx.capabilities].sort().join(',')}`;
+  const cached = instructionsCache.get(key);
+  if (cached !== undefined) return cached;
   const parts: string[] = [];
   for (const d of DOCS_MANIFEST) {
     if (d.mode !== 'included' || !applies(d, ctx)) continue;
@@ -67,9 +78,7 @@ export function buildInstructions(ctx: DocContext): string {
   }
   const lookups = DOCS_MANIFEST.filter((d) => d.mode === 'lookup' && applies(d, ctx)).map((d) => `- \`${d.name}\`: ${d.description ?? ''}`);
   if (lookups.length) parts.push(`## Lookup docs (call docs_get)\n${lookups.join('\n')}`);
-  return parts.join('\n\n');
-}
-
-export function requiredDocsFor(tool: string, ctx: DocContext): string[] {
-  return DOCS_MANIFEST.filter((d) => d.requiredFor?.includes(tool) && applies(d, ctx)).map((d) => d.name);
+  const out = parts.join('\n\n');
+  instructionsCache.set(key, out);
+  return out;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildInstructions, listDocs, requiredDocsFor, readDoc } from '../src/docs/manifest.js';
+import { buildInstructions, listDocs, readDoc } from '../src/docs/manifest.js';
 import { compileFromTrace, renderToolModule, validateDefinition } from '../src/sites/define.js';
 
 describe('docs manifest', () => {
@@ -13,9 +13,7 @@ describe('docs manifest', () => {
     expect(readDoc('api-reference')).not.toContain('use(fn');
     expect(readDoc('api-reference')).toContain('selected(): Promise<Tab | undefined>'); // a real union result is kept…
     expect(readDoc('api-reference')).not.toMatch(/\| undefined[,)]/); // …while `?` already expresses undefined for parameters
-    expect(readDoc('errors')).toContain('selector_ambiguous');
-    expect(requiredDocsFor('cdp_send', { backend: 'extension', capabilities: ['cdp'] })).toEqual([]); // no typed cdp tool any more: the capability doc is returned by browser.capabilities.get('cdp') in js
-    expect(listDocs({ backend: 'none', capabilities: [] }).find((d) => d.name === 'tab-lifecycle')?.available).toBe(false);
+    expect(readDoc('errors')).toContain('selector_ambiguous');    expect(listDocs({ backend: 'none', capabilities: [] }).find((d) => d.name === 'tab-lifecycle')?.available).toBe(false);
   });
 });
 

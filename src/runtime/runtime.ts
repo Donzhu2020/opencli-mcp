@@ -14,7 +14,6 @@ import type { RuntimePage } from '../backends/page-types.js';
 import { TraceRecorder, type NetworkEvidence } from './trace.js';
 import { JsSession } from '../mcp/js-session.js';
 import { opencliVersion } from '../lib/opencli.js';
-import { emitHook } from '../sites/hooks.js';
 import { Policy } from './policy.js';
 import { Tab, createAgentApi, type AgentApi } from '../api/agent.js';
 
@@ -44,15 +43,12 @@ export interface SessionState {
   selected?: string;
   enabledSites: Map<string, { write: boolean }>;
   capabilities: Set<string>;
-  docsRead: Set<string>;
   js?: JsSession;
   lastObserve: Map<string, string>;
   /** Network entries seen per tab, with monotonically increasing sequence numbers for cursor-based reads. */
   netLog: Map<string, { seq: number; entries: Array<Record<string, unknown> & { seq: number }>; seen: Set<string> }>;
   /** Captured requests kept as tools_compile evidence (step-tagged, capped) — not in the step trace. */
   netEvidence: NetworkEvidence[];
-  /** Static endpoint candidates per tab document (recon), discovered once per page URL when the network log is first read. */
-  recon: Map<string, { url: string; promise: Promise<unknown[]>; done?: unknown[] }>;
   finalized: boolean;
 }
 
@@ -101,7 +97,6 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
   async init(): Promise<void> {
     await this.registry.load();
     try { ensureToolsDir(); } catch (err) { this.emit('log', `tools dir unavailable: ${(err as Error).message}`); }
-    await emitHook('onStartup', { command: '__startup__', args: {} });
   }
 
   backend(): Backend {
@@ -113,7 +108,7 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
   session(id: string): SessionState {
     let s = this.sessions.get(id);
     if (!s) {
-      s = { id, createdAt: Date.now(), trace: new TraceRecorder(), pages: new Map(), tabLocks: new Map(), enabledSites: new Map(), capabilities: new Set(), docsRead: new Set(), lastObserve: new Map(), netLog: new Map(), netEvidence: [], recon: new Map(), finalized: false };
+      s = { id, createdAt: Date.now(), trace: new TraceRecorder(), pages: new Map(), tabLocks: new Map(), enabledSites: new Map(), capabilities: new Set(), lastObserve: new Map(), netLog: new Map(), netEvidence: [], finalized: false };
       this.sessions.set(id, s);
     }
     return s;
@@ -215,7 +210,8 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
       sites: new Set(all.map((c) => c.site)).size,
       commands: all.length,
       definedTools: listDefinedTools().length,
-      sessions: this.sessions.size,
+      // Count only real MCP sessions; background adapter contexts are keyed `site:<site>` and are not agents.
+      sessions: [...this.sessions.keys()].filter((k) => !k.startsWith('site:')).length,
       cursor: this.cursorEnabled,
     };
   }

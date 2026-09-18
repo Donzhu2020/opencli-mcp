@@ -1,6 +1,6 @@
 /**
  * MCP server per session: typed core tools, dynamic site tools, the `js` code-mode tool,
- * resources (docs, sites, tabs, trace) and prompts — all backed by the same object model.
+ * resources (docs, sites) and prompts — all backed by the same object model.
  */
 import { McpServer, ResourceTemplate, inputRequired, inputResponse, type RegisteredTool, type InputRequiredResult } from '@modelcontextprotocol/server';
 import { z } from 'zod';
@@ -8,10 +8,9 @@ import type { Runtime } from '../runtime/runtime.js';
 import { createAgentApi, Tab, consequentialAct, describeTarget, type AgentApi, type Target, type ActAction } from '../api/agent.js';
 import { ActionError, errorEnvelope } from '../api/errors.js';
 import { JsSession, safeStringify } from './js-session.js';
-import { buildInstructions, listDocs, readDoc, requiredDocsFor, DOCS_MANIFEST, type DocContext } from '../docs/manifest.js';
+import { buildInstructions, listDocs, readDoc, DOCS_MANIFEST, type DocContext } from '../docs/manifest.js';
 import { argsToShape } from '../sites/schema.js';
 import { listDefinedTools } from '../sites/define.js';
-import { readSiteKnowledge, writeSiteKnowledge } from '../sites/knowledge.js';
 
 type Content = Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>;
 type ToolResult = { content: Content; structuredContent?: Record<string, unknown>; isError?: boolean };
@@ -64,15 +63,6 @@ function stripImage<T extends Record<string, unknown>>(o: T): { data: Record<str
 }
 
 export interface SessionServer { server: McpServer; api: AgentApi; close(): Promise<void> }
-
-// Output schemas (2025-11-25+): permissive, all-optional so structuredContent always validates while advertising the shape.
-const OUT_TAB = z.object({ tab: z.string().optional(), url: z.string().nullable().optional(), title: z.string().nullable().optional(), state: z.string().optional(), diff: z.boolean().optional(), changed: z.record(z.string(), z.unknown()).optional(), image: z.string().optional(), ok: z.boolean().optional(), action: z.string().optional(), failed: z.array(z.string()).optional() }).catchall(z.unknown());
-const OUT_DOCTOR = z.object({ backend: z.string().optional(), extension: z.record(z.string(), z.unknown()).optional(), opencliVersion: z.string().optional(), sites: z.number().optional(), commands: z.number().optional(), definedTools: z.number().optional(), sessions: z.number().optional() }).catchall(z.unknown());
-const OUT_FINALIZE = z.object({ closed: z.array(z.string()).optional(), kept: z.array(z.string()).optional() }).catchall(z.unknown());
-const OUT_SEARCH = z.object({ results: z.array(z.record(z.string(), z.unknown())).optional() }).catchall(z.unknown());
-const OUT_DOCS = z.object({ docs: z.array(z.record(z.string(), z.unknown())).optional() }).catchall(z.unknown());
-const OUT_DEFINE = z.object({ file: z.string().optional(), site: z.string().optional(), name: z.string().optional() }).catchall(z.unknown());
-const OUT_COMPILE = z.object({ site: z.string().optional(), name: z.string().optional(), description: z.string().optional(), func: z.string().optional(), warnings: z.array(z.string()).optional() }).catchall(z.unknown());
 
 export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?: string; persistent?: boolean } = {}): SessionServer {
   const persistent = opts.persistent !== false; // stateless HTTP creates a fresh server per request: no long-lived rt listeners, and close() must not finalize the shared runtime session
@@ -139,24 +129,17 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
       return r.ok ? ok(r) : fail(new ActionError(r.error.code, r.error.message, r.error.hint, { site, command, ...(r.error.details && { details: r.error.details }) }));
     } finally { if (beat) clearInterval(beat); }
   };
-  const gate = (tool: string): void => {
-    const missing = requiredDocsFor(tool, docCtx()).filter((d) => !state.docsRead.has(d));
-    if (missing.length) throw new ActionError('read_docs_first', `Read ${missing.join(', ')} before using ${tool}`, `Call docs_get with name ${JSON.stringify(missing[0])}; the doc is then marked as read for this session.`, { docs: missing });
-  };
-
   // ── the entry surface: the few typed tools for the core loop; everything else lives in the object model behind `js` ──
   // ── diagnostics & discovery ──
-  server.registerTool('doctor', { outputSchema: OUT_DOCTOR, title: 'Doctor', description: 'Runtime status: backend (extension/none), extension version, site/command counts, sessions.', inputSchema: {}, annotations: { readOnlyHint: true } }, async () => run(async () => ok(rt.doctor())));
+  server.registerTool('doctor', { title: 'Doctor', description: 'Runtime status: backend (extension/none), extension version, site/command counts, sessions.', inputSchema: {}, annotations: { readOnlyHint: true } }, async () => run(async () => ok(rt.doctor())));
 
   // ── session ──
-  server.registerTool('session_finalize', { outputSchema: OUT_FINALIZE,
-    title: 'Finalize session tabs', description: 'End-of-task cleanup. Agent-created tabs not listed in keep are closed; deliverable tabs leave the group and stay open; handoff tabs stay in the group for a later turn. Claimed user tabs are only released.',
+  server.registerTool('session_finalize', { title: 'Finalize session tabs', description: 'End-of-task cleanup. Agent-created tabs not listed in keep are closed; deliverable tabs leave the group and stay open; handoff tabs stay in the group for a later turn. Claimed user tabs are only released.',
     inputSchema: { keep: z.array(z.object({ tab: z.string().describe('tab id'), status: z.enum(['deliverable', 'handoff']) })).default([]) },
   }, async ({ keep }) => run(async () => ok(await (await api.agent.browsers.getDefault()).tabs.finalize({ keep }))));
 
   // ── tabs ──
-  server.registerTool('tab_open', { outputSchema: OUT_TAB,
-    title: 'Open a tab', description: 'Open a URL in a new agent tab (background, in this session’s tab group) and return its id plus the initial page state.',
+  server.registerTool('tab_open', { title: 'Open a tab', description: 'Open a URL in a new agent tab (background, in this session’s tab group) and return its id plus the initial page state.',
     inputSchema: { url: z.string().optional().describe('http(s) URL, or data:text/html,… for a scratch page'), observe: z.boolean().default(true), session: z.string().min(1).max(60).optional().describe('name this browser session (short, emoji-prefixed; becomes the Chrome tab-group title) — give it with the first tab') },
   }, async ({ url, observe, session: sessionName }) => run(async () => {
     const b = await api.agent.browsers.getDefault();
@@ -166,8 +149,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     const { data, images } = stripImage({ tab: tab.id, ...(await tab.observe({ diff: false })) });
     return ok(data, images);
   }));
-  server.registerTool('tab_claim', { outputSchema: OUT_TAB,
-    title: 'Claim a user tab', description: 'Take control of a tab the user already has open. tabId (from browser.user.openTabs() in js) is enough; or give url (exact or prefix) and/or title (substring) to find it — the match must be unique. url/title together with a tabId are guards that fail closed if the tab changed. The tab is not moved into the agent group and is never closed by finalize.',
+  server.registerTool('tab_claim', { title: 'Claim a user tab', description: 'Take control of a tab the user already has open. tabId (from browser.user.openTabs() in js) is enough; or give url (exact or prefix) and/or title (substring) to find it — the match must be unique. url/title together with a tabId are guards that fail closed if the tab changed. The tab is not moved into the agent group and is never closed by finalize.',
     inputSchema: { tabId: z.number().int().optional(), title: z.string().optional(), url: z.string().optional(), observe: z.boolean().default(true) },
   }, async ({ tabId, title, url, observe }) => run(async () => {
     const b = await api.agent.browsers.getDefault();
@@ -176,13 +158,11 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     const { data, images } = stripImage({ tab: tab.id, ...(await tab.observe({ diff: false })) });
     return ok(data, images);
   }));
-  server.registerTool('tab_observe', { outputSchema: OUT_TAB,
-    title: 'Observe a tab', description: 'Current page state as an accessibility snapshot with [ref=eN] refs (diff vs the previous observe when the page changed only a little), and/or a screenshot. Refs are tab_act targets ({ref:"e12"}). Prefer state over screenshot.',
+  server.registerTool('tab_observe', { title: 'Observe a tab', description: 'Current page state as an accessibility snapshot with [ref=eN] refs (diff vs the previous observe when the page changed only a little), and/or a screenshot. Refs are tab_act targets ({ref:"e12"}). Prefer state over screenshot.',
     inputSchema: { tab: z.string().optional(), mode: z.enum(['state', 'screenshot', 'both']).default('state'), diff: z.boolean().default(true), viewport: z.boolean().optional().describe('only the subtree on screen right now (what a screenshot shows)'), annotate: z.boolean().default(false).describe('overlay eN labels on the screenshot'), fullPage: z.boolean().default(false) },
     annotations: { readOnlyHint: true },
   }, async ({ tab, ...o }) => run(async () => { const t = await tabOf(tab); const { data, images } = stripImage({ tab: t.id, ...(await t.observe(o)) }); return ok(data, images); }));
-  server.registerTool('tab_act', { outputSchema: OUT_TAB,
-    title: 'Act on a tab', description: 'Perform one action: click, dblclick, hover, focus, fill (replace), type (append), press (key), select (option label/value), check/uncheck, upload (files), drag (to), scroll (target or direction), back/forward/reload. Waits for actionability, dispatches real input, returns matches_n/match_level and branchable error codes.',
+  server.registerTool('tab_act', { title: 'Act on a tab', description: 'Perform one action: click, dblclick, hover, focus, fill (replace), type (append), press (key), select (option label/value), check/uncheck, upload (files), drag (to), scroll (target or direction), back/forward/reload. Waits for actionability, dispatches real input, returns matches_n/match_level and branchable error codes.',
     inputSchema: { tab: z.string().optional(), action: z.enum(['click', 'dblclick', 'hover', 'focus', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'upload', 'drag', 'scroll', 'back', 'forward', 'reload']), target: targetSchema.optional(), value: z.string().optional().describe('text for fill/type, key for press, option for select'), files: z.array(z.string()).optional(), to: targetSchema.optional(), direction: z.enum(['up', 'down', 'left', 'right']).optional(), amount: z.number().optional(), settleMs: z.number().int().min(0).max(10_000).default(600).describe('wait for the DOM to settle after the action'), observe: z.boolean().default(false).describe('also return the page state after the action') },
     annotations: { destructiveHint: true, openWorldHint: true },
   }, async ({ tab, action, target, to, observe, ...rest }, extra) => {
@@ -201,25 +181,24 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
       return ok(data, images);
     });
   });
-  server.registerTool('tab_expect', { outputSchema: OUT_TAB, title: 'Expect', description: 'Assert what the page must show now: text / notText / url / title / selector / ref (with visible:false to require absence). Polls up to timeout seconds; fails with expectation_failed listing the failed checks and the current state. Recorded so tools_compile turns it into a checkpoint of the frozen flow.', inputSchema: { tab: z.string().optional(), text: z.string().optional(), notText: z.string().optional(), url: z.string().optional(), title: z.string().optional(), selector: z.string().optional(), ref: z.string().optional(), visible: z.boolean().optional(), timeout: z.number().default(5) } }, async ({ tab, timeout, ...what }) => run(async () => { const t = await tabOf(tab); return ok({ tab: t.id, ...(await t.expect(what, { timeoutMs: timeout * 1000 })) }); }));
+  server.registerTool('tab_expect', { title: 'Expect', description: 'Assert what the page must show now: text / notText / url / title / selector / ref (with visible:false to require absence). Polls up to timeout seconds; fails with expectation_failed listing the failed checks and the current state. Recorded so tools_compile turns it into a checkpoint of the frozen flow.', inputSchema: { tab: z.string().optional(), text: z.string().optional(), notText: z.string().optional(), url: z.string().optional(), title: z.string().optional(), selector: z.string().optional(), ref: z.string().optional(), visible: z.boolean().optional(), timeout: z.number().default(5) } }, async ({ tab, timeout, ...what }) => run(async () => { const t = await tabOf(tab); return ok({ tab: t.id, ...(await t.expect(what, { timeoutMs: timeout * 1000 })) }); }));
 
   // ── sites ──
-  server.registerTool('sites_search', { outputSchema: OUT_SEARCH, title: 'Search sites & commands', description: 'Find site commands by keyword or domain across the adapter corpus (160+ sites). Then site_run a command directly, or sites.enable(site) in js to get typed tools.', inputSchema: { query: z.string(), limit: z.number().int().max(100).default(20) }, annotations: { readOnlyHint: true } }, async ({ query, limit }) => run(async () => ok({ results: api.sites.search(query, limit) })));
+  server.registerTool('sites_search', { title: 'Search sites & commands', description: 'Find site commands by keyword or domain across the adapter corpus (160+ sites). Then site_run a command directly, or sites.enable(site) in js to get typed tools.', inputSchema: { query: z.string(), limit: z.number().int().max(100).default(20) }, annotations: { readOnlyHint: true } }, async ({ query, limit }) => run(async () => ok({ results: api.sites.search(query, limit) })));
   server.registerTool('site_run', { title: 'Run a site command', description: 'Run any site command without enabling it as a tool (args as an object; see sites_search for names). Write commands ask the user to approve first (the client shows an approval prompt); no confirm flag needed.', inputSchema: { site: z.string(), command: z.string(), args: z.record(z.string(), z.unknown()).default({}) }, annotations: { openWorldHint: true } }, async ({ site, command, args }, extra) => run(() => runSiteWithProgress(site, command, args, ctxExtra(extra))));
 
   // ── capabilities ──
 
   // ── recon & tools ──
   const argDef = z.object({ name: z.string(), type: z.enum(['string', 'int', 'number', 'boolean']).optional(), default: z.unknown().optional(), required: z.boolean().optional(), help: z.string().optional(), choices: z.array(z.string()).optional() });
-  server.registerTool('tools_define', { outputSchema: OUT_DEFINE,
-    title: 'Define a tool', description: 'Freeze a flow into a persistent site command (<site>_<name>, and sites.<site>.<name>() in js). Provide `func` (source of async (page, args) => {...}) or `pipeline` steps.',
+  server.registerTool('tools_define', { title: 'Define a tool', description: 'Freeze a flow into a persistent site command (<site>_<name>, and sites.<site>.<name>() in js). Provide `func` (source of async (page, args) => {...}) or `pipeline` steps.',
     inputSchema: { site: z.string(), name: z.string(), description: z.string(), access: z.enum(['read', 'write']), strategy: z.enum(['public', 'cookie', 'intercept', 'ui', 'local']).optional(), domain: z.string().optional(), args: z.array(argDef).optional(), columns: z.array(z.string()).optional(), pipeline: z.array(z.record(z.string(), z.unknown())).optional(), func: z.string().optional(), siteSession: z.enum(['ephemeral', 'persistent']).optional() },
   }, async (def) => run(async () => ok(await api.tools.define(def))));
-  server.registerTool('tools_compile', { outputSchema: OUT_COMPILE, title: 'Compile a tool from the trace', description: 'Draft a tool definition from this session’s recorded steps (network-first, else UI steps). inputs maps arg names to the literal values you used so they become parameters. Review, then tools_define.', inputSchema: { site: z.string(), name: z.string(), description: z.string(), access: z.enum(['read', 'write']).default('read'), inputs: z.record(z.string(), z.union([z.string(), z.object({ sample: z.string(), description: z.string().optional(), type: z.enum(['string', 'int', 'number', 'boolean']).optional(), required: z.boolean().optional(), mode: z.enum(['exact', 'within']).optional().describe('exact (default): only whole literals equal to the sample become the argument; within: also inside longer literals such as typed text or expectation texts/urls') })])).default({}).describe('parameters of the tool: name → the literal value you used during the flow (or {sample, description, type, mode})'), domain: z.string().optional(), save: z.boolean().default(false) } }, async ({ save, ...o }) => run(async () => { const draft = api.tools.compile(o); if (!save) return ok({ draft }); return ok({ draft, saved: await api.tools.define(draft) }); }));
+  server.registerTool('tools_compile', { title: 'Compile a tool from the trace', description: 'Draft a tool definition from this session’s recorded steps (network-first, else UI steps). inputs maps arg names to the literal values you used so they become parameters. Review, then tools_define.', inputSchema: { site: z.string(), name: z.string(), description: z.string(), access: z.enum(['read', 'write']).default('read'), inputs: z.record(z.string(), z.union([z.string(), z.object({ sample: z.string(), description: z.string().optional(), type: z.enum(['string', 'int', 'number', 'boolean']).optional(), required: z.boolean().optional(), mode: z.enum(['exact', 'within']).optional().describe('exact (default): only whole literals equal to the sample become the argument; within: also inside longer literals such as typed text or expectation texts/urls') })])).default({}).describe('parameters of the tool: name → the literal value you used during the flow (or {sample, description, type, mode})'), domain: z.string().optional(), save: z.boolean().default(false) } }, async ({ save, ...o }) => run(async () => { const draft = api.tools.compile(o); if (!save) return ok({ draft }); return ok({ draft, saved: await api.tools.define(draft) }); }));
 
   // ── docs ──
-  server.registerTool('docs_list', { outputSchema: OUT_DOCS, title: 'List docs', description: 'Documentation available for this backend.', inputSchema: {}, annotations: { readOnlyHint: true } }, async () => run(async () => ok({ docs: listDocs(docCtx()).filter((d) => d.available).map(({ name, mode, description }) => ({ name, mode, description })) })));
-  server.registerTool('docs_get', { title: 'Read a doc', description: 'Read a documentation page by name (see docs_list). Marks it as read for gated tools.', inputSchema: { name: z.string() }, annotations: { readOnlyHint: true } }, async ({ name }) => run(async () => { const d = readDoc(name); if (!d) throw new ActionError('unknown_doc', `no doc "${name}"`); state.docsRead.add(name); return ok(d); }));
+  server.registerTool('docs_list', { title: 'List docs', description: 'Documentation available for this backend.', inputSchema: {}, annotations: { readOnlyHint: true } }, async () => run(async () => ok({ docs: listDocs(docCtx()).filter((d) => d.available).map(({ name, mode, description }) => ({ name, mode, description })) })));
+  server.registerTool('docs_get', { title: 'Read a doc', description: 'Read a documentation page by name (see docs_list).', inputSchema: { name: z.string() }, annotations: { readOnlyHint: true } }, async ({ name }) => run(async () => { const d = readDoc(name); if (!d) throw new ActionError('unknown_doc', `no doc "${name}"`); return ok(d); }));
 
   // ── code mode ──
   const jsGlobals = { agent: api.agent, sites: api.sites, recon: api.recon, tools: api.tools, session: api.session, Tab };
@@ -284,10 +263,6 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   server.registerResource('docs', new ResourceTemplate('opencli://docs/{name}', { list: async () => ({ resources: DOCS_MANIFEST.map((d) => ({ uri: `opencli://docs/${d.name}`, name: d.name, description: d.description, mimeType: 'text/markdown' })) }) }), { title: 'Documentation', description: 'Agent-facing docs' }, async (uri, { name }) => ({ contents: [{ uri: uri.href, mimeType: 'text/markdown', text: readDoc(String(name)) ?? `no doc ${String(name)}` }] }));
   server.registerResource('sites', 'opencli://sites', { title: 'Sites', description: 'All sites with command counts', mimeType: 'application/json' }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(api.sites.list(), null, 2) }] }));
   server.registerResource('site', new ResourceTemplate('opencli://sites/{site}', { list: undefined }), { title: 'Site commands', mimeType: 'application/json' }, async (uri, { site }) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(rt.registry.commands(String(site)).map((c) => ({ name: c.name, description: c.description, access: c.access, strategy: c.strategy, domain: c.domain, args: c.args, columns: c.columns })), null, 2) }] }));
-  server.registerResource('site-knowledge', new ResourceTemplate('opencli://sites/{site}/knowledge', { list: undefined }), { title: 'Site knowledge', description: 'Endpoints/notes recorded for a site (OpenCLI site memory)', mimeType: 'application/json' }, async (uri, { site }) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(readSiteKnowledge(String(site)), null, 2) }] }));
-  server.registerResource('trace', 'opencli://session/trace', { title: 'Session trace', mimeType: 'application/json' }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(api.session.trace(), null, 2) }] }));
-  server.registerResource('tabs', 'opencli://session/tabs', { title: 'Session tabs', mimeType: 'application/json' }, async (uri) => { let tabs: unknown = []; try { tabs = await (await api.agent.browsers.getDefault()).tabs.list(); } catch { /* none */ } return { contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(tabs, null, 2) }] }; });
-  server.registerResource('doctor', 'opencli://doctor', { title: 'Doctor', mimeType: 'application/json' }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(rt.doctor(), null, 2) }] }));
 
   // ── prompts ──
   server.registerPrompt('browse', { title: 'Browse a site for a goal', description: 'Structured plan: prefer site tools, then observe → act → observe, finalize.', argsSchema: { goal: z.string(), url: z.string().optional() } }, ({ goal, url }) => ({ messages: [{ role: 'user', content: { type: 'text', text: `Goal: ${goal}${url ? `\nStart at: ${url}` : ''}\n\n1. sites_search for an existing command that covers the goal; if found, site_run it (or sites.enable(site) in js for typed tools).\n2. Otherwise tab_open with a session name, then loop tab_observe → tab_act → tab_expect, reading error codes.\n3. Confirm before irreversible actions. Finish with session_finalize, keeping only deliverable/handoff tabs.` } }] }));

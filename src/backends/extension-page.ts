@@ -40,7 +40,6 @@ export type ExtensionRuntimePage = RuntimePage & ExtensionPageExtras;
 
 type Lib = {
   CDPBasePage: new () => object;
-  generateStealthJs: () => string;
   waitForDomStableJs: (maxMs: number, quietMs: number) => string;
   classifyBrowserError: (err: unknown) => { kind: string; delayMs: number };
   saveBase64ToFile: (b64: string, path: string) => Promise<void>;
@@ -49,8 +48,8 @@ type Lib = {
 let libPromise: Promise<Lib> | null = null;
 function loadLib(): Promise<Lib> {
   if (!libPromise) {
-    libPromise = Promise.all([importDist('browser/base-page.js'), importDist('browser/stealth.js'), importDist('browser/dom-helpers.js'), importDist('browser/errors.js'), importDist('utils.js')])
-      .then(([bp, st, dh, er, ut]) => ({ CDPBasePage: bp.CDPBasePage, generateStealthJs: st.generateStealthJs, waitForDomStableJs: dh.waitForDomStableJs, classifyBrowserError: er.classifyBrowserError, saveBase64ToFile: ut.saveBase64ToFile }));
+    libPromise = Promise.all([importDist('browser/base-page.js'), importDist('browser/dom-helpers.js'), importDist('browser/errors.js'), importDist('utils.js')])
+      .then(([bp, dh, er, ut]) => ({ CDPBasePage: bp.CDPBasePage, waitForDomStableJs: dh.waitForDomStableJs, classifyBrowserError: er.classifyBrowserError, saveBase64ToFile: ut.saveBase64ToFile }));
   }
   return libPromise;
 }
@@ -115,16 +114,15 @@ function definePageClass(lib: Lib): any {
       if (result.page && !this.bound) this._page = result.page;
       this._lastUrl = url;
       if (options?.waitUntil !== 'none') {
+        // We drive the user's real Chrome via the extension — no anti-detection stealth needed; just wait for the DOM to settle.
         const maxMs = options?.settleMs ?? 1000;
-        const code = `${lib.generateStealthJs()};\n${lib.waitForDomStableJs(maxMs, Math.min(500, maxMs))}`;
+        const code = lib.waitForDomStableJs(maxMs, Math.min(500, maxMs));
         try { await this.send('exec', { code }); } catch (err) {
           const advice = lib.classifyBrowserError(err);
           if (advice.kind !== 'target-navigation') throw err;
           await new Promise((r) => setTimeout(r, advice.delayMs));
           try { await this.send('exec', { code }); } catch (retryErr) { if (lib.classifyBrowserError(retryErr).kind !== 'target-navigation') throw retryErr; }
         }
-      } else {
-        try { await this.send('exec', { code: lib.generateStealthJs() }); } catch { /* ignore */ }
       }
     }
     getActivePage(): string | undefined { return this._page; }

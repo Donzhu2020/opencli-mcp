@@ -4,7 +4,7 @@ In `js` the globals are `agent`, `sites`, `recon`, `tools`, `session` (the membe
 
 ```ts
 interface AgentApi {
-  agent: { browsers: { list(): Promise<Array<{ id: string; type: string; connected: boolean; }>>; get(id: string): Promise<Browser>; getDefault(): Promise<Browser>; getForUrl(url: string): Promise<Browser>; }; documentation: { get(name: string): string | null; }; };
+  agent: { browsers: { getDefault(): Promise<Browser>; }; documentation: { get(name: string): string | null; }; };
   sites: Record<string, unknown> & { search(q: string, limit?: number): unknown; list(): unknown; enable(site: string, opts?: { write?: boolean; }): { site: string; tools: Array<string>; }; disable(site: string): boolean; run(site: string, name: string, args?: Record<string, unknown>): Promise<unknown>; };
   recon: {
     discover(tab: Tab, opts?: { maxScripts?: number; includeAssets?: boolean; includeInline?: boolean; fetchTimeoutMs?: number; network?: Array<Record<string, unknown>>; }): Promise<DiscoverResult>;
@@ -17,7 +17,7 @@ interface AgentApi {
   };
   session: {
     id: string;
-    allowOrigin(host: string, persist?: boolean): { host: string; persist: boolean; };
+    allowOrigin(host: string): { host: string; };
     trace(): Array<unknown>;
     clearTrace(): void;
   };
@@ -74,15 +74,13 @@ class Tab {
   };
   network: {
     start(pattern?: string): Promise<boolean>;
-    read(opts?: { pattern?: string; limit?: number; includeStatic?: boolean; afterSequence?: number; }): Promise<{ cursor: number; entries: Array<unknown>; hasMore: boolean; candidates?: Array<EndpointCandidate>; candidatesPending?: boolean; }>; // Cursor-paged read: pass `afterSequence` from the previous result to get only new requests.
+    read(opts?: { pattern?: string; limit?: number; includeStatic?: boolean; afterSequence?: number; }): Promise<{ cursor: number; entries: Array<unknown>; hasMore: boolean; }>; // Cursor-paged read: pass `afterSequence` from the previous result to get only new requests. Returns network rows only; endpoint candidates come from the explicit `recon.discover(tab)` (not a hidden side effect of reading).
   };
   cookies(domain: string): Promise<Array<unknown>>;
   cookie(name: string, opts?: { domain?: string; }): Promise<string | undefined>; // Read one cookie's value at run time — the replay hook for per-request tokens a frozen tool needs (csrf/ct0/ csrftoken/XSRF-TOKEN). Defaults to the current page's host. Returns undefined when the cookie is absent.
   fetchJson(url: string, opts?: Record<string, unknown>): Promise<unknown>; // Fetch JSON through the page (its cookies, its origin) — the network-first way to freeze a site: find the endpoint, call it directly.
   frames(): Promise<Array<{ index: number; frameId: string; url: string; name: string; crossOrigin?: boolean; oopif?: boolean; }>>;
   download(pattern?: string, timeoutMs?: number): Promise<unknown>;
-  markDeliverable(): Promise<void>;
-  markHandoff(): Promise<void>;
 }
 
 type Target = ({ frame?: FrameStep | FrameStep[]; within?: string }) & (

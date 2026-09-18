@@ -5,19 +5,15 @@
  *   needs_confirmation      — write actions that change the user's accounts (when `confirmWrites` is on)
  * Denials carry `retryable`; a non-retryable denial must not be bypassed through another path.
  */
-import fs from 'node:fs';
-import path from 'node:path';
-import { OPENCLI_MCP_DIR, readConfig } from '../host/state.js';
+import { readConfig } from '../host/state.js';
 import { ActionError } from '../api/errors.js';
 
-export interface PolicyConfig { askNewOrigins?: boolean; confirmWrites?: boolean; allowedHosts?: string[]; blockedHosts?: string[] }
+export interface PolicyConfig { askNewOrigins?: boolean; confirmWrites?: boolean; allowedHosts?: string[] }
 export type Decision = { allowed: true } | { allowed: false; code: string; message: string; hint?: string; retryable: boolean };
 
-const ALLOWLIST_FILE = path.join(OPENCLI_MCP_DIR, 'allowed-hosts.json');
-
+// Single-user local tool: origins approved in a session live in memory only — no file persistence, blocklist, or wildcards.
 export class Policy {
   private allowed = new Set<string>();
-  private blocked = new Set<string>();
   readonly askNewOrigins: boolean;
   readonly confirmWrites: boolean;
   constructor(cfg: PolicyConfig = {}) {
@@ -26,31 +22,20 @@ export class Policy {
     this.askNewOrigins = merged.askNewOrigins ?? false;
     this.confirmWrites = merged.confirmWrites ?? false;
     for (const h of merged.allowedHosts ?? []) this.allowed.add(h.toLowerCase());
-    for (const h of merged.blockedHosts ?? []) this.blocked.add(h.toLowerCase());
-    try { for (const h of JSON.parse(fs.readFileSync(ALLOWLIST_FILE, 'utf8')) as string[]) this.allowed.add(h.toLowerCase()); } catch { /* none */ }
   }
-  private matches(set: Set<string>, host: string): boolean {
+  private matches(host: string): boolean {
     const h = host.toLowerCase();
-    for (const s of set) if (h === s || h.endsWith(`.${s}`) || s === '*') return true;
+    for (const s of this.allowed) if (h === s || h.endsWith(`.${s}`)) return true;
     return false;
   }
   /** Navigation / claim policy for a host. */
   checkOrigin(url: string): Decision {
     let host: string;
     try { host = new URL(url).hostname; } catch { return { allowed: false, code: 'invalid_url', message: `not a URL: ${url}`, retryable: false }; }
-    if (this.matches(this.blocked, host)) return { allowed: false, code: 'site_blocked', message: `${host} is on the blocklist`, retryable: false };
-    if (!this.askNewOrigins || this.matches(this.allowed, host)) return { allowed: true };
-    return { allowed: false, code: 'needs_origin_approval', message: `${host} has not been approved for this runtime`, hint: `Ask the user, then session.allowOrigin(${JSON.stringify(host)}) in js (add true to persist it for this site).`, retryable: true };
+    if (!this.askNewOrigins || this.matches(host)) return { allowed: true };
+    return { allowed: false, code: 'needs_origin_approval', message: `${host} has not been approved for this runtime`, hint: `Ask the user, then session.allowOrigin(${JSON.stringify(host)}) in js.`, retryable: true };
   }
-  allowHost(hostRaw: string, persist = false): void {
-    const host = hostRaw.toLowerCase();
-    this.allowed.add(host);
-    if (persist) {
-      let list: string[] = [];
-      try { list = JSON.parse(fs.readFileSync(ALLOWLIST_FILE, 'utf8')) as string[]; } catch { /* new */ }
-      if (!list.includes(host)) { list.push(host); fs.mkdirSync(OPENCLI_MCP_DIR, { recursive: true }); fs.writeFileSync(ALLOWLIST_FILE, JSON.stringify(list, null, 2)); }
-    }
-  }
+  allowHost(hostRaw: string): void { this.allowed.add(hostRaw.toLowerCase()); }
   /** Write-action policy: site commands with access:'write', or explicit outward actions. */
   checkWrite(what: string, confirmed: boolean): Decision {
     if (!this.confirmWrites || confirmed) return { allowed: true };

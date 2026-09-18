@@ -1,5 +1,5 @@
 /**
- * JsAnalyzer — syntax-aware extraction of URLs/endpoints and suspected secrets from JavaScript.
+ * JsAnalyzer — syntax-aware extraction of URLs/endpoints from JavaScript.
  * A JavaScript port of the core ideas of BishopFox/jsluice (MIT) on web-tree-sitter:
  * look where URLs are *used* (fetch/XHR/jQuery/axios/location/WebSocket…), resolve string
  * concatenation and template literals, and replace unknown expressions with `EXPR`.
@@ -25,31 +25,11 @@ export interface UrlMatch {
   filename?: string;
 }
 
-export interface SecretMatch {
-  kind: string;
-  key?: string;
-  /** Redacted: first 4 characters + ellipsis. Never the full value. */
-  preview: string;
-  severity: 'info' | 'low' | 'medium' | 'high';
-  line: number;
-  filename?: string;
-}
-
-export interface AnalyzeResult { urls: UrlMatch[]; secrets: SecretMatch[]; parseErrors: boolean }
+export interface AnalyzeResult { urls: UrlMatch[]; parseErrors: boolean }
 
 const HTTP_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE']);
 const ASSET_EXT = /\.(js|mjs|cjs|css|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|otf|eot|mp4|webm|mp3|map|json|html?)$/i;
 const FILE_EXT = new Set(['js', 'css', 'html', 'htm', 'xhtml', 'xlsx', 'xls', 'docx', 'doc', 'pdf', 'rss', 'xml', 'php', 'phtml', 'asp', 'aspx', 'asmx', 'ashx', 'cgi', 'pl', 'rb', 'py', 'do', 'jsp', 'jspa', 'json', 'jsonp', 'txt']);
-
-const SECRET_PATTERNS: Array<{ kind: string; re: RegExp; severity: SecretMatch['severity'] }> = [
-  { kind: 'aws_access_key', re: /\b(AKIA|ASIA)[0-9A-Z]{16}\b/, severity: 'high' },
-  { kind: 'github_token', re: /\bgh[pousr]_[A-Za-z0-9]{36}\b/, severity: 'high' },
-  { kind: 'gcp_api_key', re: /\bAIza[0-9A-Za-z_-]{35}\b/, severity: 'medium' },
-  { kind: 'slack_token', re: /\bxox[baprs]-[0-9A-Za-z-]{10,}\b/, severity: 'high' },
-  { kind: 'jwt', re: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/, severity: 'medium' },
-  { kind: 'private_key', re: /-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----/, severity: 'high' },
-];
-const SECRET_KEY_RE = /(api[_-]?key|secret|token|password|passwd|auth|credential|signature|sign[_-]?key)/i;
 
 export function maybeUrl(s: string): boolean {
   if (!s || s.length > 2048) return false;
@@ -112,9 +92,8 @@ export class JsAnalyzer {
     const max = opts.maxBytes ?? 8 * 1024 * 1024;
     const text = source.length > max ? source.slice(0, max) : source;
     const tree = this.parser.parse(text);
-    if (!tree) return { urls: [], secrets: [], parseErrors: true };
+    if (!tree) return { urls: [], parseErrors: true };
     const urls: UrlMatch[] = [];
-    const secrets: SecretMatch[] = [];
     const seen = new Set<string>();
     const push = (m: Omit<UrlMatch, 'kind' | 'filename'> | null) => {
       if (!m) return;
@@ -138,11 +117,9 @@ export class JsAnalyzer {
         case 'call_expression': this.matchCall(n, push); break;
         case 'new_expression': this.matchNew(n, push); break;
         case 'assignment_expression': this.matchAssignment(n, push); break;
-        case 'pair': this.matchPairSecret(n, secrets, opts.filename); break;
       }
-      if (n.type === 'string' || n.type === 'template_string') this.matchStringSecret(n, secrets, opts.filename);
     });
-    return { urls, secrets, parseErrors: tree.rootNode.hasError };
+    return { urls, parseErrors: tree.rootNode.hasError };
   }
 
   private walk(tree: Tree, visit: (n: Node) => void): void {
@@ -336,24 +313,5 @@ export class JsAnalyzer {
     const url = this.resolve(n.childForFieldName('right'));
     if (!maybeUrl(url) && !url.includes(EXPR)) return;
     push({ url, method: 'GET', type: 'locationAssignment', queryParams: [], bodyParams: [], line: this.line(n), source: this.src(n) });
-  }
-
-  private matchPairSecret(n: Node, out: SecretMatch[], filename?: string): void {
-    const k = n.childForFieldName('key'); const v = n.childForFieldName('value');
-    if (!k || !v || (v.type !== 'string' && v.type !== 'template_string')) return;
-    const key = decodeString(k.text);
-    if (!SECRET_KEY_RE.test(key)) return;
-    const val = this.resolve(v);
-    if (val.length < 12 || val.includes(EXPR) || /^(true|false|null|undefined)$/i.test(val) || maybeUrl(val)) return;
-    out.push({ kind: 'keyed_secret', key, preview: `${val.slice(0, 4)}…(${val.length})`, severity: 'low', line: this.line(n), filename });
-  }
-
-  private matchStringSecret(n: Node, out: SecretMatch[], filename?: string): void {
-    const val = this.resolve(n);
-    if (val.length < 16 || val.includes(EXPR)) return;
-    for (const p of SECRET_PATTERNS) {
-      const m = p.re.exec(val);
-      if (m) { out.push({ kind: p.kind, preview: `${m[0].slice(0, 4)}…(${m[0].length})`, severity: p.severity, line: this.line(n), filename }); return; }
-    }
   }
 }

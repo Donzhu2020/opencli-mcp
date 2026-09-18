@@ -76,7 +76,8 @@ async function handleCommand(cmd: Command): Promise<Result> {
         const tabId = await sessions.resolveTab(s, cmd.page);
         await ensureLoaded(tabId);
         // the action budget is the spec's own timeout (default 3s) — never the whole command deadline
-        const result = await performAct(tabId, { ...cmd.act, timeoutMs: Math.min(cmd.act.timeoutMs ?? 3000, 60_000) }, { aggressive: s.surface === 'browser', cursor: cmd.act.cursor ? (x, y) => sessions.cursor(s, tabId, x, y, true) : undefined });
+        // Show the cursor at the action point but never block input on its arrival (waitForArrival:false) — the overlay is a UX affordance, not on the latency path.
+        const result = await performAct(tabId, { ...cmd.act, timeoutMs: Math.min(cmd.act.timeoutMs ?? 3000, 60_000) }, { aggressive: s.surface === 'browser', cursor: cmd.act.cursor ? (x, y) => sessions.cursor(s, tabId, x, y, false) : undefined });
         return pageScoped(cmd.id, tabId, result);
       }
       case 'navigate': return await handleNavigate(cmd, s);

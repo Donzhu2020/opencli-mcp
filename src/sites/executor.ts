@@ -1,12 +1,11 @@
 /**
  * Run a site command (adapter) inside the opencli-mcp runtime.
  * Mirrors OpenCLI's executeCommand semantics (arg coercion, browser session, pre-navigation,
- * timeout, hooks) but obtains pages from our own runtime instead of a daemon.
+ * timeout) but obtains pages from our own runtime instead of a daemon.
  */
 import type { CliCommand } from '@jackwener/opencli/registry';
 import { executePipeline } from '@jackwener/opencli/pipeline';
 import { toEnvelope } from '@jackwener/opencli/errors';
-import { emitHook, type HookContext } from './hooks.js';
 import { coerceArgs } from './schema.js';
 import { ActionError, normalizeErrorCode } from '../api/errors.js';
 import type { RuntimePage } from '../backends/page-types.js';
@@ -63,8 +62,6 @@ export async function runSiteCommand(
     const args = coerceArgs(cmd.args, userArgs);
     cmd.validateArgs?.(args);
     const timeoutMs = typeof timeout === 'number' ? timeout * 1000 : (opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-    const hookCtx: HookContext = { command: key, args, startedAt: started };
-    await emitHook('onBeforeExecute', hookCtx);
 
     let result: unknown;
     if (!cmd.browser) {
@@ -94,8 +91,6 @@ export async function runSiteCommand(
         : executePipeline(page, cmd.pipeline ?? [], { args, debug: opts.debug });
       result = await withTimeout(run, timeoutMs, key);
     }
-    hookCtx.finishedAt = Date.now();
-    await emitHook('onAfterExecute', hookCtx, result);
     const elapsedMs = Date.now() - started;
     if (Array.isArray(result)) return { ok: true, site: cmd.site, name: cmd.name, columns: cmd.columns, rows: result, elapsedMs };
     if (result && typeof result === 'object' && cmd.columns) return { ok: true, site: cmd.site, name: cmd.name, columns: cmd.columns, rows: [result], elapsedMs };

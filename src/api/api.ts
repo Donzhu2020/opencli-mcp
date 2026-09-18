@@ -13,26 +13,20 @@ import { Browser } from './browser.js';
 import type { SessionContext } from './context.js';
 
 export interface AgentApi {
-  agent: { browsers: { list(): Promise<Array<{ id: string; type: string; connected: boolean }>>; get(id: string): Promise<Browser>; getDefault(): Promise<Browser>; getForUrl(url: string): Promise<Browser> }; documentation: { get(name: string): string | null } };
+  agent: { browsers: { getDefault(): Promise<Browser> }; documentation: { get(name: string): string | null } };
   sites: Record<string, unknown> & { search(q: string, limit?: number): unknown; list(): unknown; enable(site: string, opts?: { write?: boolean }): { site: string; tools: string[] }; disable(site: string): boolean; run(site: string, name: string, args?: Record<string, unknown>): Promise<unknown> };
   recon: { discover(tab: Tab, opts?: Parameters<typeof discoverEndpoints>[1]): Promise<DiscoverResult> };
   tools: { define(def: ToolDefinition | (Omit<ToolDefinition, 'func'> & { func?: string | ((ctx: Record<string, unknown>) => unknown) })): Promise<{ file: string; site: string; name: string }>; compile(opts: Parameters<typeof compileFromTrace>[2]): ToolDefinition; list(): ReturnType<typeof listDefinedTools>; remove(site: string, name: string): boolean };
-  session: { id: string; /** approve a website host after the user agreed (needs_origin_approval); persist remembers it */ allowOrigin(host: string, persist?: boolean): { host: string; persist: boolean }; trace(): unknown[]; clearTrace(): void; };
+  session: { id: string; /** approve a website host after the user agreed (needs_origin_approval), for this run */ allowOrigin(host: string): { host: string }; trace(): unknown[]; clearTrace(): void; };
 }
 
 export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
   const state = rt.session(sessionId);
   const ctx: SessionContext = { rt, sessionId, state };
-  const browserFor = (id: string): Browser => {
-    const backend = rt.backend();
-    if (id === 'chrome' || id === 'extension') { if (backend !== 'extension') throw new ActionError('browser_unavailable', 'Chrome extension backend is not connected', 'Run doctor; make sure Chrome is running with the opencli-mcp extension.'); return new Browser('chrome', 'extension', ctx); }
-    throw new ActionError('unknown_browser', `no browser "${id}"`);
-  };
+  // One user, one Chrome — there is no browser fleet to route among; getDefault is the single accessor.
   const getDefault = async (): Promise<Browser> => {
-    const b = rt.backend();
-    if (b === 'none') throw new ActionError('browser_unavailable', 'No browser backend is connected', 'Run doctor. Site commands with strategy `public` still work without a browser.');
-    if (b !== 'extension') throw new ActionError('browser_unavailable', 'Chrome extension backend is not connected', 'Run doctor; make sure Chrome is running with the opencli-mcp extension.');
-    return browserFor('chrome');
+    if (rt.backend() !== 'extension') throw new ActionError('browser_unavailable', 'No browser backend is connected', 'Run doctor. Site commands with strategy `public` still work without a browser.');
+    return new Browser('chrome', 'extension', ctx);
   };
 
   const siteBase = {
@@ -67,14 +61,7 @@ export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
 
   return {
     agent: {
-      browsers: {
-        list: async () => [
-          { id: 'chrome', type: 'extension', connected: rt.backend() === 'extension' },
-        ],
-        get: async (id: string) => browserFor(id),
-        getDefault,
-        getForUrl: async (_url: string) => getDefault(),
-      },
+      browsers: { getDefault },
       documentation: { get: (name: string) => readDoc(name) },
     },
     sites,
@@ -88,7 +75,7 @@ export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
     },
     session: {
       id: sessionId,
-      allowOrigin: (host: string, persist = false) => { rt.policy.allowHost(host, persist); return { host, persist }; },
+      allowOrigin: (host: string) => { rt.policy.allowHost(host); return { host }; },
       trace: () => state.trace.events,
       clearTrace: () => { state.trace.clear(); state.netEvidence.length = 0; state.netLog.clear(); },
     },

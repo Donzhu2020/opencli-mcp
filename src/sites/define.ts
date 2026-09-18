@@ -143,6 +143,63 @@ export type CompileInput = string | { sample: string; description?: string; type
  * failure (`step`, `label`, `state`) when a step fails. Inputs are explicit: only exact occurrences of a declared
  * sample value become `args.<name>`.
  */
+function hostOf(url: string): string | undefined { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return undefined; } }
+const NOISE = /(googletagmanager|google-analytics|doubleclick|facebook\.net|hotjar|sentry|segment\.com|intercom|crazyegg|clarity\.ms|cloudflareinsights|hcaptcha|recaptcha|amazon-adsystem|newrelic|datadoghq|\/collect\b|\/beacon\b|\/telemetry\b|\/analytics\b|\/log\b)/i;
+/** Words worth matching: what the agent saw (observe state) or extracted (evaluate result) — long enough to be specific. */
+function evidenceTokens(trace: TraceEvent[]): Set<string> {
+  const texts: string[] = [];
+  for (const e of trace) {
+    if (e.kind === 'evaluate' && e.result) texts.push(e.result);
+    if (e.kind === 'observe' && e.sample) texts.push(e.sample.replace(/\[ref=e\d+\]/g, ''));
+  }
+  const out = new Set<string>();
+  for (const t of texts.slice(-4)) for (const w of t.match(/[\p{L}\p{N}][\p{L}\p{N}'’.-]{3,}/gu) ?? []) if (!/^(true|false|null|undefined|button|link|heading|text|list|listitem|navigation|generic|main|banner|contentinfo|complementary|region|article|image|img|textbox|combobox|checkbox|https?)$/i.test(w)) out.add(w.toLowerCase());
+  return out;
+}
+/** The captured JSON response that carries the data the agent ended up with; else the largest same-site JSON response. */
+function pickEndpoint(trace: TraceEvent[], host: string | undefined): { endpoint: Extract<TraceEvent, { kind: 'network' }>; matched: number; byDefault: boolean } | null {
+  const cands = trace.filter((e): e is Extract<TraceEvent, { kind: 'network' }> => e.kind === 'network' && /json|graphql|x-component/i.test(e.contentType ?? '') && (e.status ?? 200) < 400 && (e.resourceType === undefined || e.resourceType === 'XHR' || e.resourceType === 'Fetch') && !NOISE.test(e.url) && (!host || (hostOf(e.url) ?? '').endsWith(host)));
+  if (!cands.length) return null;
+  const tokens = evidenceTokens(trace);
+  let best: { endpoint: typeof cands[number]; matched: number } | null = null;
+  for (const c of cands) {
+    if (!c.responseSample || !tokens.size) continue;
+    const hay = c.responseSample.toLowerCase();
+    let matched = 0; for (const t of tokens) if (hay.includes(t)) matched++;
+    if (matched && (!best || matched > best.matched || (matched === best.matched && (c.bodyBytes ?? 0) > (best.endpoint.bodyBytes ?? 0)))) best = { endpoint: c, matched };
+  }
+  if (best) return { ...best, byDefault: false };
+  const largest = [...cands].sort((a, b) => (b.bodyBytes ?? 0) - (a.bodyBytes ?? 0))[0];
+  return { endpoint: largest, matched: 0, byDefault: true };
+}
+/** URL literal with query values equal to an input sample replaced by the (encoded) argument. */
+function urlLit(url: string, inputs: Array<{ name: string; sample: string; mode: 'exact' | 'within' }>, lit: (v: string) => string): string {
+  try {
+    const u = new URL(url); let touched = false;
+    for (const [k, v] of [...u.searchParams]) for (const i of inputs) if (i.sample && (v === i.sample || (i.mode === 'within' && v.includes(i.sample)))) { u.searchParams.set(k, `__ARG_${i.name}__${v === i.sample ? '' : v.split(i.sample).join(`__ARG_${i.name}__`)}`); touched = true; }
+    if (!touched) return lit(url);
+    const s = u.toString().replace(/__ARG_([a-zA-Z_$][\w$]*)__/g, (_m, n: string) => `\${encodeURIComponent(args.${n})}`);
+    return '`' + s.replace(/`/g, '\\`') + '`';
+  } catch { return lit(url); }
+}
+/** Body literal: JSON string values equal to an input sample become the argument (correctly escaped via JSON.stringify); form bodies go through URLSearchParams; anything else stays a literal. */
+function bodyLit(post: string, contentType: string | undefined, inputs: Array<{ name: string; sample: string; mode: 'exact' | 'within' }>, lit: (v: string) => string): string {
+  const mark = (v: string): string | null => { for (const i of inputs) { if (!i.sample) continue; if (v === i.sample) return `__ARG_${i.name}__`; if (i.mode === 'within' && v.includes(i.sample)) return v.split(i.sample).join(`__ARG_${i.name}__`); } return null; };
+  const unmark = (s: string): string => s.replace(/"((?:[^"\\]|\\.)*__ARG_[a-zA-Z_$][\w$]*__(?:[^"\\]|\\.)*)"/g, (_m, inner: string) => /^__ARG_[a-zA-Z_$][\w$]*__$/.test(inner) ? `args.${inner.slice(6, -2)}` : '`' + inner.replace(/__ARG_([a-zA-Z_$][\w$]*)__/g, '${args.$1}') + '`');
+  try {
+    const walk = (v: unknown): unknown => { if (typeof v === 'string') return mark(v) ?? v; if (Array.isArray(v)) return v.map(walk); if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, walk(x)])); return v; };
+    const json = JSON.parse(post) as unknown;
+    const marked = JSON.stringify(walk(json));
+    return marked.includes('__ARG_') ? `JSON.stringify(${unmark(marked)})` : `JSON.stringify(${marked})`;
+  } catch { /* not JSON */ }
+  if (/x-www-form-urlencoded/i.test(contentType ?? '')) {
+    const p = new URLSearchParams(post); let touched = false;
+    for (const [k, v] of [...p]) { const m = mark(v); if (m) { p.set(k, m); touched = true; } }
+    if (touched) return '`' + p.toString().replace(/__ARG_([a-zA-Z_$][\w$]*)__/g, '${encodeURIComponent(args.$1)}').replace(/`/g, '\\`') + '`';
+  }
+  return lit(post);
+}
+
 export function compileFromTrace(trace: TraceEvent[], opts: { site: string; name: string; description: string; access?: 'read' | 'write'; inputs?: Record<string, CompileInput>; domain?: string }): ToolDefinition & { warnings?: string[] } {
   const inputs = Object.entries(opts.inputs ?? {}).map(([name, v]) => (typeof v === 'string' ? { name, sample: v, type: 'string' as const, required: true, mode: 'exact' as const } : { name, sample: v.sample, type: v.type ?? 'string', required: v.required ?? true, help: v.description, mode: v.mode ?? 'exact' as const }));
   const argDefs: ArgDef[] = inputs.map((i) => ({ name: i.name, type: i.type, required: i.required, help: i.help ?? `example: ${i.sample}` }));
@@ -156,16 +213,28 @@ export function compileFromTrace(trace: TraceEvent[], opts: { site: string; name
   };
   const lit = (v: string): string => { const s = sub(v); return s.includes('${') ? '`' + s.replace(/`/g, '\\`') + '`' : JSON.stringify(s); };
 
-  const net = trace.filter((e): e is Extract<TraceEvent, { kind: 'network' }> => e.kind === 'network' && /json|graphql|x-component/i.test(e.contentType ?? '') && (e.status ?? 200) < 400 && (opts.domain ? e.url.includes(opts.domain) : true));
   const body: string[] = [];
   const warnings: string[] = [];
   const firstGoto = trace.find((e): e is Extract<TraceEvent, { kind: 'goto' }> => e.kind === 'goto');
-  if (net.length > 0) {
-    const best = net.sort((a, b) => (b.bodyBytes ?? 0) - (a.bodyBytes ?? 0))[0];
+  const best = pickEndpoint(trace, opts.domain ?? (firstGoto ? hostOf(firstGoto.url) : undefined));
+  if (best) {
+    const { endpoint: e, matched, byDefault } = best;
     if (firstGoto) body.push(`  await tab.goto(${lit(firstGoto.url)});`);
-    body.push(`  const data = await tab.fetchJson(${lit(best.url)}${best.method && best.method !== 'GET' ? `, { method: ${JSON.stringify(best.method)} }` : ''});`);
+    // freeze the whole call the page made, not a guessed URL: method, the request headers that are part of the
+    // contract (x-*, content-type, accept…), the body — with the declared inputs parameterized where they occurred
+    const init: string[] = [];
+    if (e.method && e.method !== 'GET') init.push(`method: ${JSON.stringify(e.method)}`);
+    const headers = Object.fromEntries(Object.entries(e.requestHeaders ?? {}).filter(([k]) => /^(content-type|accept|x-.*|apikey|api-key|client-id)$/i.test(k)));
+    if (Object.keys(headers).length) init.push(`headers: ${JSON.stringify(headers)}`);
+    if (e.postData) init.push(`body: ${bodyLit(e.postData, e.requestHeaders?.['content-type'], inputs, lit)}`);
+    body.push(`  const data = await tab.fetchJson(${urlLit(e.url, inputs, lit)}${init.length ? `, { ${init.join(', ')} }` : ''});`);
     body.push(`  return data;`);
+    if (e.auth) warnings.push(`the captured request carried an Authorization header, which is not frozen (it is a credential the page computes); the tool will fail unless the endpoint also accepts the cookie session — prefer a cookie-authenticated endpoint or read the header from the page at run time`);
+    if (byDefault) warnings.push(`endpoint ${e.method ?? 'GET'} ${e.url.slice(0, 120)} was chosen by size, not by matching the data you extracted (no observe/evaluate evidence found in it); verify with tab.fetchJson before defining`);
+    else warnings.push(`endpoint ${e.method ?? 'GET'} ${e.url.slice(0, 120)} matched ${matched} word(s) of the data you extracted`);
   } else {
+    if (trace.some((e) => e.kind === 'network')) warnings.push('no JSON endpoint carried the data you extracted — the tool is frozen as UI steps (DOM); read tab.network.read() and recon.discover(tab) for an API, verify it with tab.fetchJson, then compile again');
+    else warnings.push('the trace has no captured requests (capture starts when a session tab is attached; adapter tabs do not capture) — the tool is frozen as UI steps (DOM)');
     // every step is wrapped so a failure names the step, carries the engine's error code/hint and the page state at that moment
     body.push(`  const step = async (n, label, fn) => { try { return await fn(); } catch (e) { const state = await tab.observe({ diff: false, viewport: true }).then((o) => o.state || '').catch(() => ''); throw Object.assign(new Error('step ' + n + ' (' + label + ') failed: ' + (e && e.message || e)), { code: (e && e.code) || 'step_failed', hint: e && e.hint, step: n, label, state: String(state).slice(0, 4000), expect: e && e.data && e.data.expect, failed: e && e.data && e.data.failed }); } };`);
     let n = 0;

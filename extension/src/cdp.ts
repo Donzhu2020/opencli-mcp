@@ -11,13 +11,19 @@ const attached = new Set<number>();
 
 
 // Large cap so agents stop hitting silent JSON.parse failures on real API bodies.
-const CDP_RESPONSE_BODY_CAPTURE_LIMIT = 8 * 1024 * 1024;
+const CDP_RESPONSE_BODY_CAPTURE_LIMIT = 1 * 1024 * 1024;
+/** Capture keeps at most this many pending entries per tab (the host drains after every goto/act). */
+const CAPTURE_MAX_ENTRIES = 600;
+/** Traffic that can carry data or trigger an action; assets (images, fonts, styles, scripts, media) are noise for API discovery. */
+const CAPTURED_TYPES = new Set(['Document', 'XHR', 'Fetch', 'WebSocket', 'EventSource', 'Other']);
 const CDP_REQUEST_BODY_CAPTURE_LIMIT = 1 * 1024 * 1024;
 
 type NetworkCaptureEntry = {
   kind: 'cdp';
   url: string;
   method: string;
+  /** CDP resource type: Document | XHR | Fetch | … */
+  resourceType?: string;
   requestHeaders?: Record<string, string>;
   requestBodyKind?: string;
   requestBodyPreview?: string;
@@ -326,6 +332,11 @@ async function attachNow(tabId: number, aggressiveRetry: boolean): Promise<void>
   // the accumulated capture state back unconditionally. Done last (after the
   // awaits above) so it wins over the onDetach handler's delete, which fires
   // while those awaits yield to the event loop.
+  if (!preservedNetworkCapture && aggressiveRetry) {
+    // API-first: every session tab is captured from the moment it is attached, so each goto/act leaves the requests it
+    // triggered in the trace and tools_compile can freeze the endpoint instead of the DOM. Adapter tabs opt in explicitly.
+    try { await sendDebuggerCommand({ tabId }, 'Network.enable'); networkCaptures.set(tabId, { patterns: [], entries: [], requestToIndex: new Map() }); } catch { /* next start-capture arms it */ }
+  }
   if (preservedNetworkCapture) {
     try {
       await sendDebuggerCommand({ tabId }, 'Network.enable');
@@ -812,6 +823,7 @@ function getOrCreateNetworkCaptureEntry(tabId: number, requestId: string, fallba
   url?: string;
   method?: string;
   requestHeaders?: Record<string, string>;
+  resourceType?: string;
 }): NetworkCaptureEntry | null {
   const state = networkCaptures.get(tabId);
   if (!state) return null;
@@ -821,10 +833,19 @@ function getOrCreateNetworkCaptureEntry(tabId: number, requestId: string, fallba
   }
   const url = fallback?.url || '';
   if (!shouldCaptureUrl(url, state.patterns)) return null;
+  if (fallback?.resourceType && !CAPTURED_TYPES.has(fallback.resourceType)) return null;
+  if (/^(data|blob|chrome-extension):/.test(url)) return null;
+  if (state.entries.length >= CAPTURE_MAX_ENTRIES) {
+    // drop the oldest third; rebuild the index so in-flight requests keep resolving
+    const drop = Math.floor(CAPTURE_MAX_ENTRIES / 3);
+    state.entries.splice(0, drop);
+    for (const [rid, idx] of [...state.requestToIndex]) { if (idx < drop) state.requestToIndex.delete(rid); else state.requestToIndex.set(rid, idx - drop); }
+  }
   const entry: NetworkCaptureEntry = {
     kind: 'cdp',
     url,
     method: fallback?.method || 'GET',
+    resourceType: fallback?.resourceType,
     requestHeaders: fallback?.requestHeaders || {},
     timestamp: Date.now(),
   };
@@ -938,6 +959,7 @@ export function registerListeners(): void {
         url: request?.url,
         method: request?.method,
         requestHeaders: normalizeHeaders(request?.headers),
+        resourceType: typeof eventParams?.type === 'string' ? eventParams.type : undefined,
       });
       if (!entry) return;
       // On an HTTP 30x, CDP re-fires requestWillBeSent with the SAME requestId

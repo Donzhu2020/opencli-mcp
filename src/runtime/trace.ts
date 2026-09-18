@@ -2,10 +2,10 @@
 export type TraceEvent = { t: number; page?: string } & (
   | { kind: 'goto'; url: string }
   | { kind: 'act'; action: string; target: string; targetSpec?: Record<string, unknown>; targetSelector?: string; targetRef?: string; value?: string; matchLevel?: string; ok: boolean }
-  | { kind: 'observe'; mode: string; summary?: string }
+  | { kind: 'observe'; mode: string; summary?: string; /** head of the state text — evidence of what the agent saw, matched against captured responses by tools_compile */ sample?: string }
   | { kind: 'expect'; what: Record<string, unknown>; ok: boolean }
-  | { kind: 'network'; url: string; method?: string; status?: number; contentType?: string; bodyBytes?: number }
-  | { kind: 'evaluate'; code: string }
+  | { kind: 'network'; url: string; method?: string; status?: number; contentType?: string; bodyBytes?: number; resourceType?: string; requestHeaders?: Record<string, string>; auth?: boolean; postData?: string; responseSample?: string; after?: string }
+  | { kind: 'evaluate'; code: string; result?: string }
   | { kind: 'site'; site: string; name: string; ok: boolean; elapsedMs: number }
   | { kind: 'note'; text: string }
 );

@@ -10,6 +10,7 @@ import { targetToSelector, fallbackSelector } from '../shared/engine.js';
 import type { FindEntry, FindResult, ElementAtResult, Expectation, CheckResult } from '../shared/page-contract.js';
 import type { DialogInfo, FrameStep } from '../protocol.js';
 import type { SessionContext } from './context.js';
+import type { TraceInput } from '../runtime/trace.js';
 
 export type Target = ({ frame?: FrameStep | FrameStep[]; /** container (css/selector/eN) to resolve inside */ within?: string }) & (
   | { ref: number | string }
@@ -34,6 +35,26 @@ function describeTarget(t: Target | undefined): string {
   if ('selector' in t) return `selector:${t.selector}${t.nth !== undefined ? `[${t.nth}]` : ''}`;
   if ('x' in t) return `point:${t.x},${t.y}`;
   return Object.entries(t).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}=${v}`).join(' ');
+}
+
+/** Request headers that are the browser's or the session's, never part of an endpoint's contract. */
+const DROP_HEADER = /^(cookie|authorization|user-agent|referer|origin|host|accept-encoding|accept-language|connection|content-length|pragma|cache-control|priority|te|upgrade-insecure-requests|sec-.*|:.*)$/i;
+const JSONISH = /json|graphql|x-component|text\/plain|javascript/i;
+/** A captured request as the trace records it: enough to freeze the call, nothing that is a credential. */
+function networkEvent(e: Record<string, unknown>, page: string, after?: string): Extract<TraceInput, { kind: 'network' }> {
+  const rh = (e.requestHeaders ?? {}) as Record<string, string>;
+  const headers: Record<string, string> = {};
+  for (const [k, v] of Object.entries(rh)) if (!DROP_HEADER.test(k)) headers[k.toLowerCase()] = v;
+  const contentType = String(e.responseContentType ?? e.contentType ?? e.mimeType ?? '') || undefined;
+  const preview = typeof e.responsePreview === 'string' ? e.responsePreview : undefined;
+  const post = typeof e.requestBodyPreview === 'string' && e.requestBodyPreview ? e.requestBodyPreview.slice(0, 4096) : undefined;
+  return {
+    kind: 'network', page, after, url: String(e.url ?? e.name ?? ''), method: (e.method as string | undefined)?.toUpperCase(),
+    status: (e.responseStatus ?? e.status) as number | undefined, contentType,
+    bodyBytes: (e.responseBodyFullSize as number | undefined) ?? preview?.length, resourceType: e.resourceType as string | undefined,
+    ...(Object.keys(headers).length && { requestHeaders: headers }), ...('authorization' in Object.fromEntries(Object.keys(rh).map((k) => [k.toLowerCase(), 1])) && { auth: true }),
+    ...(post && { postData: post }), ...(preview && contentType && JSONISH.test(contentType) && !preview.startsWith('base64:') && { responseSample: preview.slice(0, 8192) }),
+  };
 }
 
 const WRITE_EVAL_RE = /(\.click\s*\(|\.submit\s*\(|\blocation\s*(=|\.href\s*=|\.assign\s*\(|\.replace\s*\()|document\.write|\.remove\s*\(\)|localStorage\.(setItem|removeItem|clear)|\.value\s*=[^=])/;
@@ -65,8 +86,32 @@ export class Tab {
     return this.use(async (page) => {
       await page.goto(url, opts);
       this.ctx.state.trace.record({ kind: 'goto', url, page: this.id });
+      await this.harvest(page, 'goto');
       return this.info(page);
     });
+  }
+
+  /**
+   * API-first evidence: pull the requests this tab captured since the last pull (capture is on for every session tab)
+   * into the session log and the trace, tagged with the step that triggered them. Best effort — never fails a step.
+   */
+  private async harvest(page: RuntimePage, after?: string): Promise<Array<Record<string, unknown> & { seq: number }>> {
+    const captured = await page.readNetworkCapture().catch(() => [] as unknown[]) as Array<Record<string, unknown>>;
+    return this.logNetwork(captured, after);
+  }
+  private logNetwork(entries: Array<Record<string, unknown>>, after?: string): Array<Record<string, unknown> & { seq: number }> {
+    let log = this.ctx.state.netLog.get(this.id);
+    if (!log) { log = { seq: 0, entries: [], seen: new Set() }; this.ctx.state.netLog.set(this.id, log); }
+    const fresh: Array<Record<string, unknown> & { seq: number }> = [];
+    for (const e of entries) {
+      const key = String(e.requestId ?? `${e.method ?? 'GET'} ${e.url ?? e.name ?? ''} ${e.timestamp ?? e.startTime ?? e.ts ?? ''}`);
+      if (log.seen.has(key)) continue;
+      log.seen.add(key);
+      const entry = { ...e, seq: ++log.seq }; log.entries.push(entry); fresh.push(entry);
+      this.ctx.state.trace.record(networkEvent(e, this.id, after));
+    }
+    if (log.entries.length > 2000) log.entries.splice(0, log.entries.length - 2000);
+    return fresh;
   }
   private async info(page: RuntimePage): Promise<{ url: string | null; title: string | null }> {
     const url = await page.getCurrentUrl().catch(() => null);
@@ -100,7 +145,7 @@ export class Tab {
           if (d.changedRatio < 0.6) { out.diff = true; out.changed = { added: d.added, removed: d.removed, changed: d.changed }; text = `${d.text || '(no visible change)'}${focus ? `\n${focus}` : ''}`; }
         } else if (diffOn && prev && prevTree === tree) { out.diff = true; out.changed = { added: 0, removed: 0, changed: 0 }; text = `There has been no change since the last observe.${focus ? `\n${focus}` : ''}`; }
         out.state = text;
-        this.ctx.state.trace.record({ kind: 'observe', mode: 'aria', page: this.id, summary: meta.title ?? undefined });
+        this.ctx.state.trace.record({ kind: 'observe', mode: 'aria', page: this.id, summary: meta.title ?? undefined, sample: text.slice(0, 1500) });
       }
       if (mode === 'screenshot' || mode === 'both') out.image = await this.screenshotOn(page, { annotate: opts.annotate, fullPage: opts.fullPage });
       return out;
@@ -148,6 +193,7 @@ export class Tab {
         if (!opts.target) throw new ActionError('missing_target', `action "${action}" needs a target`);
         const r = await page.act({ kind: action, target: opts.target as Record<string, unknown>, value: opts.value, files: opts.files, to: opts.to as Record<string, unknown> | undefined, direction: opts.direction, amount: opts.amount, timeoutMs: opts.timeoutMs, settleMs: opts.settleMs ?? 600, cursor: this.ctx.rt.cursorEnabled });
         record(true, { ...r, ref: r.ref ?? undefined });
+        await this.harvest(page, action);
         return { action, target: describeTarget(opts.target), ...r, ok: true };
       } catch (err) {
         record(false);
@@ -182,8 +228,12 @@ export class Tab {
   /** Read-only page evaluation. */
   async evaluate(js: string, opts: { allowWrite?: boolean; frame?: number } = {}): Promise<unknown> {
     if (!opts.allowWrite && WRITE_EVAL_RE.test(js)) throw new ActionError('evaluate_read_only', 'evaluate is read-only; use act() for clicks, typing, navigation and form changes', 'Pass allowWrite:true only when the user explicitly wants a scripted page change.');
-    this.ctx.state.trace.record({ kind: 'evaluate', code: js.slice(0, 200), page: this.id });
-    return this.use((page) => opts.frame !== undefined ? page.evaluateInFrame(js, opts.frame) : page.evaluate(js));
+    return this.use(async (page) => {
+      const result = await (opts.frame !== undefined ? page.evaluateInFrame(js, opts.frame) : page.evaluate(js));
+      let sample: string | undefined; try { sample = JSON.stringify(result)?.slice(0, 2000); } catch { /* unserializable */ }
+      this.ctx.state.trace.record({ kind: 'evaluate', code: js.slice(0, 200), page: this.id, ...(sample && { result: sample }) });
+      return result;
+    });
   }
 
   /** Native alert/confirm/prompt dialogs block the page; commands fail with `dialog_open` until answered. */
@@ -202,18 +252,10 @@ export class Tab {
     start: async (pattern = ''): Promise<boolean> => this.use((p) => p.startNetworkCapture(pattern)),
     /** Cursor-paged read: pass `afterSequence` from the previous result to get only new requests. */
     read: async (opts: { pattern?: string; limit?: number; includeStatic?: boolean; afterSequence?: number } = {}): Promise<{ cursor: number; entries: unknown[]; hasMore: boolean }> => this.use(async (p) => {
-      const captured = await p.readNetworkCapture().catch(() => [] as unknown[]);
-      const fresh = (captured.length ? captured : await p.networkRequests(opts.includeStatic ?? false)) as Array<Record<string, unknown>>;
+      await this.harvest(p);
       let log = this.ctx.state.netLog.get(this.id);
-      if (!log) { log = { seq: 0, entries: [], seen: new Set() }; this.ctx.state.netLog.set(this.id, log); }
-      for (const e of fresh) {
-        const key = String(e.requestId ?? `${e.method ?? 'GET'} ${e.url ?? e.name ?? ''} ${e.startTime ?? e.timestamp ?? e.ts ?? ''}`);
-        if (log.seen.has(key)) continue;
-        log.seen.add(key);
-        log.entries.push({ ...e, seq: ++log.seq });
-        this.ctx.state.trace.record({ kind: 'network', url: String(e.url ?? e.name ?? ''), method: e.method as string | undefined, status: e.status as number | undefined, contentType: (e.contentType ?? e.mimeType) as string | undefined, bodyBytes: typeof e.responseBody === 'string' ? (e.responseBody as string).length : undefined, page: this.id });
-      }
-      if (log.entries.length > 2000) { log.entries.splice(0, log.entries.length - 2000); }
+      // no capture (adapter tab, or a tab attached before this host): the page's performance entries are all there is
+      if (!log || !log.entries.length) { this.logNetwork(await p.networkRequests(opts.includeStatic ?? false).catch(() => []) as Array<Record<string, unknown>>); log = this.ctx.state.netLog.get(this.id)!; }
       const after = opts.afterSequence ?? 0;
       const matching = log.entries.filter((e) => e.seq > after && (!opts.pattern || String(e.url ?? e.name ?? '').includes(opts.pattern)));
       const limit = opts.limit ?? 100;

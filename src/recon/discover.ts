@@ -36,7 +36,7 @@ function normalizeKey(method: string, url: string): string {
   return `${method} ${u}`;
 }
 
-export async function discoverEndpoints(page: RuntimePage, opts: { maxScripts?: number; includeAssets?: boolean; includeInline?: boolean; fetchTimeoutMs?: number } = {}): Promise<DiscoverResult> {
+export async function discoverEndpoints(page: RuntimePage, opts: { maxScripts?: number; includeAssets?: boolean; includeInline?: boolean; fetchTimeoutMs?: number; /** network entries already harvested by the session (Tab.network); when given the page's capture is not drained */ network?: Array<Record<string, unknown>> } = {}): Promise<DiscoverResult> {
   const maxScripts = opts.maxScripts ?? 40;
   const analyzer = await JsAnalyzer.create();
   const pageUrl = await page.getCurrentUrl().catch(() => null);
@@ -79,7 +79,7 @@ export async function discoverEndpoints(page: RuntimePage, opts: { maxScripts?: 
   // Dynamic evidence: network capture (if armed) and performance resource entries.
   const netByKey = new Map<string, { status?: number; contentType?: string; count: number }>();
   let networkEntries = 0;
-  const captured = await page.readNetworkCapture().catch(() => [] as unknown[]);
+  const captured = opts.network ?? await page.readNetworkCapture().catch(() => [] as unknown[]);
   const perf = await page.networkRequests(false).catch(() => [] as unknown[]);
   // (the session-level cursor log lives on Tab.network; recon merges what the page reports now)
   for (const e of [...captured, ...perf] as Array<Record<string, unknown>>) {

@@ -78,7 +78,7 @@ export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
       documentation: { get: (name: string) => readDoc(name) },
     },
     sites,
-    recon: { discover: (tab: Tab, opts) => tab.use((page) => discoverEndpoints(page, opts)) },
+    recon: { discover: async (tab: Tab, opts) => { const log = await tab.network.read({ limit: 2000 }); return tab.use((page) => discoverEndpoints(page, { ...opts, network: log.entries as Array<Record<string, unknown>> })); } },
     tools: {
       // from js the agent may pass the function it just ran; its source is what gets frozen
       define: (def: ToolDefinition | (Omit<ToolDefinition, 'func'> & { func?: string | ((ctx: Record<string, unknown>) => unknown) })) => rt.defineTool({ ...def, func: typeof def.func === 'function' ? def.func.toString() : def.func } as ToolDefinition),

@@ -10,7 +10,7 @@ import { pathToFileURL } from 'node:url';
 import { OPENCLI_MCP_DIR } from '../host/state.js';
 import { getRegistry } from '@jackwener/opencli/registry';
 import { opencliRoot } from '../lib/opencli.js';
-import type { TraceEvent } from '../runtime/trace.js';
+import type { TraceEvent, NetworkEvidence } from '../runtime/trace.js';
 
 /** Where agent-defined tools live. */
 export const DEFINED_TOOLS_DIR = path.join(OPENCLI_MCP_DIR, 'tools');
@@ -158,10 +158,9 @@ function evidenceTokens(trace: TraceEvent[]): Set<string> {
   return out;
 }
 /** The captured JSON response that carries the data the agent ended up with; else the largest same-site JSON response. */
-function pickEndpoint(trace: TraceEvent[], host: string | undefined): { endpoint: Extract<TraceEvent, { kind: 'network' }>; matched: number; byDefault: boolean } | null {
-  const cands = trace.filter((e): e is Extract<TraceEvent, { kind: 'network' }> => e.kind === 'network' && /json|graphql|x-component/i.test(e.contentType ?? '') && (e.status ?? 200) < 400 && (e.resourceType === undefined || e.resourceType === 'XHR' || e.resourceType === 'Fetch') && !NOISE.test(e.url) && (!host || (hostOf(e.url) ?? '').endsWith(host)));
+function pickEndpoint(net: NetworkEvidence[], tokens: Set<string>, host: string | undefined): { endpoint: NetworkEvidence; matched: number; byDefault: boolean } | null {
+  const cands = net.filter((e) => /json|graphql|x-component/i.test(e.contentType ?? '') && (e.status ?? 200) < 400 && (e.resourceType === undefined || e.resourceType === 'XHR' || e.resourceType === 'Fetch') && !NOISE.test(e.url) && (!host || (hostOf(e.url) ?? '').endsWith(host)));
   if (!cands.length) return null;
-  const tokens = evidenceTokens(trace);
   let best: { endpoint: typeof cands[number]; matched: number } | null = null;
   for (const c of cands) {
     if (!c.responseSample || !tokens.size) continue;
@@ -207,7 +206,7 @@ function bodyLit(post: string, contentType: string | undefined, emit: (v: string
   }
   return emit(post);
 }
-export function compileFromTrace(trace: TraceEvent[], opts: { site: string; name: string; description: string; access?: 'read' | 'write'; inputs?: Record<string, CompileInput>; domain?: string }): ToolDefinition & { warnings?: string[] } {
+export function compileFromTrace(trace: TraceEvent[], net: NetworkEvidence[], opts: { site: string; name: string; description: string; access?: 'read' | 'write'; inputs?: Record<string, CompileInput>; domain?: string }): ToolDefinition & { warnings?: string[] } {
   const inputs = Object.entries(opts.inputs ?? {}).map(([name, v]) => (typeof v === 'string' ? { name, sample: v, type: 'string' as const, required: true, mode: 'exact' as const } : { name, sample: v.sample, type: v.type ?? 'string', required: v.required ?? true, help: v.description, mode: v.mode ?? 'exact' as const }));
   const argDefs: ArgDef[] = inputs.map((i) => ({ name: i.name, type: i.type, required: i.required, help: i.help ?? `example: ${i.sample}` }));
   for (const i of inputs) if (!/^[A-Za-z_$][\w$]*$/.test(i.name)) throw Object.assign(new Error(`input name ${JSON.stringify(i.name)} must be a JavaScript identifier`), { code: 'invalid_definition' });
@@ -228,7 +227,7 @@ export function compileFromTrace(trace: TraceEvent[], opts: { site: string; name
   const body: string[] = [];
   const warnings: string[] = [];
   const firstGoto = trace.find((e): e is Extract<TraceEvent, { kind: 'goto' }> => e.kind === 'goto');
-  const best = pickEndpoint(trace, opts.domain ?? (firstGoto ? hostOf(firstGoto.url) : undefined));
+  const best = pickEndpoint(net, evidenceTokens(trace), opts.domain ?? (firstGoto ? hostOf(firstGoto.url) : undefined));
   if (best) {
     const { endpoint: e, matched, byDefault } = best;
     if (firstGoto) body.push(`  await tab.goto(${lit(firstGoto.url)});`);
@@ -253,7 +252,7 @@ export function compileFromTrace(trace: TraceEvent[], opts: { site: string; name
     if (byDefault) warnings.push(`endpoint ${e.method ?? 'GET'} ${e.url.slice(0, 120)} was chosen by size, not by matching the data you extracted (no observe/evaluate evidence found in it); verify with tab.fetchJson before defining`);
     else warnings.push(`endpoint ${e.method ?? 'GET'} ${e.url.slice(0, 120)} matched ${matched} word(s) of the data you extracted`);
   } else {
-    if (trace.some((e) => e.kind === 'network')) warnings.push('no JSON endpoint carried the data you extracted — the tool is frozen as UI steps (DOM); read tab.network.read() and recon.discover(tab) for an API, verify it with tab.fetchJson, then compile again');
+    if (net.length) warnings.push('no JSON endpoint carried the data you extracted — the tool is frozen as UI steps (DOM); read tab.network.read() and recon.discover(tab) for an API, verify it with tab.fetchJson, then compile again');
     else warnings.push('the trace has no captured requests (capture starts when a session tab is attached; adapter tabs do not capture) — the tool is frozen as UI steps (DOM)');
     // every step is wrapped so a failure names the step, carries the engine's error code/hint and the page state at that moment
     body.push(`  const step = async (n, label, fn) => { try { return await fn(); } catch (e) { const state = await tab.observe({ diff: false, viewport: true }).then((o) => o.state || '').catch(() => ''); throw Object.assign(new Error('step ' + n + ' (' + label + ') failed: ' + (e && e.message || e)), { code: (e && e.code) || 'step_failed', hint: e && e.hint, step: n, label, state: String(state).slice(0, 4000), expect: e && e.data && e.data.expect, failed: e && e.data && e.data.failed }); } };`);

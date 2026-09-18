@@ -1,25 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import { compileFromTrace } from '../src/sites/define.js';
-import type { TraceEvent, TraceInput } from '../src/runtime/trace.js';
+import type { TraceEvent, TraceInput, NetworkEvidence } from '../src/runtime/trace.js';
 
 const t = (e: TraceInput): TraceEvent => ({ t: 1, ...e } as TraceEvent);
+const n = (e: NetworkEvidence): NetworkEvidence => e; // network evidence is separate from the step trace
 
 describe('tools_compile: frozen flows run on the agent engine with checkpoints', () => {
   it('never lets page data break the generated source (literal ${ and backticks are escaped)', () => {
     const trace: TraceEvent[] = [
       t({ kind: 'goto', url: 'https://x.test/p?q=${danger}`' }),
       t({ kind: 'act', action: 'fill', target: 'label:Note', targetSpec: { label: 'Note' }, targetSelector: 'internal:label="Note"i', value: 'pay ${amount} now `tick`', ok: true }),
-      t({ kind: 'network', url: 'https://x.test/api', method: 'POST', contentType: 'application/json', status: 200, bodyBytes: 50, resourceType: 'Fetch', requestHeaders: { 'content-type': 'application/json' }, postData: '{"note":"has ${x} and `tick`"}', responseSample: '{"ok":true}' }),
     ];
-    const def = compileFromTrace(trace, { site: 'x', name: 'p', description: 'd', inputs: {} });
+    const net = [n({ url: 'https://x.test/api', method: 'POST', contentType: 'application/json', status: 200, bodyBytes: 50, resourceType: 'Fetch', requestHeaders: { 'content-type': 'application/json' }, postData: '{"note":"has ${x} and `tick`"}', responseSample: '{"ok":true}' })];
+    const def = compileFromTrace(trace, net, { site: 'x', name: 'p', description: 'd', inputs: {} });
     const f = def.func!;
     expect(() => new Function(`return (${f});`)).not.toThrow();      // the source parses
     expect(f).not.toMatch(/[^\\]\$\{(?!args\.)/);                    // no unescaped foreign interpolation survives
   });
 
   it('rejects an input name that is not a JavaScript identifier', () => {
-    const trace: TraceEvent[] = [t({ kind: 'goto', url: 'https://x.test/' }), t({ kind: 'network', url: 'https://x.test/api?id=7', contentType: 'application/json', status: 200, bodyBytes: 10, resourceType: 'Fetch', responseSample: '{"id":7}' })];
-    expect(() => compileFromTrace(trace, { site: 'x', name: 'p', description: 'd', inputs: { 'user-id': '7' } })).toThrow(/identifier/);
+    const trace: TraceEvent[] = [t({ kind: 'goto', url: 'https://x.test/' })];
+    const net = [n({ url: 'https://x.test/api?id=7', contentType: 'application/json', status: 200, bodyBytes: 10, resourceType: 'Fetch', responseSample: '{"id":7}' })];
+    expect(() => compileFromTrace(trace, net, { site: 'x', name: 'p', description: 'd', inputs: { 'user-id': '7' } })).toThrow(/identifier/);
   });
 
   it('freezes the locator intent, expect checkpoints, explicit args and structured step failures', () => {
@@ -32,9 +34,9 @@ describe('tools_compile: frozen flows run on the agent engine with checkpoints',
       t({ kind: 'act', action: 'click', target: 'ref:e7', targetSpec: { ref: 'e7' }, targetSelector: 'div > div:nth-child(3) > a', ok: true }),
       t({ kind: 'observe', mode: 'aria', summary: 'Results' }),
     ];
-    const strict = compileFromTrace(trace, { site: 'shop', name: 'search', description: 'Search the shop', inputs: { query: { sample: 'red shoes', description: 'search terms' } } });
+    const strict = compileFromTrace(trace, [], { site: 'shop', name: 'search', description: 'Search the shop', inputs: { query: { sample: 'red shoes', description: 'search terms' } } });
     expect(strict.func).toContain('tab.expect({"text":"Results for red shoes","url":"/search?q=red"})'); // exact by default: a checkpoint is never parameterized by guessing
-    const def = compileFromTrace(trace, { site: 'shop', name: 'search', description: 'Search the shop', inputs: { query: { sample: 'red shoes', description: 'search terms', mode: 'within' } } });
+    const def = compileFromTrace(trace, [], { site: 'shop', name: 'search', description: 'Search the shop', inputs: { query: { sample: 'red shoes', description: 'search terms', mode: 'within' } } });
     expect(def.args).toEqual([{ name: 'query', type: 'string', required: true, help: 'search terms' }]);
     const f = def.func!;
     expect(f).toContain('tab.act({ action: "fill", target: {"label":"Search"}, value: args.query })'); // the intent, not the resolved selector
@@ -53,23 +55,26 @@ describe('tools_compile: frozen flows run on the agent engine with checkpoints',
     expect(() => new Function(`return (${f});`)).not.toThrow();
   });
   it('prefers a captured JSON endpoint', () => {
-    const trace: TraceEvent[] = [t({ kind: 'goto', url: 'https://shop.example/' }), t({ kind: 'network', url: 'https://shop.example/api/items?q=red', contentType: 'application/json', status: 200, bodyBytes: 900 })];
-    const exact = compileFromTrace(trace, { site: 'shop', name: 'items', description: 'Items', inputs: { q: 'red' } });
+    const trace: TraceEvent[] = [t({ kind: 'goto', url: 'https://shop.example/' })];
+    const net = [n({ url: 'https://shop.example/api/items?q=red', contentType: 'application/json', status: 200, bodyBytes: 900 })];
+    const exact = compileFromTrace(trace, net, { site: 'shop', name: 'items', description: 'Items', inputs: { q: 'red' } });
     // a query value equal to the sample is the exact contract at the right granularity: it becomes the (encoded) argument
     expect(exact.func).toContain('tab.fetchJson(`https://shop.example/api/items?q=${encodeURIComponent(args.q)}`)');
     expect(exact.warnings?.some((w) => /chosen by size/.test(w))).toBe(true); // nothing extracted to match against
-    const def = compileFromTrace(trace, { site: 'shop', name: 'items', description: 'Items', inputs: { q: { sample: 'red', mode: 'within' } } });
+    const def = compileFromTrace(trace, net, { site: 'shop', name: 'items', description: 'Items', inputs: { q: { sample: 'red', mode: 'within' } } });
     expect(def.func).toContain('tab.fetchJson(`https://shop.example/api/items?q=${encodeURIComponent(args.q)}`)');
   });
   it('freezes the request that carried the data the agent extracted — headers and body included, credentials excluded', () => {
     const trace: TraceEvent[] = [
       t({ kind: 'goto', url: 'https://shop.example/search' }),
-      t({ kind: 'network', url: 'https://shop.example/api/telemetry', method: 'POST', contentType: 'application/json', status: 200, bodyBytes: 90000, resourceType: 'Fetch', responseSample: '{"ok":true,"sessions":[]}' }),
-      t({ kind: 'network', url: 'https://shop.example/graphql', method: 'POST', contentType: 'application/json', status: 200, bodyBytes: 4000, resourceType: 'Fetch', requestHeaders: { 'content-type': 'application/json', 'x-csrf-token': 'abc', accept: '*/*' }, auth: true, postData: '{"query":"q","variables":{"term":"red shoes"}}', responseSample: '{"data":{"items":[{"title":"Crimson Runner"},{"title":"Ruby Loafer"}]}}' }),
-      t({ kind: 'network', url: 'https://cdn.example/assets/app.js', contentType: 'application/javascript', status: 200, bodyBytes: 500000 }),
       t({ kind: 'evaluate', code: '[...document.querySelectorAll(".title")].map(e => e.textContent)', result: '["Crimson Runner","Ruby Loafer"]' }),
     ];
-    const def = compileFromTrace(trace, { site: 'shop', name: 'search', description: 'Search', inputs: { term: 'red shoes' } });
+    const net = [
+      n({ url: 'https://shop.example/api/telemetry', method: 'POST', contentType: 'application/json', status: 200, bodyBytes: 90000, resourceType: 'Fetch', responseSample: '{"ok":true,"sessions":[]}' }),
+      n({ url: 'https://shop.example/graphql', method: 'POST', contentType: 'application/json', status: 200, bodyBytes: 4000, resourceType: 'Fetch', requestHeaders: { 'content-type': 'application/json', 'x-csrf-token': 'abc', accept: '*/*' }, auth: true, postData: '{"query":"q","variables":{"term":"red shoes"}}', responseSample: '{"data":{"items":[{"title":"Crimson Runner"},{"title":"Ruby Loafer"}]}}' }),
+      n({ url: 'https://cdn.example/assets/app.js', contentType: 'application/javascript', status: 200, bodyBytes: 500000 }),
+    ];
+    const def = compileFromTrace(trace, net, { site: 'shop', name: 'search', description: 'Search', inputs: { term: 'red shoes' } });
     const f = def.func!;
     expect(f).toContain('tab.fetchJson("https://shop.example/graphql", { method: "POST", headers: {"content-type":"application/json","accept":"*/*"}, body: JSON.stringify({"query":"q","variables":{"term":args.term}}) })'); // the CSRF token is per-session: named, not frozen
     expect(def.warnings?.some((w) => /x-csrf-token/.test(w) && /not frozen/.test(w))).toBe(true);

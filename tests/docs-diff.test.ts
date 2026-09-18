@@ -31,9 +31,9 @@ describe('tools.define', () => {
       { t: 1, kind: 'goto', url: 'https://x.test/search?q=shoes' },
       { t: 2, kind: 'act', action: 'fill', target: 'css:#q', targetRef: '12', value: 'shoes', ok: true },
       { t: 3, kind: 'act', action: 'press', target: 'ref:12', value: 'Enter', ok: true },
-    ], { site: 'x', name: 'search', description: 's', inputs: { query: 'shoes' } });
+    ], [], { site: 'x', name: 'search', description: 's', inputs: { query: 'shoes' } });
     expect(draft.func).toContain('args.query'); expect(draft.args?.[0].name).toBe('query');
-    const net = compileFromTrace([{ t: 1, kind: 'goto', url: 'https://x.test/' }, { t: 2, kind: 'network', url: 'https://x.test/api/list?q=shoes', method: 'GET', status: 200, contentType: 'application/json', bodyBytes: 900 }], { site: 'x', name: 'list', description: 'l', inputs: { q: { sample: 'shoes', mode: 'within' } }, domain: 'x.test' });
+    const net = compileFromTrace([{ t: 1, kind: 'goto', url: 'https://x.test/' }], [{ url: 'https://x.test/api/list?q=shoes', method: 'GET', status: 200, contentType: 'application/json', bodyBytes: 900 }], { site: 'x', name: 'list', description: 'l', inputs: { q: { sample: 'shoes', mode: 'within' } }, domain: 'x.test' });
     expect(net.func).toContain('tab.fetchJson(`https://x.test/api/list?q=${encodeURIComponent(args.q)}`)');
   });
 });

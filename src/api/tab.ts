@@ -10,7 +10,7 @@ import { targetToSelector, fallbackSelector } from '../shared/engine.js';
 import type { FindEntry, FindResult, ElementAtResult, Expectation, CheckResult } from '../shared/page-contract.js';
 import type { DialogInfo, FrameStep } from '../protocol.js';
 import type { SessionContext } from './context.js';
-import type { TraceInput } from '../runtime/trace.js';
+import type { TraceInput, NetworkEvidence } from '../runtime/trace.js';
 import { discoverEndpoints, type EndpointCandidate } from '../recon/discover.js';
 
 export type Target = ({ frame?: FrameStep | FrameStep[]; /** container (css/selector/eN) to resolve inside */ within?: string }) & (
@@ -42,7 +42,7 @@ function describeTarget(t: Target | undefined): string {
 const DROP_HEADER = /^(cookie|authorization|user-agent|referer|origin|host|accept-encoding|accept-language|connection|content-length|pragma|cache-control|priority|te|upgrade-insecure-requests|sec-.*|:.*)$/i;
 const JSONISH = /json|graphql|x-component|text\/plain|javascript/i;
 /** A captured request as the trace records it: enough to freeze the call, nothing that is a credential. */
-function networkEvent(e: Record<string, unknown>, page: string, after?: string): Extract<TraceInput, { kind: 'network' }> {
+function networkEvent(e: Record<string, unknown>, page: string, after?: string): NetworkEvidence {
   const rh = (e.requestHeaders ?? {}) as Record<string, string>;
   const headers: Record<string, string> = {};
   for (const [k, v] of Object.entries(rh)) if (!DROP_HEADER.test(k)) headers[k.toLowerCase()] = v;
@@ -50,7 +50,7 @@ function networkEvent(e: Record<string, unknown>, page: string, after?: string):
   const preview = typeof e.responsePreview === 'string' ? e.responsePreview : undefined;
   const post = typeof e.requestBodyPreview === 'string' && e.requestBodyPreview ? e.requestBodyPreview.slice(0, 4096) : undefined;
   return {
-    kind: 'network', page, after, url: String(e.url ?? e.name ?? ''), method: (e.method as string | undefined)?.toUpperCase(),
+    page, after, url: String(e.url ?? e.name ?? ''), method: (e.method as string | undefined)?.toUpperCase(),
     status: (e.responseStatus ?? e.status) as number | undefined, contentType,
     bodyBytes: (e.responseBodyFullSize as number | undefined) ?? preview?.length, resourceType: e.resourceType as string | undefined,
     ...(Object.keys(headers).length && { requestHeaders: headers }), ...('authorization' in Object.fromEntries(Object.keys(rh).map((k) => [k.toLowerCase(), 1])) && { auth: true }),
@@ -109,9 +109,12 @@ export class Tab {
       if (log.seen.has(key)) continue;
       log.seen.add(key);
       const entry = { ...e, seq: ++log.seq }; log.entries.push(entry); fresh.push(entry);
-      this.ctx.state.trace.record(networkEvent(e, this.id, after));
+      // compile evidence lives in its own capped store, never in the step trace (so it can't evict a goto/act/expect)
+      const ev = this.ctx.state.netEvidence; ev.push(networkEvent(e, this.id, after));
+      if (ev.length > 800) ev.splice(0, ev.length - 800);
     }
     if (log.entries.length > 2000) log.entries.splice(0, log.entries.length - 2000);
+    if (log.seen.size > 8000) log.seen.clear(); // bounded: the extension drains captured entries, so re-dup is rare
     return fresh;
   }
   private async info(page: RuntimePage): Promise<{ url: string | null; title: string | null }> {

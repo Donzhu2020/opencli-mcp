@@ -20,6 +20,7 @@ const CDP_REQUEST_BODY_CAPTURE_LIMIT = 1 * 1024 * 1024;
 
 type NetworkCaptureEntry = {
   kind: 'cdp';
+  requestId: string;
   url: string;
   method: string;
   /** CDP resource type: Document | XHR | Fetch | … */
@@ -845,6 +846,7 @@ function getOrCreateNetworkCaptureEntry(tabId: number, requestId: string, fallba
   }
   const entry: NetworkCaptureEntry = {
     kind: 'cdp',
+    requestId,
     url,
     method: fallback?.method || 'GET',
     resourceType: fallback?.resourceType,

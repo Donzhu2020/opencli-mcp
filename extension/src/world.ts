@@ -1,7 +1,10 @@
 /**
- * Engine world — an isolated world per frame where Playwright's injected script lives, so page scripts
- * cannot see or tamper with it (the same arrangement the ChatGPT plugin uses). Contexts are cached per
- * tab+frame and rebuilt when Chrome reports the context gone.
+ * Frame worlds — the one place that knows how to run code in a frame. Two worlds per frame:
+ *  - the engine world: an isolated world where Playwright's injected script and our page module live, so page
+ *    scripts cannot see or tamper with them (the ChatGPT plugin's arrangement);
+ *  - the main world: the frame's own default context, for read-only page evaluation.
+ * Both are keyed by tab+frame, routed to the frame's own session when it is out-of-process, and rebuilt when
+ * Chrome reports a context gone.
  */
 import * as executor from './cdp';
 import { INJECTED_SOURCE } from '../../src/shared/injected-source';
@@ -16,12 +19,31 @@ function pageModuleSource(): Promise<string> {
 const READY = `(globalThis.${ENGINE_GLOBAL} && globalThis.${PAGE_GLOBAL})`;
 
 const WORLD_NAME = 'opencli-mcp-engine';
-const contexts = new Map<string, number>(); // `${tabId}:${frameId}` → executionContextId
+const contexts = new Map<string, number>(); // `${tabId}:${frameId}` → engine-world executionContextId
+/** Default (main-world) execution contexts of in-process child frames, reported by Runtime on the root session. */
+const mainContexts = new Map<string, number>();
+
+/** Track main-world contexts per frame and drop everything of a tab when it goes away. Call once at startup. */
+export function registerFrameTracking(): void {
+  chrome.debugger.onEvent.addListener((source, method, params: any) => {
+    const tabId = source.tabId;
+    if (!tabId || source.sessionId) return; // child sessions (OOPIF) are evaluated without a context id
+    if (method === 'Runtime.executionContextCreated') {
+      const ctx = params?.context;
+      if (ctx?.auxData?.frameId && ctx.auxData.isDefault === true) mainContexts.set(key(tabId, ctx.auxData.frameId), ctx.id);
+    } else if (method === 'Runtime.executionContextDestroyed') {
+      for (const [k, id] of mainContexts) if (id === params?.executionContextId && k.startsWith(`${tabId}:`)) { mainContexts.delete(k); break; }
+    } else if (method === 'Runtime.executionContextsCleared') forgetTab(tabId);
+  });
+  chrome.tabs.onRemoved.addListener((tabId) => forgetTab(tabId));
+  chrome.debugger.onDetach.addListener((source) => { if (source.tabId) forgetTab(source.tabId); });
+}
 
 function key(tabId: number, frameId: string): string { return `${tabId}:${frameId}`; }
 
 export function forgetTab(tabId: number): void {
   for (const k of [...contexts.keys()]) if (k.startsWith(`${tabId}:`)) contexts.delete(k);
+  for (const k of [...mainContexts.keys()]) if (k.startsWith(`${tabId}:`)) mainContexts.delete(k);
   for (const k of [...frameHosts.keys()]) if (k.startsWith(`${tabId}:`)) frameHosts.delete(k);
 }
 
@@ -105,6 +127,29 @@ export async function evaluateInWorld(tabId: number, frameId: string | null, exp
     if (/Cannot find context|context was destroyed|engine_missing|not found|Inspected target navigated/i.test(msg)) { if (frameId === null) forgetTab(tabId); else { contexts.delete(key(tabId, frameId)); frameHosts.delete(key(tabId, frameId)); } return run(); }
     throw err;
   }
+}
+
+/** Evaluate in a frame's MAIN world (read-only page access): root session for the main frame and in-process frames (by context id), the frame's own session otherwise. */
+export async function evaluateMain(tabId: number, frameId: string | null, expression: string, aggressive: boolean, timeoutMs?: number): Promise<unknown> {
+  await executor.ensureAttached(tabId, aggressive);
+  if (frameId === null) return executor.evaluateAsync(tabId, expression, aggressive, timeoutMs);
+  const k = key(tabId, frameId);
+  let host = frameHosts.get(k);
+  if (!host) { host = (await executor.hasFrameTarget(tabId, frameId, aggressive)) ? 'target' : 'root'; frameHosts.set(k, host); }
+  const params: Record<string, unknown> = { expression, returnByValue: true, awaitPromise: true };
+  if (host === 'root') {
+    let ctx = mainContexts.get(k);
+    if (ctx === undefined) { await executor.sendDebuggerCommand({ tabId }, 'Runtime.enable').catch(() => {}); await new Promise((r) => setTimeout(r, 50)); ctx = mainContexts.get(k); }
+    if (ctx === undefined) throw Object.assign(new Error(`no execution context for frame ${frameId}`), { code: 'frame_unreachable', hint: 'The frame may still be loading; observe and retry.' });
+    params.contextId = ctx;
+  }
+  const r = await frameCall(tabId, frameId, 'Runtime.evaluate', params, aggressive, timeoutMs) as { result?: { value?: unknown }; exceptionDetails?: { exception?: { description?: string }; text?: string } };
+  if (r.exceptionDetails) {
+    const msg = r.exceptionDetails.exception?.description ?? r.exceptionDetails.text ?? 'evaluate failed';
+    if (/Cannot find context|context with specified id|Execution context was destroyed/i.test(msg)) { mainContexts.delete(k); throw Object.assign(new Error(msg), { code: 'frame_unreachable', hint: 'The frame navigated; retry.' }); }
+    throw new Error(msg);
+  }
+  return r.result?.value;
 }
 
 /** Call one page-module function (extension/src/page) in the main frame's world or a child frame's world. */

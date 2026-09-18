@@ -11,7 +11,7 @@ import { executeWithJournal } from './journal';
 import { NativeHost } from './native';
 import { SessionManager, SessionError, type Session } from './sessions';
 import { performAct, ActError } from './act';
-import { evaluateInEngine, forgetTab as forgetEngineTab } from './world';
+import { evaluateInEngine, evaluateMain, registerFrameTracking, forgetTab as forgetEngineTab } from './world';
 
 const CDP_ALLOWLIST = new Set([
   'Accessibility.enable', 'Accessibility.getFullAXTree', 'Accessibility.getPartialAXTree',
@@ -28,7 +28,7 @@ const host = new NativeHost((cmd) => executeWithJournal(cmd, handleCommand));
 const sessions = new SessionManager((e) => host.event(e));
 
 executor.registerListeners();
-executor.registerFrameTracking();
+registerFrameTracking();
 chrome.tabs.onRemoved.addListener((tabId) => forgetEngineTab(tabId));
 chrome.webNavigation.onCommitted.addListener((d) => { if (d.frameId === 0) forgetEngineTab(d.tabId); });
 chrome.runtime.onInstalled.addListener(() => host.connect());
@@ -176,7 +176,7 @@ async function handleExec(cmd: Command, s: Session): Promise<Result> {
     const frames = enumerateCrossOriginFrames(await executor.getFrameTree(tabId));
     const f = frames[cmd.frameIndex];
     if (!f) return { id: cmd.id, ok: false, error: `Frame index ${cmd.frameIndex} out of range (${frames.length})`, errorCode: 'frame_not_found' };
-    return pageScoped(cmd.id, tabId, await executor.evaluateInFrame(tabId, cmd.code, f.frameId, aggressive, commandTimeoutMs(cmd)));
+    return pageScoped(cmd.id, tabId, await evaluateMain(tabId, f.frameId, cmd.code, aggressive, commandTimeoutMs(cmd)));
   }
   return pageScoped(cmd.id, tabId, await executor.evaluateAsync(tabId, cmd.code, aggressive, commandTimeoutMs(cmd)));
 }

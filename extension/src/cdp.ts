@@ -9,7 +9,6 @@
 
 const attached = new Set<number>();
 
-const tabFrameContexts = new Map<number, Map<string, number>>();
 const frameTargets = new Map<string, string>();
 const frameTargetKeys = new Map<string, string>();
 let frameTargetCleanupRegistered = false;
@@ -705,113 +704,9 @@ export async function insertText(
   await sendDebuggerCommand({ tabId }, 'Input.insertText', { text });
 }
 
-export function registerFrameTracking(): void {
-  registerFrameTargetCleanup();
-  chrome.debugger.onEvent.addListener((source, method, params: any) => {
-    const tabId = source.tabId;
-    if (!tabId) return;
-
-    if (method === 'Runtime.executionContextCreated') {
-      const context = params.context;
-      if (!context?.auxData?.frameId || context.auxData.isDefault !== true) return;
-      const frameId = context.auxData.frameId as string;
-      if (!tabFrameContexts.has(tabId)) {
-        tabFrameContexts.set(tabId, new Map());
-      }
-      tabFrameContexts.get(tabId)!.set(frameId, context.id);
-    }
-
-    if (method === 'Runtime.executionContextDestroyed') {
-      const ctxId = params.executionContextId;
-      const contexts = tabFrameContexts.get(tabId);
-      if (contexts) {
-        for (const [fid, cid] of contexts) {
-          if (cid === ctxId) { contexts.delete(fid); break; }
-        }
-      }
-    }
-
-    if (method === 'Runtime.executionContextsCleared') {
-      tabFrameContexts.delete(tabId);
-    }
-  });
-
-  chrome.tabs.onRemoved.addListener((tabId) => {
-    tabFrameContexts.delete(tabId);
-  });
-}
-
 export async function getFrameTree(tabId: number): Promise<any> {
   await ensureAttached(tabId);
   return sendDebuggerCommand({ tabId }, 'Page.getFrameTree');
-}
-
-export async function evaluateInFrame(
-  tabId: number,
-  expression: string,
-  frameId: string,
-  aggressiveRetry: boolean = false,
-  timeoutMs: number = CDP_COMMAND_TIMEOUT_MS,
-): Promise<unknown> {
-  await ensureAttached(tabId, aggressiveRetry);
-
-  await sendDebuggerCommand({ tabId }, 'Runtime.enable').catch(() => {});
-
-  const contexts = tabFrameContexts.get(tabId);
-  const contextId = contexts?.get(frameId);
-
-  if (contextId !== undefined) {
-    try {
-      const result = await sendDebuggerCommand({ tabId }, 'Runtime.evaluate', {
-        expression,
-        contextId,
-        returnByValue: true,
-        awaitPromise: true,
-      }, timeoutMs) as {
-        result?: { type: string; value?: unknown; description?: string; subtype?: string };
-        exceptionDetails?: { exception?: { description?: string }; text?: string };
-      };
-      if (result.exceptionDetails) {
-        const errMsg = result.exceptionDetails.exception?.description
-          || result.exceptionDetails.text
-          || 'Eval error';
-        throw new Error(errMsg);
-      }
-      return result.result?.value;
-    } catch (err) {
-      // A navigated/reloaded frame invalidates its cached context id, but the
-      // Runtime.executionContextDestroyed event may not have been processed
-      // yet — the cache still holds the stale id and Runtime.evaluate rejects
-      // with "Cannot find context with specified id". Drop the stale id and
-      // fall through to the frame-target path instead of failing (evaluate()
-      // likewise re-resolves on a dead context). Re-throw genuine page errors.
-      const msg = String((err as { message?: string })?.message || err);
-      if (!/Cannot find context|context with specified id|Execution context was destroyed/i.test(msg)) {
-        throw err;
-      }
-      contexts?.delete(frameId);
-    }
-  }
-
-  // No cached context, or the cached one went stale: resolve via the frame target.
-  await sendCommandInFrameTarget(tabId, frameId, 'Runtime.enable', {}, aggressiveRetry, timeoutMs).catch(() => undefined);
-  const result = await sendCommandInFrameTarget(tabId, frameId, 'Runtime.evaluate', {
-    expression,
-    returnByValue: true,
-    awaitPromise: true,
-  }, aggressiveRetry, timeoutMs) as {
-    result?: { type: string; value?: unknown; description?: string; subtype?: string };
-    exceptionDetails?: { exception?: { description?: string }; text?: string };
-  };
-
-  if (result.exceptionDetails) {
-    const errMsg = result.exceptionDetails.exception?.description
-      || result.exceptionDetails.text
-      || 'Eval error';
-    throw new Error(errMsg);
-  }
-
-  return result.result?.value;
 }
 
 function normalizeCapturePatterns(pattern?: string): string[] {
@@ -901,7 +796,6 @@ export async function detach(tabId: number): Promise<void> {
   if (!attached.has(tabId)) return;
   attached.delete(tabId);
   networkCaptures.delete(tabId);
-  tabFrameContexts.delete(tabId);
   try { await chrome.debugger.detach({ tabId }); } catch { /* ignore */ }
 }
 
@@ -915,15 +809,13 @@ export function registerListeners(): void {
     dialogs.delete(tabId); dialogWaiters.delete(tabId); dialogClosedWaiters.delete(tabId);
     attached.delete(tabId);
     networkCaptures.delete(tabId);
-    tabFrameContexts.delete(tabId);
-    clearFrameTargetsForTab(tabId);
+      clearFrameTargetsForTab(tabId);
   });
   chrome.debugger.onDetach.addListener((source) => {
     if (source.tabId) {
       dialogs.delete(source.tabId);
       attached.delete(source.tabId);
       networkCaptures.delete(source.tabId);
-      tabFrameContexts.delete(source.tabId);
       clearFrameTargetsForTab(source.tabId);
       return;
     }

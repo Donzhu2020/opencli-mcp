@@ -365,7 +365,7 @@ export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
       const cmd = await rt.registry.resolve(site, name);
       if (cmd.access === 'write') Policy.throwIfDenied(rt.policy.checkWrite(`${site}/${name}`, Boolean(confirm)));
       const r = await rt.runSite(sessionId, site, name, rest);
-      if (!r.ok) throw new ActionError(r.error.code, r.error.message, r.error.hint, { site, command: name });
+      if (!r.ok) throw new ActionError(r.error.code, r.error.message, r.error.hint, { site, command: name , ...(r.error.details && { details: r.error.details }) });
       return r.rows ?? r.value;
     },
   };

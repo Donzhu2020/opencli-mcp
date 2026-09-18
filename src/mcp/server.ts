@@ -112,7 +112,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     const abort = new Promise<never>((_, rej) => { extra.signal?.addEventListener('abort', () => rej(new ActionError('cancelled', `${site}/${command} cancelled by the client`)), { once: true }); });
     try {
       const r = await Promise.race([rt.runSite(sessionId, site, command, rest), abort]);
-      return r.ok ? ok(r) : fail(new ActionError(r.error.code, r.error.message, r.error.hint, { site, command }));
+      return r.ok ? ok(r) : fail(new ActionError(r.error.code, r.error.message, r.error.hint, { site, command, ...(r.error.details && { details: r.error.details }) }));
     } finally { if (beat) clearInterval(beat); }
   };
   const gate = (tool: string): void => {

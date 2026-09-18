@@ -219,7 +219,7 @@ function definePageClass(lib: Lib): any {
         await new Promise((r) => setTimeout(r, 150));
       }
       const state = await this.aria({ viewport: true }).catch(() => '');
-      throw new ActError('expectation_failed', last ? last.failed.join('; ') : 'page not reachable', 'Observe the page; the flow may need a different step or a wait.', { expect: what as Record<string, unknown>, url: last?.url, title: last?.title, state: state.slice(0, 4000) });
+      throw new ActError('expectation_failed', last ? last.failed.join('; ') : 'page not reachable', 'Observe the page; the flow may need a different step or a wait.', { expect: what as Record<string, unknown>, failed: last?.failed ?? [], url: last?.url, title: last?.title, state: state.slice(0, 4000) });
     }
     async click(ref: string, opts: { nth?: number; firstOnMulti?: boolean } = {}): Promise<{ ref: string; matches_n: number; match_level: 'exact'; click_method: string; hit: string }> {
       const r = await this.act({ kind: 'click', target: refToTarget(ref, opts) });

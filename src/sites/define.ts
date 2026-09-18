@@ -162,7 +162,7 @@ export function compileFromTrace(trace: TraceEvent[], opts: { site: string; name
     body.push(`  return data;`);
   } else {
     // every step is wrapped so a failure names the step, carries the engine's error code/hint and the page state at that moment
-    body.push(`  const step = async (n, label, fn) => { try { return await fn(); } catch (e) { const state = await page.aria({ viewport: true }).catch(() => ''); throw Object.assign(new Error('step ' + n + ' (' + label + ') failed: ' + (e && e.message || e)), { code: (e && e.code) || 'step_failed', hint: e && e.hint, step: n, label, state: String(state).slice(0, 4000) }); } };`);
+    body.push(`  const step = async (n, label, fn) => { try { return await fn(); } catch (e) { const state = await page.aria({ viewport: true }).catch(() => ''); throw Object.assign(new Error('step ' + n + ' (' + label + ') failed: ' + (e && e.message || e)), { code: (e && e.code) || 'step_failed', hint: e && e.hint, step: n, label, state: String(state).slice(0, 4000), expect: e && e.extra && e.extra.expect, failed: e && e.extra && e.extra.failed }); } };`);
     let n = 0;
     const push = (label: string, call: string) => { n += 1; body.push(`  await step(${n}, ${JSON.stringify(label)}, () => ${call});`); };
     for (const e of trace) {

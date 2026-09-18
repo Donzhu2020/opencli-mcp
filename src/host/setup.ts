@@ -12,7 +12,7 @@
 import { execFileSync, spawn } from 'node:child_process';
 import { install, projectRoot } from './install.js';
 import { doctor } from './doctor.js';
-import { TOKEN_FILE, DEFAULT_REMOTE_PORT, readConfig } from './state.js';
+import { TOKEN_FILE, DEFAULT_PORT, readConfig } from './state.js';
 import path from 'node:path';
 import fs from 'node:fs';
 
@@ -53,11 +53,10 @@ export async function setup(opts: { waitMs?: number; noOpen?: boolean } = {}): P
   say(`1/4  Host manifest written for: ${written.join(', ') || 'no browser profile found (start Chrome once, or pass --user-data-dir to install)'}. Extension ID ${r.extensionId}.`);
 
   const c = stdioCommand(main);
-  const remote = readConfig().remote;
+  const port = readConfig().port ?? DEFAULT_PORT;
   say('2/4  Add opencli-mcp to your MCP client (any client; the runtime does not care which):');
-  say(`       ${JSON.stringify({ mcpServers: { 'opencli-mcp': { command: c.command, args: c.args } } })}`);
-  if (remote) say(`       remote agents: http://${remote.host ?? '127.0.0.1'}:${remote.port ?? DEFAULT_REMOTE_PORT}/mcp  with  Authorization: Bearer <contents of ${TOKEN_FILE}>  behind an authenticated tunnel`);
-  else say('       (remote agents: set { "remote": { "port": 19850 } } in ~/.opencli-mcp/config.json to add a token-protected HTTP endpoint)');
+  say(`       stdio  → ${JSON.stringify({ mcpServers: { 'opencli-mcp': { command: c.command, args: c.args } } })}`);
+  say(`       http   → http://127.0.0.1:${port}/mcp  with header  Authorization: Bearer <contents of ${TOKEN_FILE}>  (remote agents: put it behind an authenticated tunnel)`);
 
   const copied = copyToClipboard(r.extensionDir);
   const opened = opts.noOpen ? false : openExtensionsPage();
@@ -68,7 +67,7 @@ export async function setup(opts: { waitMs?: number; noOpen?: boolean } = {}): P
   let last = '';
   while (Date.now() < until) {
     const d = await doctor();
-    if (d.ok) { say(`     Connected: host at ${d.host.endpoint}, extension ${d.extension.id}. Done — opencli-mcp is ready.`); return true; }
+    if (d.ok) { say(`     Connected: host on port ${d.host.port}, extension ${d.extension.id}. Done — opencli-mcp is ready.`); return true; }
     const now = d.host.running ? 'host is up, extension not connected yet (reload it in chrome://extensions if it was already loaded)' : 'extension not loaded yet';
     if (now !== last) { say(`     ${now}`); last = now; }
     await new Promise((res) => setTimeout(res, 2000));

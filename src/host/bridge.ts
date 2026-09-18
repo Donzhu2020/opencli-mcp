@@ -30,7 +30,7 @@ export class ExtensionBridge extends EventEmitter<BridgeEvents> {
   connected = false;
 
   /** Set by the host so the extension learns where MCP is served (informational). */
-  ready: { version: string; endpoint: string } | null = null;
+  ready: { version: string; port: number } | null = null;
   /** Push the ready frame now (used when hello arrived before the host finished starting). */
   sendReady(): void { if (this.ready && this.connected) { try { this.channel.send({ type: 'ready', ...this.ready }); } catch { /* ignore */ } } }
 

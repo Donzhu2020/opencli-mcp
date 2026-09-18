@@ -1,10 +1,8 @@
 /**
- * Streamable HTTP MCP endpoint. One McpServer per MCP session; the runtime is shared. The same server listens either on
- * the local socket (no token — file permissions authorize) or on TCP with a bearer token for remote agents.
+ * Streamable HTTP MCP endpoint on loopback, bearer-token authenticated. One McpServer per MCP
+ * session; the runtime is shared. Local launchers and cloud agents (via a tunnel) use the same endpoint.
  */
-import fs from 'node:fs';
 import http from 'node:http';
-import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
@@ -12,8 +10,7 @@ import { timingSafeEqual } from 'node:crypto';
 import type { Runtime } from '../runtime/runtime.js';
 import { createMcpServer, type SessionServer } from '../mcp/server.js';
 
-export type Listen = { path: string } | { port: number; host?: string };
-export interface HttpServerHandle { endpoint: string; port?: number; host?: string; close(): Promise<void> }
+export interface HttpServerHandle { port: number; host: string; close(): Promise<void> }
 
 function readBody(req: http.IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -24,12 +21,12 @@ function readBody(req: http.IncomingMessage): Promise<unknown> {
   });
 }
 
-export async function startHttpServer(rt: Runtime, opts: { listen: Listen; token?: string; version: string }): Promise<HttpServerHandle> {
-  const host = 'path' in opts.listen ? 'opencli-mcp.local' : (opts.listen.host ?? '127.0.0.1');
+export async function startHttpServer(rt: Runtime, opts: { port: number; host?: string; token: string; version: string; allowNoAuth?: boolean }): Promise<HttpServerHandle> {
+  const host = opts.host ?? '127.0.0.1';
   const sessions = new Map<string, { transport: StreamableHTTPServerTransport; session: SessionServer }>();
 
   const authorized = (req: http.IncomingMessage, url: URL): boolean => {
-    if (!opts.token) return true; // the local socket: whoever can open it is the user
+    if (opts.allowNoAuth) return true;
     const h = req.headers.authorization ?? '';
     const bearer = h.startsWith('Bearer ') ? h.slice(7) : (url.searchParams.get('token') ?? '');
     const a = Buffer.from(bearer); const b = Buffer.from(opts.token);
@@ -73,17 +70,12 @@ export async function startHttpServer(rt: Runtime, opts: { listen: Listen; token
     }
   });
 
-  const listen = opts.listen;
-  const close = async () => { for (const s of sessions.values()) { await s.transport.close().catch(() => {}); await s.session.close().catch(() => {}); } await new Promise<void>((r) => server.close(() => r())); };
-  if ('path' in listen) {
-    if (process.platform !== 'win32') { fs.mkdirSync(path.dirname(listen.path), { recursive: true }); fs.rmSync(listen.path, { force: true }); } // a stale socket file from a crashed host
-    await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(listen.path, () => resolve()); });
-    if (process.platform !== 'win32') fs.chmodSync(listen.path, 0o600);
-    return { endpoint: listen.path, close };
-  }
   const port = await new Promise<number>((resolve, reject) => {
     server.once('error', reject);
-    server.listen(listen.port, host, () => { const a = server.address(); resolve(typeof a === 'object' && a ? a.port : listen.port); });
+    server.listen(opts.port, host, () => { const a = server.address(); resolve(typeof a === 'object' && a ? a.port : opts.port); });
   });
-  return { endpoint: `http://${host}:${port}/mcp`, port, host, close };
+  return {
+    port, host,
+    close: async () => { for (const s of sessions.values()) { await s.transport.close().catch(() => {}); await s.session.close().catch(() => {}); } await new Promise<void>((r) => server.close(() => r())); },
+  };
 }

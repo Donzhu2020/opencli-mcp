@@ -29,7 +29,7 @@ const targetSchema = z.object({
   x: z.number().optional().describe('viewport x (with y) for coordinate clicks'),
   y: z.number().optional(),
   frame: z.union([z.string(), z.number().int(), z.array(z.union([z.string(), z.number().int()]))]).optional().describe('iframe(s) to enter first, outermost first: css selector of the <iframe> or its 0-based index; chain with an array or "outer >> inner"; same-origin and cross-origin alike'),
-}).describe('One of: {ref} | {selector,nth?} | {role,name} | {label} | {text} | {testid} | {x,y}; add frame to target inside a same-origin iframe');
+}).strict().describe('One of: {ref} | {selector,nth?} | {role,name} | {label} | {text} | {testid} | {x,y}; add frame to target inside a same-origin iframe');
 
 function pickTarget(t: z.infer<typeof targetSchema> | undefined): Target | undefined {
   if (!t) return undefined;

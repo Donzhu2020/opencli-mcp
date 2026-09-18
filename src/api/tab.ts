@@ -50,6 +50,7 @@ export class Tab {
     state.tabLocks.set(this.id, new Promise<void>((r) => { release = r; }));
     try {
       await prev;
+      if (state.finalized && !state.pages.has(this.id)) throw new ActionError('page_released', `tab ${this.id} was released by finalize`, 'finalize ends the session\'s control of its tabs; open a new tab or claim the tab again (browser.user.claimTab).');
       state.selected = this.id;
       const page = this.bound ?? await this.ctx.rt.pageFor(this.ctx.sessionId, this.id);
       return await fn(page);

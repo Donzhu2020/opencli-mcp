@@ -9,6 +9,7 @@ import os from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { registerCommand, getRegistry, fullName, type CliCommand } from '@jackwener/opencli/registry';
 import { opencliClisDir, opencliManifestPath, importDist } from '../lib/opencli.js';
+import { DEFINED_TOOLS_DIR, saveTool, deleteTool, type ToolDefinition } from './define.js';
 
 export interface ManifestEntry {
   site: string; name: string; aliases?: string[]; description: string; access: 'read' | 'write';
@@ -28,7 +29,6 @@ export type SourceKind = 'builtin' | 'user' | 'defined';
 type LazyCommand = CliCommand & { _lazy?: boolean; _modulePath?: string };
 
 export const USER_OPENCLI_CLIS = path.join(os.homedir(), '.opencli', 'clis');
-export const DEFINED_TOOLS_DIR = path.join(os.homedir(), '.opencli-mcp', 'tools');
 
 export class SiteRegistry {
   private readonly loading = new Map<string, Promise<void>>();
@@ -79,12 +79,24 @@ export class SiteRegistry {
         const full = path.join(siteDir, file);
         try {
           await import(`${pathToFileURL(full).href}?t=${fs.statSync(full).mtimeMs}`);
-          for (const [key, cmd] of getRegistry()) if (key.startsWith(`${site}/`)) { this.sourceOf.set(key, 'defined'); (cmd as { source?: string }).source = 'defined'; }
+          this.sourceOf.set(`${site}/${file.slice(0, -3)}`, 'defined'); // the module itself carries source: 'defined'
         } catch (err) {
           process.stderr.write(`[opencli-mcp] failed to load defined tool ${full}: ${(err as Error).message}\n`);
         }
       }
     }
+  }
+
+  /** Define (or redefine) an agent tool: written to disk, imported, and registered as 'defined' in one step — usable immediately. */
+  async define(def: ToolDefinition): Promise<{ file: string; site: string; name: string }> {
+    const saved = await saveTool(def);
+    this.sourceOf.set(`${def.site}/${def.name}`, 'defined');
+    return saved;
+  }
+  remove(site: string, name: string): boolean {
+    const ok = deleteTool(site, name);
+    if (ok) this.sourceOf.delete(`${site}/${name}`);
+    return ok;
   }
 
   all(): CliCommand[] { return [...getRegistry().values()]; }

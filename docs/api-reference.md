@@ -30,7 +30,7 @@ class Browser {
     new(url?: string): Promise<Tab>;
     list(): Promise<Array<{ id: string; url?: string; title?: string; active?: boolean; }>>;
     get(id: string): Tab;
-    selected(): Promise<Tab>;
+    selected(): Promise<Tab | undefined>;
     finalize(opts?: { keep?: Array<{ tab: string | Tab; status: "deliverable" | "handoff"; }>; }): Promise<{ closed: Array<string>; kept: Array<string>; }>;
   };
   user: {

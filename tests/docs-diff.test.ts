@@ -12,6 +12,8 @@ describe('docs manifest', () => {
     expect(readDoc('js-tool')).toContain('agent.browsers');
     expect(readDoc('api-reference')).toContain('class Tab');
     expect(readDoc('api-reference')).not.toContain('use(fn');
+    expect(readDoc('api-reference')).toContain('selected(): Promise<Tab | undefined>'); // a real union result is kept…
+    expect(readDoc('api-reference')).not.toMatch(/\| undefined[,)]/); // …while `?` already expresses undefined for parameters
     expect(readDoc('errors')).toContain('selector_ambiguous');
     expect(requiredDocsFor('cdp_send', { backend: 'extension', capabilities: ['cdp'] })).toEqual([]); // no typed cdp tool any more: the capability doc is returned by browser.capabilities.get('cdp') in js
     expect(listDocs({ backend: 'none', capabilities: [] }).find((d) => d.name === 'tab-lifecycle')?.available).toBe(false);
@@ -33,6 +35,7 @@ describe('tools.define', () => {
     const mod = renderToolModule(def);
     expect(mod).toContain("import { cli, Strategy } from '@jackwener/opencli/registry'");
     expect(mod).toContain('Strategy.COOKIE'); expect(mod).toContain('browser: true');
+    expect(mod).toContain('source: "defined"'); // the module itself says it runs on the object model — no registry patching after import
     expect(() => validateDefinition({ ...def, func: 'not a function {' })).toThrow(/parse/);
     const draft = compileFromTrace([
       { t: 1, kind: 'goto', url: 'https://x.test/search?q=shoes' },

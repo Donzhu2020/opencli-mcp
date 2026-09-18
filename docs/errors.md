@@ -6,7 +6,7 @@ Every error has `code`, `message`, optional `hint`, and any structured data spre
 |---|---|---|
 | locating | `not_found`, `selector_ambiguous` (+`candidates`), `stale_ref`, `invalid_target`, `missing_target` | observe again for fresh refs; scope with `within`, use the `selector` from find; `stale_ref` after navigation |
 | actionability | `not_visible`, `not_enabled`, `not_editable`, `not_checkable`, `not_a_select`, `not_a_file_input`, `intercepted` (blocker named), `option_not_found` (+`available`), `timeout` | the element exists but cannot take the action; dismiss the blocker, target the real control, or wait with `expect` |
-| navigation | `invalid_url`, `page_not_loaded`, `stale_page`, `page_not_in_session`, `tab_create_failed`, `no_tab` | the URL was blocked/unreachable or the tab is gone; open or claim a fresh tab |
+| navigation | `invalid_url`, `page_not_loaded`, `stale_page`, `page_not_in_session`, `page_released`, `tab_create_failed`, `no_tab` | the URL was blocked/unreachable, the tab is gone, or finalize handed it back to the user; open or claim a fresh tab |
 | frames | `frame_not_found` (which level is named), `frame_unreachable` | check the chain outermost-first; the frame may still be loading |
 | dialogs | `dialog_open` (+`dialog`), `no_dialog`, `dialog_answer_timeout` | read with `tab.dialog.get()`, answer with accept/dismiss, then retry |
 | expectations & frozen tools | `expectation_failed` (+`expect`, `failed`, `state`), `step_failed`, `invalid_definition`, `unknown_site`, `unknown_command`, `adapter_load` | fix the one step named in `details.step`/`label`; check the definition |

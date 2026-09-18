@@ -7,10 +7,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { DEFINED_TOOLS_DIR } from './registry.js';
+import os from 'node:os';
 import { getRegistry } from '@jackwener/opencli/registry';
 import { opencliRoot } from '../lib/opencli.js';
 import type { TraceEvent } from '../runtime/trace.js';
+
+export const DEFINED_TOOLS_DIR = path.join(os.homedir(), '.opencli-mcp', 'tools');
 
 export interface ArgDef { name: string; type?: 'string' | 'int' | 'number' | 'boolean'; default?: unknown; required?: boolean; help?: string; choices?: string[] }
 
@@ -80,6 +82,7 @@ export function renderToolModule(def: ToolDefinition): string {
     `  name: ${JSON.stringify(def.name)},`,
     `  description: ${JSON.stringify(def.description)},`,
     `  access: ${JSON.stringify(def.access)},`,
+    `  source: "defined", // frozen flow: runs on the exploration object model ({ tab, args, sites, recon, page })`,
     def.domain ? `  domain: ${JSON.stringify(def.domain)},` : null,
     `  strategy: Strategy.${strategy},`,
     `  browser: ${browser},`,

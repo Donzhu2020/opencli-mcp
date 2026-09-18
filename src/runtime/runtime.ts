@@ -8,7 +8,7 @@ import type { ExtensionBridge } from '../host/bridge.js';
 import type { BrowserEvent } from '../protocol.js';
 import { SiteRegistry } from '../sites/registry.js';
 import { runSiteCommand, type CommandRunResult, type CommandRunError, type PageProvider } from '../sites/executor.js';
-import { saveTool, deleteTool, listDefinedTools, ensureToolsDir, type ToolDefinition } from '../sites/define.js';
+import { listDefinedTools, ensureToolsDir, type ToolDefinition } from '../sites/define.js';
 import { createExtensionPage, type ExtensionRuntimePage } from '../backends/extension-page.js';
 import type { RuntimePage } from '../backends/page-types.js';
 import { TraceRecorder } from './trace.js';
@@ -174,12 +174,12 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
   }
 
   async defineTool(def: ToolDefinition): Promise<{ file: string; site: string; name: string }> {
-    const saved = await saveTool(def);
+    const saved = await this.registry.define(def);
     this.emit('tools-changed', { site: def.site });
     return saved;
   }
   removeTool(site: string, name: string): boolean {
-    const ok = deleteTool(site, name);
+    const ok = this.registry.remove(site, name);
     if (ok) this.emit('tools-changed', { site });
     return ok;
   }

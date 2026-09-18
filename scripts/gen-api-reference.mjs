@@ -8,7 +8,7 @@ const root = resolve(import.meta.dirname, '..');
 const entries = ['src/api/api.ts', 'src/api/browser.ts', 'src/api/tab.ts'].map((f) => resolve(root, f));
 const program = ts.createProgram(entries, {
   target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext,
-  strict: true, skipLibCheck: true, noEmit: true, lib: ['lib.es2022.d.ts', 'lib.dom.d.ts'],
+  strict: true, exactOptionalPropertyTypes: true, skipLibCheck: true, noEmit: true, lib: ['lib.es2022.d.ts', 'lib.dom.d.ts'],
 });
 const checker = program.getTypeChecker();
 const FLAGS = ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.UseAliasDefinedOutsideCurrentScope | ts.TypeFormatFlags.WriteArrayAsGenericType;
@@ -19,7 +19,8 @@ const fmtType = (t) => checker.typeToString(t, undefined, FLAGS);
 const sigText = (sig) => {
   const params = sig.getParameters().map((p) => {
     const d = p.valueDeclaration; const optional = d && ts.isParameter(d) && (d.questionToken || d.initializer) ? '?' : '';
-    return `${p.getName()}${optional}: ${fmtType(checker.getTypeOfSymbolAtLocation(p, d ?? sf))}`;
+    const t = fmtType(checker.getTypeOfSymbolAtLocation(p, d ?? sf));
+    return `${p.getName()}${optional}: ${optional ? t.replace(/ \| undefined$/, '') : t}`;
   });
   return `(${params.join(', ')}): ${fmtType(sig.getReturnType())}`;
 };
@@ -41,7 +42,7 @@ function memberLines(type, indent, depth) {
       out.push(`${indent}${name}: {${comment ? ` // ${comment}` : ''}`);
       out.push(...memberLines(t, indent + '  ', depth + 1));
       out.push(`${indent}};`);
-    } else out.push(`${indent}${name}: ${fmtType(t)};${comment ? ` // ${comment}` : ''}`);
+    } else { const opt = m.flags & ts.SymbolFlags.Optional; out.push(`${indent}${name}${opt ? '?' : ''}: ${opt ? fmtType(t).replace(/ \| undefined$/, '') : fmtType(t)};${comment ? ` // ${comment}` : ''}`); }
   }
   return out;
 }
@@ -63,7 +64,8 @@ for (const entry of entries) { sf = program.getSourceFile(entry); ts.forEachChil
 const order = ['interface AgentApi', 'class Browser', 'class Tab', 'type Target', 'type ActAction', 'interface ActOptions', 'interface ObserveOptions'];
 const key = (s) => s.replace(/^\/\/.*\n/, '').replace(/^export /, '');
 sections.sort((a, b) => order.findIndex((k) => key(a).startsWith(k)) - order.findIndex((k) => key(b).startsWith(k)));
-const clean = (s) => s.replace(/ \| undefined/g, '').replace(/^export /gm, '');
+// `?` already says undefined for parameters (also inside type-literal method signatures); real `T | undefined` results and properties stay
+const clean = (s) => s.replace(/^export /gm, '').replace(/ \| undefined(?=[,)])/g, '');
 const md = `## API reference (generated from src/api/{api,browser,tab}.ts — do not edit)
 
 In \`js\` the globals are \`agent\`, \`sites\`, \`recon\`, \`tools\`, \`session\` (the members of \`AgentApi\`) plus \`nodeRepl\` and \`Tab\`. Everything below is the whole model-facing surface; typed entry tools are projections of it.

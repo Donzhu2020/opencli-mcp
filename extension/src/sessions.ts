@@ -39,21 +39,26 @@ function isHttp(url?: string): boolean { return Boolean(url && (url.startsWith('
 
 const STORE_KEY = 'opencli_mcp_sessions_v1';
 type StoredSession = Omit<Session, 'leases' | 'idleTimer'> & { leases: Lease[] };
+const RELEASED_KEY = 'opencli_mcp_released_v1';
 
 export class SessionManager {
   readonly sessions = new Map<string, Session>();
+  /** Tabs finalize handed back to the user (kept, released, handoff). Commands to them are refused until a claim; a stale Tab handle cannot re-adopt one. */
+  private readonly released = new Map<number, string>();
   private cursorSeq = 0;
   private restored: Promise<void> | null = null;
 
   /** Leases live in chrome.storage.session: they survive a service-worker restart but not a browser exit. */
   private persist(): void {
     const data: StoredSession[] = [...this.sessions.values()].map(({ leases, idleTimer: _t, ...rest }) => ({ ...rest, leases: [...leases.values()] }));
-    void chrome.storage.session.set({ [STORE_KEY]: data }).catch(() => {});
+    void chrome.storage.session.set({ [STORE_KEY]: data, [RELEASED_KEY]: [...this.released.entries()] }).catch(() => {});
   }
   private restore(): Promise<void> {
     if (!this.restored) this.restored = (async () => {
       try {
-        const stored = (await chrome.storage.session.get(STORE_KEY))?.[STORE_KEY] as StoredSession[] | undefined;
+        const all = await chrome.storage.session.get([STORE_KEY, RELEASED_KEY]);
+        for (const [tabId, key] of (all?.[RELEASED_KEY] ?? []) as Array<[number, string]>) if (!this.released.has(tabId)) this.released.set(tabId, key);
+        const stored = all?.[STORE_KEY] as StoredSession[] | undefined;
         for (const st of stored ?? []) {
           if (this.sessions.has(st.key)) continue;
           const leases = new Map<number, Lease>();
@@ -183,7 +188,8 @@ export class SessionManager {
 
   async listUserTabs(): Promise<Array<{ tabId: number; title?: string; url?: string; windowId: number; active: boolean; groupId?: number; lastAccessed?: number }>> {
     const tabs = await chrome.tabs.query({ windowType: 'normal' });
-    return tabs.filter((t) => t.id !== undefined && isHttp(t.url) && !this.ownerOf(t.id))
+    // handoff tabs are the user's again: listed here so a later turn can claim them back
+    return tabs.filter((t) => t.id !== undefined && isHttp(t.url) && (this.ownerOf(t.id)?.leases.get(t.id)?.state ?? 'none') !== 'active')
       .sort((a, b) => ((b as { lastAccessed?: number }).lastAccessed ?? 0) - ((a as { lastAccessed?: number }).lastAccessed ?? 0))
       .map((t) => ({ tabId: t.id!, title: t.title, url: t.url, windowId: t.windowId, active: Boolean(t.active), groupId: t.groupId && t.groupId > 0 ? t.groupId : undefined, lastAccessed: (t as { lastAccessed?: number }).lastAccessed }));
   }
@@ -210,9 +216,13 @@ export class SessionManager {
     const tabId = tab.id!;
     if (!isHttp(tab.url)) throw new SessionError('claim_not_allowed', 'Only http(s) tabs can be claimed');
     const owner = this.ownerOf(tabId);
-    if (owner && owner !== s) throw new SessionError('already_claimed', `Tab ${tabId} belongs to session ${owner.key}`);
+    const prior = owner?.leases.get(tabId);
+    if (owner && owner !== s && prior?.state !== 'handoff') throw new SessionError('already_claimed', `Tab ${tabId} belongs to session ${owner.key}`);
+    if (owner && owner !== s) { owner.leases.delete(tabId); if (owner.preferredTabId === tabId) owner.preferredTabId = null; } // a handoff tab moves to whoever claims it
     s.windowId = s.windowId ?? tab.windowId;
-    s.leases.set(tabId, { tabId: tabId, origin: 'user', mark: null, url: tab.url, title: tab.title, claimedAt: Date.now(), state: 'active' });
+    this.released.delete(tabId); // a claim is the one way a released tab comes back
+    // an agent-created handoff tab keeps its agent origin (and group), so a later finalize may still close it
+    s.leases.set(tabId, { tabId: tabId, origin: prior?.state === 'handoff' ? prior.origin : 'user', mark: null, url: tab.url, title: tab.title, claimedAt: Date.now(), state: 'active' });
     s.preferredTabId = tabId;
     const page = await identity.resolveTargetId(tabId).catch(() => String(tabId));
     void this.badge(tabId, 'active');
@@ -228,7 +238,9 @@ export class SessionManager {
     if (page) {
       let tabId: number;
       try { tabId = await identity.resolveTabId(page); } catch { throw new SessionError('stale_page', `stale page identity ${page}`, 'The tab was closed or navigated away; open or claim a fresh tab.'); }
-      if (!s.leases.has(tabId)) {
+      const lease = s.leases.get(tabId);
+      if (lease?.state === 'handoff' || (!lease && this.released.has(tabId))) throw new SessionError('page_released', `page ${page} was handed back to the user by finalize`, 'finalize ends the session\'s control of its tabs; claim the tab again (browser.user.claimTab) or open a new one.');
+      if (!lease) {
         const owner = this.ownerOf(tabId);
         if (owner && owner !== s) throw new SessionError('page_not_in_session', `page ${page} belongs to session ${owner.key}`);
         // unknown lease (e.g. state lost): adopt fail-safe as a user tab — it will be released, never closed
@@ -267,6 +279,7 @@ export class SessionManager {
       const page = await identity.resolveTargetId(lease.tabId).catch(() => String(lease.tabId));
       await executor.detach(lease.tabId).catch(() => {});
       await this.hideCursor(lease.tabId);
+      this.released.set(lease.tabId, s.key); // closed agent tabs drop out again in onTabRemoved
       if (status === 'handoff') {
         lease.state = 'handoff'; lease.mark = 'handoff';
         await this.badge(lease.tabId, 'handoff'); kept.push(page); continue;
@@ -300,6 +313,7 @@ export class SessionManager {
 
   private onTabRemoved(tabId: number): void {
     this.cursorState.delete(tabId);
+    if (this.released.delete(tabId)) this.persist();
     for (const s of this.sessions.values()) {
       if (!s.leases.delete(tabId)) continue;
       if (s.preferredTabId === tabId) s.preferredTabId = null;

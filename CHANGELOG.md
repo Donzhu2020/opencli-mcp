@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.0.2 — 2026-09-18
+
+- `opencli-mcp setup`: the first run in one command — writes the host manifests and the stable extension key, prints
+  the MCP configuration any client accepts (stdio command, or the HTTP endpoint and token location), opens
+  chrome://extensions with the unpacked-extension path on the clipboard, and waits until the extension connects.
+- One home: the `OPENCLI_MCP_HOME` / `OPENCLI_MCP_TOOLS_DIR` overrides are gone; state is `~/.opencli-mcp`, defined
+  tools live in `~/.opencli-mcp/tools`, the extension build keeps the key from the existing dist manifest.
+- Chinese project guide `docs/guide.zh-CN.md` (architecture, install, hosting, usage, lifecycle, freezing flows,
+  configuration, troubleshooting, development and release).
+- README: stale `css` target and `session.name()` mentions removed.
+
 ## 0.0.1 — 2026-09-18
 
 First release. opencli-mcp is an MCP-native browser runtime for your logged-in Chrome: a Chrome-spawned native host

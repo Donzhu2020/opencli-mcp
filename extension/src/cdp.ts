@@ -856,6 +856,13 @@ export function registerListeners(): void {
       oopifByTab.delete(tabId);
   });
   chrome.debugger.onDetach.addListener((source) => {
+    const sessionId = (source as { sessionId?: string }).sessionId;
+    if (source.tabId && sessionId) {
+      // a child (OOPIF) session went away — e.g. its frame navigated; the tab's root attachment is untouched
+      const m = oopifByTab.get(source.tabId);
+      if (m) for (const [id, s] of m) if (s.sessionId === sessionId) m.delete(id);
+      return;
+    }
     if (source.tabId) {
       dialogs.delete(source.tabId);
       attached.delete(source.tabId);

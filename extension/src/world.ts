@@ -80,7 +80,8 @@ const frameHosts = new Map<string, 'target' | 'root'>();
 export async function frameCall(tabId: number, frameId: string, method: string, params: Record<string, unknown>, aggressive: boolean, timeoutMs?: number): Promise<unknown> {
   const k = key(tabId, frameId);
   let host = frameHosts.get(k);
-  if (!host) { host = (await executor.hasFrameTarget(tabId, frameId, aggressive)) ? 'target' : 'root'; frameHosts.set(k, host); }
+  // only a positive answer is cached: an OOPIF may auto-attach a moment after its frame appears, so 'root' is re-checked each time
+  if (!host) { host = (await executor.hasFrameTarget(tabId, frameId, aggressive)) ? 'target' : 'root'; if (host === 'target') frameHosts.set(k, host); }
   return host === 'target'
     ? executor.sendCommandInFrameTarget(tabId, frameId, method, params, aggressive, timeoutMs)
     : executor.sendDebuggerCommand({ tabId }, method, params, timeoutMs);
@@ -135,7 +136,8 @@ export async function evaluateMain(tabId: number, frameId: string | null, expres
   if (frameId === null) return executor.evaluateAsync(tabId, expression, aggressive, timeoutMs);
   const k = key(tabId, frameId);
   let host = frameHosts.get(k);
-  if (!host) { host = (await executor.hasFrameTarget(tabId, frameId, aggressive)) ? 'target' : 'root'; frameHosts.set(k, host); }
+  // only a positive answer is cached: an OOPIF may auto-attach a moment after its frame appears, so 'root' is re-checked each time
+  if (!host) { host = (await executor.hasFrameTarget(tabId, frameId, aggressive)) ? 'target' : 'root'; if (host === 'target') frameHosts.set(k, host); }
   const params: Record<string, unknown> = { expression, returnByValue: true, awaitPromise: true };
   if (host === 'root') {
     let ctx = mainContexts.get(k);

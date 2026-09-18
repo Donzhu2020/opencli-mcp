@@ -129,8 +129,6 @@ function noteDialog(tabId: number, d: PendingDialog | null): void {
  * plus headroom), short enough to fail before the daemon's 120s timer.
  */
 const CDP_COMMAND_TIMEOUT_MS = 60_000;
-/** Health-check probe deadline — a blocked probe should fail fast. */
-const CDP_PROBE_TIMEOUT_MS = 2_000;
 
 /**
  * chrome.debugger.sendCommand with a deadline. The underlying command cannot
@@ -143,6 +141,10 @@ export async function sendDebuggerCommand<T = unknown>(
   params?: Record<string, unknown>,
   timeoutMs: number = CDP_COMMAND_TIMEOUT_MS,
 ): Promise<T> {
+  return sendDebuggerCommandOnce(target, method, params, timeoutMs, true);
+}
+
+async function sendDebuggerCommandOnce<T>(target: chrome.debugger.Debuggee, method: string, params: Record<string, unknown> | undefined, timeoutMs: number, mayRetry: boolean): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const tabId = target.tabId;
   const isDialogAnswer = method === 'Page.handleJavaScriptDialog';
@@ -170,6 +172,16 @@ export async function sendDebuggerCommand<T = unknown>(
         )), timeoutMs);
       }),
     ]);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    // the debugger went away under us (user clicked "cancel" on the debugging bar, another extension, a crash):
+    // forget the attachment and retry the command once on a fresh attach — the plugin's "Debugger unattached" path
+    if (mayRetry && tabId !== undefined && !(target as { sessionId?: string }).sessionId && attached.has(tabId) && /Debugger is not attached|Detached while|Target closed|not attached/i.test(msg)) {
+      attached.delete(tabId);
+      await ensureAttached(tabId, false);
+      return sendDebuggerCommandOnce<T>(target, method, params, timeoutMs, false);
+    }
+    throw e;
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     if (waiter && tabId !== undefined) dialogWaiters.get(tabId)?.delete(waiter);
@@ -198,22 +210,22 @@ export async function ensureAttached(tabId: number, aggressiveRetry: boolean = f
     throw new Error(`Tab ${tabId} no longer exists`);
   }
 
-  if (attached.has(tabId)) {
-    // A native dialog blocks the renderer, not the attachment. Re-attaching here would detach the session that owns
-    // the dialog's pending callback (Chromium: PageHandler::pending_dialog_) and no later session could answer it.
-    if (dialogs.has(tabId)) return;
-    // Verify the debugger is still actually attached by sending a harmless command
-    try {
-      await sendDebuggerCommand({ tabId }, 'Runtime.evaluate', {
-        expression: '1', returnByValue: true,
-      }, CDP_PROBE_TIMEOUT_MS);
-      return; // Still attached and working
-    } catch (e) {
-      if ((e as { code?: string }).code === 'dialog_open') return;
-      // Stale cache entry — need to re-attach
-      attached.delete(tabId);
-    }
-  }
+  // Attachment is a fact we track, not something to re-verify per command (the ChatGPT plugin does the same): the
+  // `attached` set is kept honest by chrome.debugger.onDetach, and a command that still fails with "not attached"
+  // forgets the tab and retries once (see sendDebuggerCommand). A per-command probe cost a round trip and, worse,
+  // re-attached while a dialog was open — which dropped the session that owned the dialog's pending callback.
+  if (attached.has(tabId)) return;
+  const inFlight = attaching.get(tabId);
+  if (inFlight) { await inFlight; return; }
+  const p = attachNow(tabId, aggressiveRetry).finally(() => { attaching.delete(tabId); });
+  attaching.set(tabId, p);
+  await p;
+}
+
+/** One attach at a time per tab: concurrent commands on a fresh tab share the same attach instead of racing detach/attach. */
+const attaching = new Map<number, Promise<void>>();
+
+async function attachNow(tabId: number, aggressiveRetry: boolean): Promise<void> {
 
   // Retry attach up to 3 times — other extensions (1Password, Playwright MCP Bridge)
   // can temporarily interfere with chrome.debugger. A short delay usually resolves it.

@@ -66,7 +66,13 @@ export class SessionManager {
   }
   constructor(private readonly emit: (e: BrowserEvent) => void) {
     chrome.tabs.onRemoved.addListener((tabId) => this.onTabRemoved(tabId));
-    chrome.tabs.onActivated.addListener(({ tabId }) => { void this.unmuteIfOurs(tabId); });
+    chrome.tabs.onActivated.addListener(({ tabId }) => { void this.unmuteIfOurs(tabId); void this.publishCursor(tabId); });
+    chrome.windows.onFocusChanged.addListener(() => { for (const tabId of this.cursorState.keys()) void this.publishCursor(tabId); });
+    // a freshly loaded document (navigation, bfcache restore) asks for the current overlay state instead of starting blank
+    chrome.runtime.onMessage.addListener((msg: { type?: string }, sender, respond) => {
+      if (msg?.type !== 'opencli:cursor-state?' || sender.tab?.id === undefined) return false;
+      void this.observedState(sender.tab.id).then((state) => respond({ state })); return true;
+    });
     chrome.tabGroups.onRemoved.addListener((g) => { for (const s of this.sessions.values()) if (s.groupId === g.id) s.groupId = null; });
     chrome.webNavigation.onCreatedNavigationTarget.addListener((d) => { void this.onChildTab(d.sourceTabId, d.tabId); });
     chrome.windows.onRemoved.addListener((windowId) => { if (this.adapterWindowId === windowId) this.adapterWindowId = null; for (const s of this.sessions.values()) if (s.windowId === windowId) { s.windowId = null; s.groupId = null; } });
@@ -259,6 +265,7 @@ export class SessionManager {
       const status = keepByTab.get(lease.tabId) ?? lease.mark ?? null;
       const page = await identity.resolveTargetId(lease.tabId).catch(() => String(lease.tabId));
       await executor.detach(lease.tabId).catch(() => {});
+      await this.hideCursor(lease.tabId);
       if (status === 'handoff') {
         lease.state = 'handoff'; lease.mark = 'handoff';
         await this.badge(lease.tabId, 'handoff'); kept.push(page); continue;
@@ -291,6 +298,7 @@ export class SessionManager {
   }
 
   private onTabRemoved(tabId: number): void {
+    this.cursorState.delete(tabId);
     for (const s of this.sessions.values()) {
       if (!s.leases.delete(tabId)) continue;
       if (s.preferredTabId === tabId) s.preferredTabId = null;
@@ -326,16 +334,50 @@ export class SessionManager {
   async badge(tabId: number, badge: Badge): Promise<void> {
     try { if (await this.ensureContent(tabId)) await chrome.tabs.sendMessage(tabId, { type: 'opencli:badge', badge }); } catch { /* not injectable (chrome://, pdf) */ }
   }
-  async cursor(tabId: number, x: number, y: number, waitForArrival: boolean, timeoutMs = 1200): Promise<boolean> {
+  /**
+   * Cursor overlay state, owned here (the ChatGPT plugin's arrangement): the content script is a renderer that pulls
+   * this on load and receives pushes, so the cursor survives navigations, hides when the session finalizes, and is
+   * only *visible* in tabs the user is observing (active tab of a non-minimized window) — elsewhere the position is
+   * remembered and the move neither animates nor waits.
+   */
+  private readonly cursorState = new Map<number, { session: string; x: number; y: number; seq: number; shown: boolean }>();
+
+  private async isObserved(tabId: number): Promise<boolean> {
     const tab = await chrome.tabs.get(tabId).catch(() => null);
-    if (!tab || !tab.active) return false; // only animate where the user can see it
+    if (!tab || !tab.active) return false;
     const win = await chrome.windows.get(tab.windowId).catch(() => null);
-    if (!win || win.state === 'minimized') return false;
-    if (!(await this.ensureContent(tabId))) return false;
+    return Boolean(win && win.state !== 'minimized');
+  }
+
+  private async observedState(tabId: number): Promise<{ x: number; y: number; seq: number; visible: boolean } | null> {
+    const st = this.cursorState.get(tabId);
+    if (!st) return null;
+    return { x: st.x, y: st.y, seq: st.seq, visible: st.shown && await this.isObserved(tabId) };
+  }
+
+  /** Push the current state to the tab's overlay (no animation, no wait). */
+  private async publishCursor(tabId: number): Promise<void> {
+    const state = await this.observedState(tabId);
+    if (!state) return;
+    if (!(await this.ensureContent(tabId))) return;
+    await chrome.tabs.sendMessage(tabId, { type: 'opencli:cursor-state', state: { ...state, animate: false } }).catch(() => {});
+  }
+
+  async cursor(s: Session, tabId: number, x: number, y: number, waitForArrival: boolean, timeoutMs = 1200): Promise<boolean> {
     const seq = ++this.cursorSeq;
-    const p = chrome.tabs.sendMessage(tabId, { type: 'opencli:cursor', x, y, seq, animate: waitForArrival });
-    if (!waitForArrival) return true;
+    this.cursorState.set(tabId, { session: s.key, x, y, seq, shown: true });
+    const observed = await this.isObserved(tabId);
+    if (!(await this.ensureContent(tabId))) return false;
+    const p = chrome.tabs.sendMessage(tabId, { type: 'opencli:cursor-state', state: { x, y, seq, visible: observed, animate: observed && waitForArrival } });
+    if (!observed || !waitForArrival) { p.catch(() => {}); return false; }
     const result = await Promise.race([p.catch(() => null), new Promise<null>((r) => setTimeout(() => r(null), timeoutMs))]);
-    return Boolean(result && (result as { arrived?: boolean }).arrived);
+    return Boolean(result && (result as { arrived?: boolean; seq?: number }).arrived && (result as { seq?: number }).seq === seq);
+  }
+
+  /** Hide the overlay in a tab the session is done with (finalize, release); the position is forgotten. */
+  async hideCursor(tabId: number): Promise<void> {
+    if (!this.cursorState.delete(tabId)) return;
+    if (!(await this.ensureContent(tabId))) return;
+    await chrome.tabs.sendMessage(tabId, { type: 'opencli:cursor-state', state: null }).catch(() => {});
   }
 }

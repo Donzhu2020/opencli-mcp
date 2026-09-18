@@ -93,7 +93,7 @@ async function handleCommand(cmd: Command): Promise<Result> {
         const tabId = await sessions.resolveTab(s, cmd.page);
         await ensureLoaded(tabId);
         // the action budget is the spec's own timeout (default 3s) — never the whole command deadline
-        const result = await performAct(tabId, { ...cmd.act, timeoutMs: Math.min(cmd.act.timeoutMs ?? 3000, 60_000) }, { aggressive: s.surface === 'browser', cursor: cmd.act.cursor ? (x, y) => sessions.cursor(tabId, x, y, true) : undefined });
+        const result = await performAct(tabId, { ...cmd.act, timeoutMs: Math.min(cmd.act.timeoutMs ?? 3000, 60_000) }, { aggressive: s.surface === 'browser', cursor: cmd.act.cursor ? (x, y) => sessions.cursor(s, tabId, x, y, true) : undefined });
         return pageScoped(cmd.id, tabId, result);
       }
       case 'navigate': return await handleNavigate(cmd, s);
@@ -114,7 +114,7 @@ async function handleCommand(cmd: Command): Promise<Result> {
       case 'mark': { if (!cmd.page) return { id: cmd.id, ok: false, error: 'Missing page' }; const tabId = await identity.resolveTabId(cmd.page); sessions.mark(s, tabId, cmd.mark ?? null); return { id: cmd.id, ok: true, data: { mark: cmd.mark ?? null } }; }
       case 'session-finalize': return { id: cmd.id, ok: true, data: await sessions.finalize(s, cmd.keep ?? []) };
       // ── human visibility ──
-      case 'cursor': { if (typeof cmd.x !== 'number' || typeof cmd.y !== 'number') return { id: cmd.id, ok: false, error: 'Missing x/y' }; const tabId = await sessions.resolveTab(s, cmd.page); const arrived = await sessions.cursor(tabId, cmd.x, cmd.y, cmd.waitForArrival !== false, cmd.timeoutMs ?? 1200); return pageScoped(cmd.id, tabId, { arrived }); }
+      case 'cursor': { if (typeof cmd.x !== 'number' || typeof cmd.y !== 'number') return { id: cmd.id, ok: false, error: 'Missing x/y' }; const tabId = await sessions.resolveTab(s, cmd.page); const arrived = await sessions.cursor(s, tabId, cmd.x, cmd.y, cmd.waitForArrival !== false, cmd.timeoutMs ?? 1200); return pageScoped(cmd.id, tabId, { arrived }); }
       case 'dialog': {
         const tabId = await sessions.resolveTab(s, cmd.page);
         const op = cmd.dialogOp ?? 'get';

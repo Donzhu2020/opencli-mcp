@@ -5,3 +5,6 @@
 - Popups and links the agent opens are captured into the same session.
 - Finish with `session_finalize`. Keep a tab only when the user needs the live page: `deliverable` (leaves the group, stays open, green badge) or `handoff` (stays in the group for a later turn, yellow badge). Everything else the agent opened is closed. If you forget, the runtime finalizes on session end.
 - Keep the browser in the background by default; `capabilities_enable` `visibility` and set it only when the user wants to watch.
+
+- The cursor overlay is owned by the runtime, not the page: it is only shown in the tab the user is looking at (active tab of a non-minimized window), keeps its position across navigations, and disappears when the tab leaves the session (finalize/release). In unobserved tabs actions do not animate or wait for the cursor.
+- The debugger attachment to a tab is kept for the whole session and released by finalize. If the user cancels it from Chrome's debugging bar, the next action re-attaches once automatically; no per-action health check is performed.

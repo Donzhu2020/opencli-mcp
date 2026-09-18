@@ -77,13 +77,25 @@ function setBadge(badge: Badge): void {
   } else for (const el of links) el.href = svg;
 }
 
-chrome.runtime.onMessage.addListener((msg: { type?: string; x?: number; y?: number; animate?: boolean; badge?: Badge }, _sender, sendResponse) => {
+type CursorState = { x: number; y: number; seq: number; visible: boolean; animate?: boolean } | null;
+
+/** Render the background-owned state: hidden → fade out; visible → glide (or jump) to the point, then report arrival with the sequence. */
+function render(state: CursorState): Promise<{ arrived: boolean; seq?: number }> {
+  if (!state || !state.visible) { if (cursor) cursor.classList.remove('on'); if (state) pos = { x: state.x, y: state.y }; return Promise.resolve({ arrived: false }); }
+  return moveTo(state.x, state.y, state.animate === true && document.visibilityState === 'visible').then(() => ({ arrived: true, seq: state.seq }));
+}
+
+/** A new document (navigation, bfcache restore) starts from the background's state instead of blank. */
+function pullState(): void {
+  chrome.runtime.sendMessage({ type: 'opencli:cursor-state?' }).then((r: { state?: CursorState } | undefined) => { if (r && r.state !== undefined) void render(r.state ? { ...r.state, animate: false } : null); }).catch(() => {});
+}
+
+chrome.runtime.onMessage.addListener((msg: { type?: string; state?: CursorState; badge?: Badge }, _sender, sendResponse) => {
   if (msg?.type === 'opencli:ping') { sendResponse({ ok: true }); return false; }
-  if (msg?.type === 'opencli:cursor' && typeof msg.x === 'number' && typeof msg.y === 'number') {
-    void moveTo(msg.x, msg.y, msg.animate !== false && document.visibilityState === 'visible').then(() => sendResponse({ arrived: true }));
-    return true;
-  }
+  if (msg?.type === 'opencli:cursor-state') { void render(msg.state ?? null).then(sendResponse); return true; }
   if (msg?.type === 'opencli:badge') { try { setBadge(msg.badge ?? null); sendResponse({ ok: true }); } catch (err) { sendResponse({ ok: false, error: String(err) }); } return false; }
   return false;
 });
 window.addEventListener('pagehide', () => { if (originalIcons) setBadge(null); });
+window.addEventListener('pageshow', pullState);
+pullState();

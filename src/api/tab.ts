@@ -97,8 +97,8 @@ export class Tab {
    * into the session log and the trace, tagged with the step that triggered them. Best effort — never fails a step.
    */
   private async harvest(page: RuntimePage, after?: string): Promise<Array<Record<string, unknown> & { seq: number }>> {
-    const captured = await page.readNetworkCapture().catch(() => [] as unknown[]) as Array<Record<string, unknown>>;
-    return this.logNetwork(captured, after);
+    // best effort: harvesting must never fail the step that just succeeded
+    try { const captured = await page.readNetworkCapture().catch(() => [] as unknown[]) as Array<Record<string, unknown>>; return this.logNetwork(captured, after); } catch { return []; }
   }
   private logNetwork(entries: Array<Record<string, unknown>>, after?: string): Array<Record<string, unknown> & { seq: number }> {
     let log = this.ctx.state.netLog.get(this.id);

@@ -100,12 +100,13 @@ export async function runSiteCommand(
     if (result && typeof result === 'object' && cmd.columns) return { ok: true, site: cmd.site, name: cmd.name, columns: cmd.columns, rows: [result], elapsedMs };
     return { ok: true, site: cmd.site, name: cmd.name, value: result, elapsedMs };
   } catch (err) {
-    const env = toEnvelope(err) as { code?: string; message?: string; hint?: string };
+    // toEnvelope returns { ok, error: { code, message, help } } — read the nested shape (the old top-level read was always undefined, dropping OpenCLI codes and hints)
+    const env = (toEnvelope(err) as { error?: { code?: string; message?: string; help?: string } }).error ?? {};
     const anyErr = err as { code?: string; hint?: string; message?: string; step?: number; label?: string; state?: string; expect?: unknown; failed?: string[]; extra?: { expect?: unknown; state?: string; failed?: string[] } };
     const details = anyErr.step !== undefined ? { step: anyErr.step, label: anyErr.label, state: anyErr.state, ...(anyErr.expect !== undefined && { expect: anyErr.expect, failed: anyErr.failed }) } : anyErr.extra?.expect !== undefined ? { expect: anyErr.extra.expect, failed: anyErr.extra.failed, state: anyErr.extra.state } : undefined;
     return {
       ok: false, site: cmd.site, name: cmd.name, elapsedMs: Date.now() - started,
-      error: { code: String(env.code ?? anyErr.code ?? 'COMMAND_EXEC'), message: String(env.message ?? anyErr.message ?? err), hint: env.hint ?? anyErr.hint, ...(details && { details }) },
+      error: { code: String(env.code ?? anyErr.code ?? 'COMMAND_EXEC'), message: String(env.message ?? anyErr.message ?? err), hint: env.help ?? anyErr.hint, ...(details && { details }) },
     };
   }
 }

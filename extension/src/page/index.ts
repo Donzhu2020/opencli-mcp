@@ -64,7 +64,10 @@ function resetRefsIfEngineChanged(): void {
 function stableRefOf(el: Element): string {
   let id = stableId.get(el);
   if (id === undefined) { id = nextStableId++; stableId.set(el, id); }
-  const ref = 'e' + id; refToEl.set(ref, el); return ref;
+  const ref = 'e' + id; refToEl.set(ref, el);
+  // prune here (not only in aria): find/resolve/elementAt also assign refs, and refToEl holds strong element refs
+  if (refToEl.size > 4000) { for (const [k, v] of refToEl) if (!v.isConnected) refToEl.delete(k); if (refToEl.size > 6000) { let drop = refToEl.size - 4000; for (const k of refToEl.keys()) { if (drop-- <= 0) break; refToEl.delete(k); } } }
+  return ref;
 }
 /** The stable ref of an element, assigning one if needed. */
 export function ariaRefOf(el: Element): string | null { resetRefsIfEngineChanged(); return stableRefOf(el); }
@@ -258,7 +261,6 @@ export function aria(args: AriaArgs = {}): string {
     if (el && m[3] && isCredentialField(el)) { out.push(rline.slice(0, rline.length - m[3].length) + ': <redacted>'); continue; }
     out.push(rline);
   }
-  if (refToEl.size > 4000) for (const [k, v] of refToEl) if (!v.isConnected) refToEl.delete(k);
   // the plugin always ends its state with the focused element; ours names the focused ref so the next action can target it
   const active = document.activeElement;
   const focusRef = active && active !== document.body ? ariaRefOf(active) : null;

@@ -1,11 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 128 128">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#2563eb"/>
-      <stop offset="1" stop-color="#1d4ed8"/>
-    </linearGradient>
-  </defs>
-  <rect x="6" y="6" width="116" height="116" rx="28" fill="url(#bg)"/>
-  <!-- one bold cursor, big enough to read at 16px -->
-  <path d="M40 28 L40 100 L60 81 L74 108 L88 100 L74 74 L100 74 Z" fill="#ffffff" stroke="#1d4ed8" stroke-width="5" stroke-linejoin="round"/>
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="#fafaf9" stroke="#e7e5e4" stroke-width="2"/>
+  <g fill="none" stroke="#18181b" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="26" y="30" width="64" height="54" rx="12"/>
+    <path d="M26 47 L90 47"/>
+  </g>
+  <path d="M58 60 L58 106 L71 92 L80 110 L89 105 L80 88 L96 88 Z" fill="#18181b" stroke="#fafaf9" stroke-width="6" stroke-linejoin="round"/>
 </svg>

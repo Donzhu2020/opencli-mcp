@@ -40,7 +40,7 @@ export class Policy {
     try { host = new URL(url).hostname; } catch { return { allowed: false, code: 'invalid_url', message: `not a URL: ${url}`, retryable: false }; }
     if (this.matches(this.blocked, host)) return { allowed: false, code: 'site_blocked', message: `${host} is on the blocklist`, retryable: false };
     if (!this.askNewOrigins || this.matches(this.allowed, host)) return { allowed: true };
-    return { allowed: false, code: 'needs_origin_approval', message: `${host} has not been approved for this runtime`, hint: `Ask the user, then call origin_allow {host:"${host}"} (once, or persist:true for this site).`, retryable: true };
+    return { allowed: false, code: 'needs_origin_approval', message: `${host} has not been approved for this runtime`, hint: `Ask the user, then session.allowOrigin(${JSON.stringify(host)}) in js (add true to persist it for this site).`, retryable: true };
   }
   allowHost(hostRaw: string, persist = false): void {
     const host = hostRaw.toLowerCase();

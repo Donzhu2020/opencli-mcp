@@ -190,7 +190,7 @@ function definePageClass(lib: Lib): any {
     async engineEvaluate(js: string, timeoutMs?: number): Promise<unknown> { return (await this.send('exec', { code: js, world: 'engine', ...(timeoutMs && { timeoutMs }) })).data; }
     /** Live URL first; OpenCLI's sticky cache (a one-command-per-process habit) is only the fallback while a navigation is in flight. */
     async getCurrentUrl(): Promise<string | null> {
-      try { const u = await this.evaluate<string>('location.href'); if (typeof u === 'string' && u) { this._lastUrl = u; return u; } } catch { /* mid-navigation */ }
+      try { const u = await this.evaluate('location.href') as unknown; if (typeof u === 'string' && u) { this._lastUrl = u; return u; } } catch { /* mid-navigation */ }
       return this._lastUrl ?? null;
     }
     async history(op: 'reload' | 'back' | 'forward'): Promise<{ url?: string; title?: string; timedOut?: boolean }> { const r = (await this.send('history', { historyOp: op, timeoutMs: 20_000 })).data as { url?: string; title?: string; timedOut?: boolean }; this._lastUrl = r.url ?? null; return r; }

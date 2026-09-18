@@ -66,7 +66,7 @@ Chrome ──connectNative──► opencli-mcp host   （Native Messaging ⇄ �
 ```bash
 git clone https://github.com/jackwener/opencli-mcp && cd opencli-mcp
 npm install && npm run build
-node dist/src/main.js setup            # 一条命令：写清单 + key，检测到 Claude Code 就自动注册，
+node dist/src/main.js setup            # 一条命令：写清单 + key，打印给任何 MCP 客户端用的配置（stdio / http），
                                        # 打开 chrome://extensions 并把扩展路径复制到剪贴板，等扩展连上后报绿
 ```
 

@@ -1,16 +1,18 @@
 /**
  * `opencli-mcp setup` — the whole first-run in one command, for a human at a terminal:
  *   1. install: Native Messaging host manifest(s) + the stable extension key
- *   2. register the stdio server with MCP clients found on this machine (Claude Code today)
+ *   2. print the one MCP configuration every client accepts (stdio command, or the HTTP endpoint for remote agents)
  *   3. open chrome://extensions and put the unpacked-extension path on the clipboard
  *   4. wait for the extension to connect (it spawns the host) and report green
- * Everything it does is what `install` / `claude mcp add` / `doctor` do; it only strings them together and talks in
- * sentences instead of JSON. Chrome cannot load an unpacked extension for us: that one click stays with the user until
- * the extension is on the Chrome Web Store.
+ * Everything it does is what `install` / `doctor` do; it only strings them together and talks in sentences instead of
+ * JSON. The runtime knows no client: MCP is the contract, so the user gets the standard snippet and pastes it wherever
+ * their client keeps it. Chrome cannot load an unpacked extension for us: that one click stays with the user until the
+ * extension is on the Chrome Web Store.
  */
 import { execFileSync, spawn } from 'node:child_process';
 import { install, projectRoot } from './install.js';
 import { doctor } from './doctor.js';
+import { TOKEN_FILE, DEFAULT_PORT, readConfig } from './state.js';
 import path from 'node:path';
 import fs from 'node:fs';
 
@@ -20,11 +22,10 @@ function which(cmd: string): string | null {
   try { return execFileSync(process.platform === 'win32' ? 'where' : 'which', [cmd], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).split(/\r?\n/)[0].trim() || null; } catch { return null; }
 }
 
-/** Register the stdio server with Claude Code (user scope) when the CLI is installed and no entry exists yet. */
-function registerClaudeCode(main: string): 'added' | 'present' | 'absent' | 'failed' {
-  if (!which('claude')) return 'absent';
-  try { execFileSync('claude', ['mcp', 'get', 'opencli-mcp'], { stdio: 'ignore' }); return 'present'; } catch { /* not registered */ }
-  try { execFileSync('claude', ['mcp', 'add', '-s', 'user', 'opencli-mcp', '--', process.execPath, main], { stdio: 'ignore' }); return 'added'; } catch { return 'failed'; }
+/** The stdio command a client should run: the package binary when installed globally, else node + this build. */
+function stdioCommand(main: string): { command: string; args: string[] } {
+  const bin = which('opencli-mcp');
+  return bin ? { command: 'opencli-mcp', args: [] } : { command: 'node', args: [main] };
 }
 
 function copyToClipboard(text: string): boolean {
@@ -51,8 +52,11 @@ export async function setup(opts: { waitMs?: number; noOpen?: boolean } = {}): P
   const written = r.manifests.filter((m) => m.written).map((m) => m.browser);
   say(`1/4  Host manifest written for: ${written.join(', ') || 'no browser profile found (start Chrome once, or pass --user-data-dir to install)'}. Extension ID ${r.extensionId}.`);
 
-  const cc = registerClaudeCode(main);
-  say(`2/4  Claude Code: ${{ added: 'registered (user scope) — restart claude to see the tools', present: 'already registered', absent: 'not installed here — for other clients add { "command": "node", "args": ["' + main + '"] }', failed: 'registration failed — run: claude mcp add -s user opencli-mcp -- node ' + main }[cc]}`);
+  const c = stdioCommand(main);
+  const port = readConfig().port ?? DEFAULT_PORT;
+  say('2/4  Add opencli-mcp to your MCP client (any client; the runtime does not care which):');
+  say(`       stdio  → ${JSON.stringify({ mcpServers: { 'opencli-mcp': { command: c.command, args: c.args } } })}`);
+  say(`       http   → http://127.0.0.1:${port}/mcp  with header  Authorization: Bearer <contents of ${TOKEN_FILE}>  (remote agents: put it behind an authenticated tunnel)`);
 
   const copied = copyToClipboard(r.extensionDir);
   const opened = opts.noOpen ? false : openExtensionsPage();

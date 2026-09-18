@@ -41,7 +41,7 @@ The OpenCLI adapter corpus ships as a library dependency (`@jackwener/opencli`):
 ```bash
 git clone https://github.com/jackwener/opencli-mcp && cd opencli-mcp
 npm install && npm run build
-node dist/src/main.js setup            # one go: host manifest + extension key, registers with Claude Code if present,
+node dist/src/main.js setup            # one go: host manifest + extension key, prints the MCP config for your client (any client),
                                        # opens chrome://extensions with the extension path on your clipboard, waits until connected
 ```
 

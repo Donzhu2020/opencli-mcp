@@ -79,7 +79,7 @@ export class SiteRegistry {
         const full = path.join(siteDir, file);
         try {
           await import(`${pathToFileURL(full).href}?t=${fs.statSync(full).mtimeMs}`);
-          for (const [key] of getRegistry()) if (key.startsWith(`${site}/`)) this.sourceOf.set(key, 'defined');
+          for (const [key, cmd] of getRegistry()) if (key.startsWith(`${site}/`)) { this.sourceOf.set(key, 'defined'); (cmd as { source?: string }).source = 'defined'; }
         } catch (err) {
           process.stderr.write(`[opencli-mcp] failed to load defined tool ${full}: ${(err as Error).message}\n`);
         }

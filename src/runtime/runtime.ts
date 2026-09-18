@@ -16,6 +16,7 @@ import { JsSession } from '../mcp/js-session.js';
 import { opencliVersion } from '../lib/opencli.js';
 import { emitHook } from '../sites/hooks.js';
 import { Policy } from './policy.js';
+import { Tab, createAgentApi, type AgentApi } from '../api/agent.js';
 
 export type Backend = 'extension' | 'none';
 
@@ -73,6 +74,7 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
   readonly registry = new SiteRegistry();
   readonly sessions = new Map<string, SessionState>();
   private readonly adapterPages = new Map<string, Promise<RuntimePage>>();
+  private readonly siteApis = new Map<string, AgentApi>();
   bridge: ExtensionBridge | null;
   readonly cursorEnabled: boolean;
   readonly policy: Policy;
@@ -150,6 +152,16 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
     const backend = this.backend();
     if (backend === 'extension' && this.bridge) return createExtensionPage(this.bridge, { ...opts, contextId: this.bridge.contextId });
     throw Object.assign(new Error('No browser backend is connected'), { code: 'browser_unavailable', hint: 'Run `opencli-mcp doctor`. Chrome with the opencli-mcp extension must be running.' });
+  }
+
+  /** Frozen tools run on the exploration object model: a Tab bound to the adapter page, plus sites/recon/page. */
+  async toolContext(page: RuntimePage, site: string): Promise<Record<string, unknown>> {
+    const sessionId = `site:${site}`;
+    let api = this.siteApis.get(sessionId);
+    if (!api) { api = createAgentApi(this, sessionId); this.siteApis.set(sessionId, api); }
+    const state = this.session(sessionId);
+    const tab = new Tab(page.getActivePage() ?? 'adapter', { rt: this, sessionId, state }, page);
+    return { tab, page, sites: api.sites, recon: api.recon };
   }
 
   isExtensionPage(page: RuntimePage): page is ExtensionRuntimePage { return typeof (page as ExtensionRuntimePage).claim === 'function'; }

@@ -13,6 +13,8 @@ import type { RuntimePage } from '../backends/page-types.js';
 export interface PageProvider {
   getAdapterPage(site: string, opts: { siteSession: 'ephemeral' | 'persistent'; windowMode: 'foreground' | 'background'; navigateTo?: string }): Promise<RuntimePage>;
   browserAvailable(): boolean;
+  /** The object model for an agent-defined (frozen) tool: the same `tab`/`sites`/`recon` the agent explored with, bound to the adapter page. */
+  toolContext(page: RuntimePage, site: string): Promise<Record<string, unknown>>;
 }
 
 export interface CommandRunResult {
@@ -83,7 +85,12 @@ export async function runSiteCommand(
         const sameDomain = Boolean(current && want && (urlHost(current) === want || urlHost(current)?.endsWith(`.${want.replace(/^www\./, '')}`)));
         if (!(siteSession === 'persistent' && isRoot && sameDomain)) await page.goto(preNav);
       }
-      const run = cmd.func ? (cmd.func as (p: RuntimePage, a: Record<string, unknown>, d?: boolean) => Promise<unknown>)(page, args, opts.debug) : executePipeline(page, cmd.pipeline ?? [], { args, debug: opts.debug });
+      // frozen (agent-defined) tools receive the exploration object model; corpus adapters keep OpenCLI's (page, args)
+      const run = cmd.func
+        ? ((cmd as { source?: string }).source === 'defined'
+          ? (cmd.func as unknown as (ctx: Record<string, unknown>) => Promise<unknown>)({ ...(await provider.toolContext(page, cmd.site)), args, debug: opts.debug })
+          : (cmd.func as (p: RuntimePage, a: Record<string, unknown>, d?: boolean) => Promise<unknown>)(page, args, opts.debug))
+        : executePipeline(page, cmd.pipeline ?? [], { args, debug: opts.debug });
       result = await withTimeout(run, timeoutMs, key);
     }
     hookCtx.finishedAt = Date.now();

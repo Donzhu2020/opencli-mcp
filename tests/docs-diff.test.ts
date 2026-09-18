@@ -38,7 +38,7 @@ describe('tools.define', () => {
     ], { site: 'x', name: 'search', description: 's', inputs: { query: 'shoes' } });
     expect(draft.func).toContain('args.query'); expect(draft.args?.[0].name).toBe('query');
     const net = compileFromTrace([{ t: 1, kind: 'goto', url: 'https://x.test/' }, { t: 2, kind: 'network', url: 'https://x.test/api/list?q=shoes', method: 'GET', status: 200, contentType: 'application/json', bodyBytes: 900 }], { site: 'x', name: 'list', description: 'l', inputs: { q: { sample: 'shoes', mode: 'within' } }, domain: 'x.test' });
-    expect(net.func).toContain('page.fetchJson(`https://x.test/api/list?q=${args.q}`)');
+    expect(net.func).toContain('tab.fetchJson(`https://x.test/api/list?q=${args.q}`)');
   });
 });
 

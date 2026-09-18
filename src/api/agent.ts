@@ -239,6 +239,8 @@ export class Tab {
     }),
   };
   async cookies(domain: string): Promise<unknown[]> { return this.use((p) => p.getCookies({ domain })); }
+  /** Fetch JSON through the page (its cookies, its origin) — the network-first way to freeze a site: find the endpoint, call it directly. */
+  async fetchJson(url: string, opts: Record<string, unknown> = {}): Promise<unknown> { this.ctx.state.trace.record({ kind: 'note', text: `fetchJson ${url.slice(0, 160)}`, page: this.id }); return this.use((p) => p.fetchJson(url, opts as never)); }
   async frames(): Promise<Array<{ index: number; frameId: string; url: string; name: string; crossOrigin?: boolean; oopif?: boolean }>> { return this.use((p) => p.frames()); }
   async download(pattern = '', timeoutMs = 30_000): Promise<unknown> { return this.use((p) => p.waitForDownload(pattern, timeoutMs)); }
   async markDeliverable(): Promise<void> { await this.mark('deliverable'); }
@@ -339,7 +341,7 @@ export interface AgentApi {
   agent: { browsers: { list(): Promise<Array<{ id: string; type: string; connected: boolean }>>; get(id: string): Promise<Browser>; getDefault(): Promise<Browser>; getForUrl(url: string): Promise<Browser> }; documentation: { get(name: string): string | null } };
   sites: Record<string, unknown> & { search(q: string, limit?: number): unknown; list(): unknown; enable(site: string, opts?: { write?: boolean }): { site: string; tools: string[] }; disable(site: string): boolean; run(site: string, name: string, args?: Record<string, unknown>): Promise<unknown> };
   recon: { discover(tab: Tab, opts?: Parameters<typeof discoverEndpoints>[1]): Promise<DiscoverResult> };
-  tools: { define(def: ToolDefinition): Promise<{ file: string; site: string; name: string }>; compile(opts: Parameters<typeof compileFromTrace>[1]): ToolDefinition; list(): ReturnType<typeof listDefinedTools>; remove(site: string, name: string): boolean };
+  tools: { define(def: ToolDefinition | (Omit<ToolDefinition, 'func'> & { func?: string | ((ctx: Record<string, unknown>) => unknown) })): Promise<{ file: string; site: string; name: string }>; compile(opts: Parameters<typeof compileFromTrace>[1]): ToolDefinition; list(): ReturnType<typeof listDefinedTools>; remove(site: string, name: string): boolean };
   session: { id: string; name(n: string): Promise<void>; /** approve a website host after the user agreed (needs_origin_approval); persist remembers it */ allowOrigin(host: string, persist?: boolean): { host: string; persist: boolean }; finalize(keep?: Array<{ tab: string | Tab; status: 'deliverable' | 'handoff' }>): Promise<unknown>; trace(): unknown[]; clearTrace(): void; };
 }
 
@@ -403,7 +405,8 @@ export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
     sites,
     recon: { discover: (tab: Tab, opts) => tab.use((page) => discoverEndpoints(page, opts)) },
     tools: {
-      define: (def: ToolDefinition) => rt.defineTool(def),
+      // from js the agent may pass the function it just ran; its source is what gets frozen
+      define: (def: ToolDefinition | (Omit<ToolDefinition, 'func'> & { func?: string | ((ctx: Record<string, unknown>) => unknown) })) => rt.defineTool({ ...def, func: typeof def.func === 'function' ? def.func.toString() : def.func } as ToolDefinition),
       compile: (opts) => compileFromTrace(state.trace.events, opts),
       list: () => listDefinedTools(),
       remove: (site: string, name: string) => rt.removeTool(site, name),

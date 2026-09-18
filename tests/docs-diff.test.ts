@@ -35,7 +35,6 @@ describe('tools.define', () => {
     const mod = renderToolModule(def);
     expect(mod).toContain("import { cli, Strategy } from '@jackwener/opencli/registry'");
     expect(mod).toContain('Strategy.COOKIE'); expect(mod).toContain('browser: true');
-    expect(mod).toContain('source: "defined"'); // the module itself says it runs on the object model — no registry patching after import
     expect(() => validateDefinition({ ...def, func: 'not a function {' })).toThrow(/parse/);
     const draft = compileFromTrace([
       { t: 1, kind: 'goto', url: 'https://x.test/search?q=shoes' },

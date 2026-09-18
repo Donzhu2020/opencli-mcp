@@ -25,5 +25,18 @@ describe('site registry', () => {
     const cmd = await r.resolve('hackernews', 'top');
     expect(cmd.browser).toBe(false);
     expect(cmd.pipeline || cmd.func).toBeTruthy();
+    expect((cmd as { source?: string }).source).toBe('builtin');
+  });
+  it('a tool defined now resolves as source "defined" at once (no restart), and as builtin once removed', async () => {
+    // OpenCLI's cli() copies a fixed field list, so the registry's own record is the only carrier of the mark
+    const r = new SiteRegistry();
+    await r.load();
+    const def = { site: 'hackernews', name: 'zz-probe', description: 'probe', access: 'read' as const, args: [], func: 'async ({ tab, args }) => ({ ok: true })' };
+    try {
+      await r.define(def);
+      expect((await r.resolve('hackernews', 'zz-probe') as { source?: string }).source).toBe('defined');
+      expect((await r.resolve('hackernews', 'top') as { source?: string }).source).toBe('builtin'); // siblings untouched
+    } finally { r.remove('hackernews', 'zz-probe'); }
+    await expect(r.resolve('hackernews', 'zz-probe')).rejects.toMatchObject({ code: 'unknown_command' });
   });
 });

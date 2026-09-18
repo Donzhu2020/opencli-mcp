@@ -56,6 +56,9 @@ export class SiteRegistry {
     const entries = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as ManifestEntry[];
     for (const e of entries) {
       if (this.excludedSites.has(e.site)) continue;
+      // a module already imported into the process registry stays (ESM never re-evaluates it); only the mark is recorded
+      const present = getRegistry().get(`${e.site}/${e.name}`) as { _lazy?: boolean } | undefined;
+      if (present && !present._lazy) { this.sourceOf.set(`${e.site}/${e.name}`, kind); continue; }
       const modulePath = e.modulePath ? path.join(dir, e.modulePath) : undefined;
       const raw = {
         ...e,
@@ -79,7 +82,7 @@ export class SiteRegistry {
         const full = path.join(siteDir, file);
         try {
           await import(`${pathToFileURL(full).href}?t=${fs.statSync(full).mtimeMs}`);
-          this.sourceOf.set(`${site}/${file.slice(0, -3)}`, 'defined'); // the module itself carries source: 'defined'
+          this.sourceOf.set(`${site}/${file.slice(0, -3)}`, 'defined');
         } catch (err) {
           process.stderr.write(`[opencli-mcp] failed to load defined tool ${full}: ${(err as Error).message}\n`);
         }
@@ -164,6 +167,8 @@ export class SiteRegistry {
       else if (!loaded?.func && !loaded?.pipeline) throw Object.assign(new Error(`Adapter module ${mp} did not register ${key}`), { code: 'adapter_load' });
       else cmd = loaded;
     }
-    return cmd;
+    // the registry is the one record of where a command came from: OpenCLI's cli() copies a fixed field list, so a
+    // module cannot carry the mark itself. The executor branches on `source` ('defined' → exploration object model).
+    return { ...cmd, source: this.sourceOf.get(fullName(cmd)) ?? 'builtin' } as CliCommand;
   }
 }

@@ -20,6 +20,8 @@ export interface ExtensionPageOptions {
   windowMode?: 'foreground' | 'background';
   idleTimeout?: number;
   contextId?: string;
+  /** bind this page object to one tab identity for its whole life (per-Tab pages); omitted = session-scope page with no tab */
+  page?: string;
 }
 
 export interface UserTabInfo { tabId: number; title?: string; url?: string; windowId: number; active: boolean; groupId?: number; lastAccessed?: number }
@@ -80,6 +82,7 @@ function definePageClass(lib: Lib): any {
       this.opts = opts;
       this.session = opts.session;
       this.surface = opts.surface;
+      this._page = opts.page;
     }
 
     private sessionOpts(): Partial<Command> {

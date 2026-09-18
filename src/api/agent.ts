@@ -47,18 +47,19 @@ function describeTarget(t: Target | undefined): string {
 const WRITE_EVAL_RE = /(\.click\s*\(|\.submit\s*\(|\blocation\s*(=|\.href\s*=|\.assign\s*\(|\.replace\s*\()|document\.write|\.remove\s*\(\)|localStorage\.(setItem|removeItem|clear)|\.value\s*=[^=])/;
 
 export class Tab {
-  constructor(readonly id: string, private readonly ctx: SessionContext) {}
+  /** A Tab owns the page object bound to its identity; `bound` lets a caller (frozen tools) pass an existing page. */
+  constructor(readonly id: string, private readonly ctx: SessionContext, private readonly bound?: RuntimePage) {}
 
-  /** Run `fn` with this tab as the page's active identity. Serialized per session: one shared page object, one active identity at a time. */
+  /** Run `fn` on this tab's own page object. Operations are serialized per tab, never across tabs. */
   async use<T>(fn: (page: RuntimePage) => Promise<T>): Promise<T> {
     const state = this.ctx.state;
-    const prev = state.lock;
+    const prev = state.tabLocks.get(this.id) ?? Promise.resolve();
     let release!: () => void;
-    state.lock = new Promise<void>((r) => { release = r; });
+    state.tabLocks.set(this.id, new Promise<void>((r) => { release = r; }));
     try {
       await prev;
-      const page = await this.ctx.rt.getBrowserPage(this.ctx.sessionId);
-      if (page.getActivePage() !== this.id) page.setActivePage(this.id);
+      state.selected = this.id;
+      const page = this.bound ?? await this.ctx.rt.pageFor(this.ctx.sessionId, this.id);
       return await fn(page);
     } finally { release(); }
   }
@@ -82,7 +83,7 @@ export class Tab {
   async back(): Promise<void> { await this.use((p) => p.history('back')); }
   async forward(): Promise<void> { await this.use((p) => p.history('forward')); }
   async reload(): Promise<void> { await this.use((p) => p.history('reload')); }
-  async close(): Promise<void> { await this.use((p) => p.closeTab(this.id)); }
+  async close(): Promise<void> { await this.use((p) => p.closeTab(this.id)); this.ctx.rt.forgetPage(this.ctx.sessionId, this.id); }
 
   async observe(opts: ObserveOptions = {}): Promise<{ url: string | null; title: string | null; state?: string; diff?: boolean; changed?: { added: number; removed: number; changed?: number }; image?: ImageValue }> {
     const mode = opts.mode ?? 'state';
@@ -262,13 +263,12 @@ export class Browser {
       const page = await this.page();
       if (url && !/^(https?:\/\/|data:text\/html)/i.test(url)) throw new ActionError('invalid_url', 'Only http(s) (or data:text/html) URLs can be opened');
       if (url && !url.startsWith('data:')) Policy.throwIfDenied(this.ctx.rt.policy.checkOrigin(url));
-      if (!page.getActivePage() && url) { await page.goto(url); }
-      else { const id = await page.newTab(url); if (id) page.setActivePage(id); if (url) await page.wait({ time: 0.5 }).catch(() => {}); }
-      const id = page.getActivePage();
+      const id = await page.newTab(url); // the extension creates the tab and waits for its first load
       if (!id) throw new ActionError('tab_create_failed', 'Could not create a tab');
       this.ctx.state.finalized = false; // new tabs after a finalize are the session's again
+      this.ctx.state.selected = id;
       this.ctx.state.trace.record({ kind: 'goto', url: url ?? 'about:blank', page: id });
-      return new Tab(id, this.ctx);
+      return new Tab(id, this.ctx, await this.ctx.rt.pageFor(this.ctx.sessionId, id));
     },
     list: async (): Promise<Array<{ id: string; url?: string; title?: string; active?: boolean }>> => {
       const page = await this.page();
@@ -276,11 +276,12 @@ export class Browser {
       return tabs.filter((t) => t.page).map((t) => ({ id: t.page!, url: t.url, title: t.title, active: t.active }));
     },
     get: (id: string): Tab => new Tab(id, this.ctx),
-    selected: async (): Promise<Tab | undefined> => { const page = await this.page(); const id = page.getActivePage(); return id ? new Tab(id, this.ctx) : undefined; },
+    selected: async (): Promise<Tab | undefined> => { const id = this.ctx.state.selected; return id ? new Tab(id, this.ctx) : undefined; },
     finalize: async (opts: { keep?: Array<{ tab: string | Tab; status: 'deliverable' | 'handoff' }> } = {}): Promise<{ closed: string[]; kept: string[] }> => {
       const page = await this.page();
       const keep = (opts.keep ?? []).map((k) => ({ page: typeof k.tab === 'string' ? k.tab : k.tab.id, status: k.status }));
       this.ctx.state.finalized = true;
+      this.ctx.state.pages.clear(); this.ctx.state.tabLocks.clear(); this.ctx.state.selected = undefined;
       if (this.ctx.rt.isExtensionPage(page)) return page.finalize(keep);
       await page.closeWindow();
       return { closed: [], kept: keep.map((k) => k.page) };
@@ -295,8 +296,9 @@ export class Browser {
       const page = this.ext(await this.page());
       const r = await page.claim(tab);
       this.ctx.state.finalized = false;
+      this.ctx.state.selected = r.page;
       this.ctx.state.trace.record({ kind: 'note', text: `claimed user tab ${tab.tabId ?? ''} ${r.url ?? ''}` });
-      return new Tab(r.page, this.ctx);
+      return new Tab(r.page, this.ctx, await this.ctx.rt.pageFor(this.ctx.sessionId, r.page));
     },
   };
 

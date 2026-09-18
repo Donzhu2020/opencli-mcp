@@ -35,8 +35,12 @@ export interface SessionState {
   trace: TraceRecorder;
   browserPage?: RuntimePage;
   browserPagePromise?: Promise<RuntimePage>;
-  /** Serializes page operations: one shared page object per session, one active tab identity at a time. */
-  lock: Promise<void>;
+  /** One page object per tab (same bridge, own identity); the session page above carries no tab and serves session-scope calls. */
+  pages: Map<string, RuntimePage>;
+  /** Per-tab serialization of page operations. */
+  tabLocks: Map<string, Promise<void>>;
+  /** The tab the agent used most recently (what `browser.tabs.selected()` returns). */
+  selected?: string;
   enabledSites: Map<string, { write: boolean }>;
   capabilities: Set<string>;
   docsRead: Set<string>;
@@ -85,7 +89,7 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
     this.configSitesWrite = opts.sitesWrite ?? [];
     if (opts.log) this.on('log', opts.log);
     this.bridge?.on('event', (e) => this.emit('browser-event', e));
-    this.bridge?.on('close', () => { this.adapterPages.clear(); for (const s of this.sessions.values()) s.browserPage = undefined; });
+    this.bridge?.on('close', () => { this.adapterPages.clear(); for (const s of this.sessions.values()) { s.browserPage = undefined; s.pages.clear(); } });
   }
 
   async init(): Promise<void> {
@@ -103,7 +107,7 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
   session(id: string): SessionState {
     let s = this.sessions.get(id);
     if (!s) {
-      s = { id, createdAt: Date.now(), trace: new TraceRecorder(), lock: Promise.resolve(), enabledSites: new Map(), capabilities: new Set(), docsRead: new Set(), lastObserve: new Map(), netLog: new Map(), finalized: false };
+      s = { id, createdAt: Date.now(), trace: new TraceRecorder(), pages: new Map(), tabLocks: new Map(), enabledSites: new Map(), capabilities: new Set(), docsRead: new Set(), lastObserve: new Map(), netLog: new Map(), finalized: false };
       this.sessions.set(id, s);
     }
     return s;
@@ -119,6 +123,17 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
     return s.browserPagePromise;
   }
 
+  /** The page object bound to one tab of a session: commands carry the tab's identity, nothing is switched or shared. */
+  async pageFor(sessionId: string, pageId: string): Promise<RuntimePage> {
+    const s = this.session(sessionId);
+    const existing = s.pages.get(pageId);
+    if (existing) return existing;
+    const page = await this.createPage({ session: `mcp:${sessionId}`, surface: 'browser', windowMode: 'background', page: pageId });
+    s.pages.set(pageId, page);
+    return page;
+  }
+  forgetPage(sessionId: string, pageId: string): void { const s = this.sessions.get(sessionId); s?.pages.delete(pageId); s?.tabLocks.delete(pageId); if (s?.selected === pageId) s.selected = undefined; }
+
   /** Background adapter page per site (shared by all MCP sessions), like OpenCLI's site sessions. */
   async getAdapterPage(site: string, opts: { siteSession: 'ephemeral' | 'persistent'; windowMode: 'foreground' | 'background'; navigateTo?: string }): Promise<RuntimePage> {
     const key = `site:${site}`;
@@ -131,7 +146,7 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
     return p;
   }
 
-  private async createPage(opts: { session: string; surface: 'browser' | 'adapter'; siteSession?: 'ephemeral' | 'persistent'; windowMode?: 'foreground' | 'background' }): Promise<RuntimePage> {
+  private async createPage(opts: { session: string; surface: 'browser' | 'adapter'; siteSession?: 'ephemeral' | 'persistent'; windowMode?: 'foreground' | 'background'; page?: string }): Promise<RuntimePage> {
     const backend = this.backend();
     if (backend === 'extension' && this.bridge) return createExtensionPage(this.bridge, { ...opts, contextId: this.bridge.contextId });
     throw Object.assign(new Error('No browser backend is connected'), { code: 'browser_unavailable', hint: 'Run `opencli-mcp doctor`. Chrome with the opencli-mcp extension must be running.' });

@@ -181,24 +181,38 @@ export class SessionManager {
       .map((t) => ({ tabId: t.id!, title: t.title, url: t.url, windowId: t.windowId, active: Boolean(t.active), groupId: t.groupId && t.groupId > 0 ? t.groupId : undefined, lastAccessed: (t as { lastAccessed?: number }).lastAccessed }));
   }
 
-  async claimUserTab(s: Session, claim: { tabId: number; title?: string; url?: string }): Promise<{ tabId: number; page: string; tab: chrome.tabs.Tab }> {
+  /**
+   * Claim like Codex's claimTab(tab | id): the tab id alone is enough. url/title are optional matchers — a url matches by
+   * exact value or prefix, a title by case-insensitive substring — used as guards when an id is given, or to find the tab
+   * when it is not (then the match must be unique; ambiguity fails closed with the candidates).
+   */
+  async claimUserTab(s: Session, claim: { tabId?: number; title?: string; url?: string }): Promise<{ tabId: number; page: string; tab: chrome.tabs.Tab }> {
+    const urlOk = (u?: string) => claim.url === undefined || (u !== undefined && (u === claim.url || u.startsWith(claim.url)));
+    const titleOk = (t?: string) => claim.title === undefined || (t !== undefined && t.toLowerCase().includes(claim.title.toLowerCase()));
     let tab: chrome.tabs.Tab;
-    try { tab = await chrome.tabs.get(claim.tabId); } catch { throw new SessionError('claim_identity_mismatch', `Tab ${claim.tabId} no longer exists`, 'List user tabs again and claim a current one.'); }
-    if (!isHttp(tab.url)) throw new SessionError('claim_not_allowed', 'Only http(s) tabs can be claimed');
-    if ((claim.url !== undefined && tab.url !== claim.url) || (claim.title !== undefined && tab.title !== claim.title)) {
-      throw new SessionError('claim_identity_mismatch', `Tab ${claim.tabId} changed since it was listed (now "${tab.title}" ${tab.url})`, 'Do not claim a different tab silently; list again and confirm.');
+    if (claim.tabId === undefined) {
+      if (claim.url === undefined && claim.title === undefined) throw new SessionError('claim_not_allowed', 'claim needs a tabId, or a url/title to find the tab', 'List user tabs first (tab_list user:true).');
+      const candidates = (await this.listUserTabs()).filter((t) => urlOk(t.url) && titleOk(t.title));
+      if (candidates.length === 0) throw new SessionError('claim_not_found', `no user tab matches ${JSON.stringify({ url: claim.url, title: claim.title })}`, 'List user tabs and claim by tabId.');
+      if (candidates.length > 1) throw new SessionError('claim_ambiguous', `${candidates.length} user tabs match; claim by tabId: ${candidates.map((c) => `${c.tabId} "${c.title}" ${c.url}`).join('; ')}`, 'Pass the tabId of the intended tab.');
+      tab = await chrome.tabs.get(candidates[0].tabId);
+    } else {
+      try { tab = await chrome.tabs.get(claim.tabId); } catch { throw new SessionError('claim_identity_mismatch', `Tab ${claim.tabId} no longer exists`, 'List user tabs again and claim a current one.'); }
+      if (!urlOk(tab.url) || !titleOk(tab.title)) throw new SessionError('claim_identity_mismatch', `Tab ${claim.tabId} does not match the given url/title (now "${tab.title}" ${tab.url})`, 'Do not claim a different tab silently; list again and confirm, or claim by tabId alone.');
     }
-    const owner = this.ownerOf(claim.tabId);
-    if (owner && owner !== s) throw new SessionError('already_claimed', `Tab ${claim.tabId} belongs to session ${owner.key}`);
+    const tabId = tab.id!;
+    if (!isHttp(tab.url)) throw new SessionError('claim_not_allowed', 'Only http(s) tabs can be claimed');
+    const owner = this.ownerOf(tabId);
+    if (owner && owner !== s) throw new SessionError('already_claimed', `Tab ${tabId} belongs to session ${owner.key}`);
     s.windowId = s.windowId ?? tab.windowId;
-    s.leases.set(claim.tabId, { tabId: claim.tabId, origin: 'user', mark: null, url: tab.url, title: tab.title, claimedAt: Date.now(), state: 'active' });
-    s.preferredTabId = claim.tabId;
-    const page = await identity.resolveTargetId(claim.tabId).catch(() => String(claim.tabId));
-    void this.badge(claim.tabId, 'active');
-    this.emit({ kind: 'tab_acquired', session: s.key, page, tabId: claim.tabId, url: tab.url, title: tab.title, origin: 'user' });
+    s.leases.set(tabId, { tabId: tabId, origin: 'user', mark: null, url: tab.url, title: tab.title, claimedAt: Date.now(), state: 'active' });
+    s.preferredTabId = tabId;
+    const page = await identity.resolveTargetId(tabId).catch(() => String(tabId));
+    void this.badge(tabId, 'active');
+    this.emit({ kind: 'tab_acquired', session: s.key, page, tabId: tabId, url: tab.url, title: tab.title, origin: 'user' });
     this.touch(s);
     this.persist();
-    return { tabId: claim.tabId, page, tab };
+    return { tabId: tabId, page, tab };
   }
 
   /** Resolve the tab a page-scoped command targets; create one when the session has none. */

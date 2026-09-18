@@ -67,8 +67,8 @@ export interface Command {
   deadlineAt?: number;
   /** session-name */
   name?: string;
-  /** claim: fail-closed identity snapshot of a user tab */
-  claim?: { tabId: number; title?: string; url?: string };
+  /** claim: a user tab by id (from user-tabs), or by url/title when the id is omitted; url/title given with an id are guards */
+  claim?: { tabId?: number; title?: string; url?: string };
   /** mark / finalize */
   mark?: 'deliverable' | 'handoff' | null;
   keep?: Array<{ page: string; status: 'deliverable' | 'handoff' }>;

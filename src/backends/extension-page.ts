@@ -170,7 +170,7 @@ function definePageClass(lib: Lib): any {
     // ── opencli-mcp extras ──
     async nameSession(name: string): Promise<void> { await this.bridge.send('session-name', { ...this.sessionOpts(), name }); }
     async userTabs(): Promise<UserTabInfo[]> { const r = await this.bridge.send('user-tabs', { ...this.sessionOpts() }); return Array.isArray(r.data) ? r.data as UserTabInfo[] : []; }
-    async claim(tab: { tabId: number; title?: string; url?: string }): Promise<{ page: string; url?: string; title?: string }> {
+    async claim(tab: { tabId?: number; title?: string; url?: string }): Promise<{ page: string; url?: string; title?: string }> {
       const r = await this.bridge.send('claim', { ...this.sessionOpts(), claim: tab });
       if (r.page) this._page = r.page;
       const d = (r.data ?? {}) as { url?: string; title?: string };

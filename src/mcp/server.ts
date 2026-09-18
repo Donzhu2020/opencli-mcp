@@ -147,8 +147,8 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     return ok(user ? { userTabs: await b.user.openTabs() } : { tabs: await b.tabs.list() });
   }));
   server.registerTool('tab_claim', {
-    title: 'Claim a user tab', description: 'Take control of a tab the user already has open. Pass the exact tabId, title and url from tab_list(user:true); the claim fails closed if the tab changed. The tab is not moved into the agent group and is never closed by finalize.',
-    inputSchema: { tabId: z.number().int(), title: z.string().optional(), url: z.string().optional(), observe: z.boolean().default(true) },
+    title: 'Claim a user tab', description: 'Take control of a tab the user already has open. tabId from tab_list(user:true) is enough; or give url (exact or prefix) and/or title (substring) to find it — the match must be unique. url/title together with a tabId are guards that fail closed if the tab changed. The tab is not moved into the agent group and is never closed by finalize.',
+    inputSchema: { tabId: z.number().int().optional(), title: z.string().optional(), url: z.string().optional(), observe: z.boolean().default(true) },
   }, async ({ tabId, title, url, observe }) => run(async () => {
     const b = await api.agent.browsers.getDefault();
     const tab = await b.user.claimTab({ tabId, title, url });

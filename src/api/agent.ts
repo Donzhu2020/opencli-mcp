@@ -294,12 +294,13 @@ export class Browser {
 
   readonly user = {
     openTabs: async (): Promise<UserTabInfo[]> => this.ext(await this.page()).userTabs(),
-    claimTab: async (tab: { tabId: number; title?: string; url?: string }): Promise<Tab> => {
+    /** Claim a user tab by id, or by url/title (unique match) when the id is omitted; url/title with an id act as guards. */
+    claimTab: async (tab: { tabId?: number; title?: string; url?: string }): Promise<Tab> => {
       if (tab.url) Policy.throwIfDenied(this.ctx.rt.policy.checkOrigin(tab.url));
       const page = this.ext(await this.page());
       const r = await page.claim(tab);
       this.ctx.state.finalized = false;
-      this.ctx.state.trace.record({ kind: 'note', text: `claimed user tab ${tab.tabId} ${r.url ?? ''}` });
+      this.ctx.state.trace.record({ kind: 'note', text: `claimed user tab ${tab.tabId ?? ''} ${r.url ?? ''}` });
       return new Tab(r.page, this.ctx);
     },
   };

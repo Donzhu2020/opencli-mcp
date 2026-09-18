@@ -63,23 +63,6 @@ function errorResult(id: string, err: unknown): Result {
   return { id, ok: false, error: message, errorCode: code, errorHint: e?.hint, ...(e?.dialog ? { data: { dialog: e.dialog } } : {}) };
 }
 /** Every child frame of the tab (in document order), flagged cross-origin when its origin differs from the top document's. Opaque origins (data:, sandboxed) count as cross-origin. */
-function enumerateCrossOriginFrames(tree: unknown): Array<{ index: number; frameId: string; url: string; name: string; crossOrigin: boolean }> {
-  const out: Array<{ index: number; frameId: string; url: string; name: string; crossOrigin: boolean }> = [];
-  const root = (tree as { frameTree?: { frame: { url: string }; childFrames?: unknown[] } })?.frameTree;
-  if (!root) return out;
-  const origin = (u: string) => { try { return new URL(u).origin; } catch { return null; } };
-  const top = origin(root.frame.url);
-  const walk = (node: { frame: { id: string; url: string; name?: string }; childFrames?: unknown[] }) => {
-    for (const child of (node.childFrames ?? []) as Array<{ frame: { id: string; url: string; name?: string }; childFrames?: unknown[] }>) {
-      const o = origin(child.frame.url);
-      out.push({ index: out.length, frameId: child.frame.id, url: child.frame.url, name: child.frame.name ?? '', crossOrigin: o === null || o === 'null' || o !== top });
-      walk(child);
-    }
-  };
-  walk(root as { frame: { id: string; url: string; name?: string }; childFrames?: unknown[] });
-  return out;
-}
-
 // ── router ──
 async function handleCommand(cmd: Command): Promise<Result> {
   await sessions.ready();
@@ -103,7 +86,7 @@ async function handleCommand(cmd: Command): Promise<Result> {
       case 'cdp': return await handleCdp(cmd, s);
       case 'set-file-input': { if (!cmd.files?.length) return { id: cmd.id, ok: false, error: 'Missing files' }; const tabId = await sessions.resolveTab(s, cmd.page); await executor.setFileInputFiles(tabId, cmd.files, cmd.selector); return pageScoped(cmd.id, tabId, { count: cmd.files.length }); }
       case 'insert-text': { if (typeof cmd.text !== 'string') return { id: cmd.id, ok: false, error: 'Missing text' }; const tabId = await sessions.resolveTab(s, cmd.page); await executor.insertText(tabId, cmd.text); return pageScoped(cmd.id, tabId, { inserted: true }); }
-      case 'frames': { const tabId = await sessions.resolveTab(s, cmd.page); return { id: cmd.id, ok: true, data: enumerateCrossOriginFrames(await executor.getFrameTree(tabId)) }; }
+      case 'frames': { const tabId = await sessions.resolveTab(s, cmd.page); return { id: cmd.id, ok: true, data: await executor.listFrames(tabId) }; }
       case 'network-capture-start': { const tabId = await sessions.resolveTab(s, cmd.page); await executor.startNetworkCapture(tabId, cmd.pattern); return pageScoped(cmd.id, tabId, { started: true }); }
       case 'network-capture-read': { const tabId = await sessions.resolveTab(s, cmd.page); return pageScoped(cmd.id, tabId, await executor.readNetworkCapture(tabId)); }
       case 'wait-download': return { id: cmd.id, ok: true, data: await executor.waitForDownload(cmd.pattern ?? '', cmd.timeoutMs ?? 30_000) };
@@ -173,7 +156,7 @@ async function handleExec(cmd: Command, s: Session): Promise<Result> {
   const aggressive = s.surface === 'browser';
   if (cmd.world === 'engine') return pageScoped(cmd.id, tabId, await evaluateInEngine(tabId, cmd.code, aggressive, commandTimeoutMs(cmd)));
   if (cmd.frameIndex != null) {
-    const frames = enumerateCrossOriginFrames(await executor.getFrameTree(tabId));
+    const frames = await executor.listFrames(tabId);
     const f = frames[cmd.frameIndex];
     if (!f) return { id: cmd.id, ok: false, error: `Frame index ${cmd.frameIndex} out of range (${frames.length})`, errorCode: 'frame_not_found' };
     return pageScoped(cmd.id, tabId, await evaluateMain(tabId, f.frameId, cmd.code, aggressive, commandTimeoutMs(cmd)));

@@ -230,7 +230,7 @@ export class Tab {
     }),
   };
   async cookies(domain: string): Promise<unknown[]> { return this.use((p) => p.getCookies({ domain })); }
-  async frames(): Promise<Array<{ index: number; frameId: string; url: string; name: string; crossOrigin?: boolean }>> { return this.use((p) => p.frames()); }
+  async frames(): Promise<Array<{ index: number; frameId: string; url: string; name: string; crossOrigin?: boolean; oopif?: boolean }>> { return this.use((p) => p.frames()); }
   async download(pattern = '', timeoutMs = 30_000): Promise<unknown> { return this.use((p) => p.waitForDownload(pattern, timeoutMs)); }
   async markDeliverable(): Promise<void> { await this.mark('deliverable'); }
   async markHandoff(): Promise<void> { await this.mark('handoff'); }

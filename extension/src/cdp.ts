@@ -709,6 +709,45 @@ export async function getFrameTree(tabId: number): Promise<any> {
   return sendDebuggerCommand({ tabId }, 'Page.getFrameTree');
 }
 
+export interface FrameEntry { index: number; frameId: string; url: string; name: string; crossOrigin: boolean; /** lives in its own renderer process (site isolation) */ oopif: boolean }
+type FrameNode = { frame: { id: string; url: string; name?: string }; childFrames?: FrameNode[] };
+
+/**
+ * Every child frame of the tab in one stable list: the root session's frame tree (in-process frames, document order)
+ * merged with the tab's out-of-process iframe targets, each with its own subtree. Under site isolation an OOPIF is a
+ * separate target and never appears in the root tree, so enumeration and frame-scoped evaluate must share this list.
+ */
+export async function listFrames(tabId: number): Promise<FrameEntry[]> {
+  await ensureAttached(tabId);
+  const origin = (u: string) => { try { return new URL(u).origin; } catch { return null; } };
+  const out: FrameEntry[] = [];
+  const seen = new Set<string>();
+  const { frameTree: root } = await sendDebuggerCommand({ tabId }, 'Page.getFrameTree') as { frameTree: FrameNode };
+  const top = origin(root.frame.url);
+  const push = (f: FrameNode['frame'], oopif: boolean) => {
+    if (seen.has(f.id)) return; seen.add(f.id);
+    const o = origin(f.url);
+    out.push({ index: out.length, frameId: f.id, url: f.url, name: f.name ?? '', crossOrigin: oopif || o === null || o === 'null' || o !== top, oopif });
+  };
+  const walk = (node: FrameNode, oopif: boolean) => { for (const child of node.childFrames ?? []) { push(child.frame, oopif); walk(child, oopif); } };
+  seen.add(root.frame.id);
+  walk(root, false);
+  // out-of-process iframes: discoverable targets of type iframe; each has its own frame tree
+  await sendDebuggerCommand({ tabId }, 'Target.setDiscoverTargets', { discover: true }, 3_000).catch(() => {});
+  await sendDebuggerCommand({ tabId }, 'Target.setAutoAttach', { autoAttach: true, waitForDebuggerOnStart: false, flatten: true, filter: [{ type: 'iframe', exclude: false }] }, 3_000).catch(() => {});
+  const targets = (await sendDebuggerCommand({ tabId }, 'Target.getTargets', undefined, 3_000).catch(() => null) as { targetInfos?: Array<{ targetId: string; type: string; url: string }> } | null)?.targetInfos ?? [];
+  for (const t of targets) {
+    if (t.type !== 'iframe' || seen.has(t.targetId)) continue;
+    push({ id: t.targetId, url: t.url }, true);
+    try {
+      const { frameTree } = await sendCommandInFrameTarget(tabId, t.targetId, 'Page.getFrameTree', {}, false, 3_000) as { frameTree: FrameNode };
+      if (frameTree.frame.id !== t.targetId) { seen.add(frameTree.frame.id); }
+      walk(frameTree, true);
+    } catch { /* target went away or is not attachable: listed without its subtree */ }
+  }
+  return out;
+}
+
 function normalizeCapturePatterns(pattern?: string): string[] {
   return String(pattern || '')
     .split('|')

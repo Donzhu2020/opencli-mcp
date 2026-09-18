@@ -18,7 +18,7 @@ export interface RuntimePage extends IPage {
   setFileInput(files: string[], selector?: string): Promise<void>;
   insertText(text: string): Promise<void>;
   /** Child frames in document order; crossOrigin marks frames whose origin differs from the top document (data:/sandboxed count as cross-origin). */
-  frames(): Promise<Array<{ index: number; frameId: string; url: string; name: string; crossOrigin?: boolean }>>;
+  frames(): Promise<Array<{ index: number; frameId: string; url: string; name: string; crossOrigin?: boolean; oopif?: boolean }>>;
   evaluateInFrame(js: string, frameIndex: number): Promise<unknown>;
   nativeClick(x: number, y: number): Promise<void>;
   nativeType(text: string): Promise<void>;

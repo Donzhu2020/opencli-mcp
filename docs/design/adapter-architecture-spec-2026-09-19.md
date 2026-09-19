@@ -112,3 +112,34 @@ This is the elegant end state: **path = identity, module = definition, core = a 
 manifest, the global registry, and the special-cased loaders, and delivers dynamic loading + core/adapter separation +
 version decoupling as side effects. Proposed first step: **prototype the SDK `defineAdapter()` + `SourceLoader` (list /
 resolve / derived cache) and port 2–3 sites** to prove it end-to-end (gate + smoke), then codemod the rest.
+
+## 10. Placement — in the repo and on the user's machine (owner Q)
+
+### In the repo (now, dev phase: one repo, split-ready)
+Replace the awkward `vendor/opencli/clis` with first-class top-level dirs, so the later package/repo split is a *move*,
+not a rewrite:
+```
+/adapters/            ← built-in corpus (site dirs). git-tracked, editable — this is what we own
+/packages/adapter-sdk/ ← the SDK (defineAdapter, Strategy, Page/Tab interface, errors, pipeline) — carved from vendor/opencli
+/src/                 ← the core (server, runtime, engine, object model, SourceLoader, projection)
+```
+Later, `/adapters` → `@opencli-mcp/adapters` and `/packages/adapter-sdk` → `@opencli-mcp/adapter-sdk`, each publishable
+independently; core depends on a compatible SDK version and lists the adapters package as a source. (Monorepo
+workspaces when we want independent versioning; not required to start.)
+
+### On the user's machine — the `sources[]` precedence list (later overrides earlier)
+```
+1. built-in corpus   <globalNodeModules>/opencli-mcp/adapters/            (ships with the version; read-only baseline)
+2. user source       ~/.opencli-mcp/adapters/<site>/<command>.js          (user-writable; overrides builtin; survives upgrades)
+3. configured extras (optional)  dirs from config `sources: [...]`        (teams / third-party adapter packs)
+derived cache:       ~/.opencli-mcp/.cache/adapter-index.json             (regenerated; not in the read-only package)
+```
+- **`~/.opencli-mcp/adapters/` is the one writable source** and it unifies three things that are separate today:
+  agent-defined tools (currently `~/.opencli-mcp/tools/`), user adapters (OpenCLI's old `~/.opencli/clis`), and
+  hot-fixes/overrides of builtin commands. Drop `~/.opencli-mcp/adapters/twitter/bookmarks.js` and it shadows the
+  builtin one — a fix without a core release, surviving upgrades.
+- **SDK resolution for user adapters**: user modules `import '@opencli-mcp/adapter-sdk'`; the loader ensures
+  `~/.opencli-mcp/` can resolve it (a managed symlink/`node_modules` entry, same trick define.ts uses today for
+  `@jackwener`), or the core injects the SDK. So a user file needs no local install.
+- **Updating the corpus independently of core**: either `npm i -g @opencli-mcp/adapters@latest` (once it's its own
+  package) or just drop/replace files in `~/.opencli-mcp/adapters/`. The mtime-keyed cache refreshes; no restart.

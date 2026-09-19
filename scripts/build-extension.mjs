@@ -24,9 +24,9 @@ await build({
   bundle: true, format: 'iife', target: 'chrome120', platform: 'browser',
   outfile: resolve(out, 'page.js'), sourcemap: false, logLevel: 'warning',
 });
+// The extension carries its OWN version (extension/manifest.json), decoupled from the host/npm package version — it is
+// bumped and re-released only when the extension itself changes. The build copies it through unchanged.
 const manifest = JSON.parse(readFileSync(resolve(ext, 'manifest.json'), 'utf8'));
-const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
-manifest.version = pkg.version;
 writeFileSync(resolve(out, 'manifest.json'), JSON.stringify(manifest, null, 2));
 cpSync(resolve(ext, 'icons'), resolve(out, 'icons'), { recursive: true });
 cpSync(resolve(ext, 'cursor.svg'), resolve(out, 'cursor.svg'));

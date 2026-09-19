@@ -8,8 +8,8 @@ import type { Runtime } from '../runtime/runtime.js';
 import { createAgentApi, Tab, type AgentApi, type Target, type ActAction } from '../api/agent.js';
 import { ActionError, errorEnvelope } from '../api/errors.js';
 import { JsSession, safeStringify } from './js-session.js';
-import { buildInstructions, listDocs, readDoc, DOCS_MANIFEST, type DocContext } from '../docs/manifest.js';
-import { argsToShape, projectArgs } from '../sites/schema.js';
+import { buildInstructions, listDocs, readDoc, type DocContext } from '../docs/manifest.js';
+import { argsToShape, projectArgs, deCli } from '../sites/schema.js';
 import { listDefinedTools } from '../sites/define.js';
 
 type Content = Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>;
@@ -140,11 +140,13 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   // ── session ──
   server.registerTool('session_finalize', { title: 'Finalize session tabs', description: 'End-of-task cleanup. Agent-created tabs not listed in keep are closed; deliverable tabs leave the group and stay open; handoff tabs stay in the group for a later turn. Claimed user tabs are only released.',
     inputSchema: { keep: z.array(z.object({ tab: z.string().describe('tab id'), status: z.enum(['deliverable', 'handoff']) })).default([]) },
+    annotations: { destructiveHint: true },
   }, async ({ keep }) => run(async () => ok(await (await api.agent.browsers.getDefault()).tabs.finalize({ keep }))));
 
   // ── tabs ──
   server.registerTool('tab_open', { title: 'Open a tab', description: 'Open a URL in a new agent tab (background, in this session’s tab group) and return its id plus the initial page state.',
     inputSchema: { url: z.string().optional().describe('http(s) URL, or data:text/html,… for a scratch page'), observe: z.boolean().default(true), session: z.string().min(1).max(60).optional().describe('name this browser session (short, emoji-prefixed; becomes the Chrome tab-group title) — give it with the first tab') },
+    annotations: { openWorldHint: true },
   }, async ({ url, observe, session: sessionName }) => run(async () => {
     const b = await api.agent.browsers.getDefault();
     if (sessionName) await b.nameSession(sessionName);
@@ -155,6 +157,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   }));
   server.registerTool('tab_claim', { title: 'Claim a user tab', description: 'Take control of a tab the user already has open. tabId (from browser.user.openTabs() in js) is enough; or give url (exact or prefix) and/or title (substring) to find it — the match must be unique. url/title together with a tabId are guards that fail closed if the tab changed. The tab is not moved into the agent group and is never closed by finalize.',
     inputSchema: { tabId: z.number().int().optional(), title: z.string().optional(), url: z.string().optional(), observe: z.boolean().default(true) },
+    annotations: { openWorldHint: true },
   }, async ({ tabId, title, url, observe }) => run(async () => {
     const b = await api.agent.browsers.getDefault();
     const tab = await b.user.claimTab({ tabId, title, url });
@@ -176,7 +179,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     const { data, images } = stripImage({ tab: t.id, ...r, after: await t.observe() });
     return ok(data, images);
   }));
-  server.registerTool('tab_expect', { title: 'Expect', description: 'Assert what the page must show now: text / notText / url / title / selector / ref (with visible:false to require absence). Polls up to timeout seconds; fails with expectation_failed listing the failed checks and the current state. Recorded so tools_compile turns it into a checkpoint of the frozen flow.', inputSchema: { tab: z.string().optional(), text: z.string().optional(), notText: z.string().optional(), url: z.string().optional(), title: z.string().optional(), selector: z.string().optional(), ref: z.string().optional(), visible: z.boolean().optional(), timeout: z.number().default(5) } }, async ({ tab, timeout, ...what }) => run(async () => { const t = await tabOf(tab); return ok({ tab: t.id, ...(await t.expect(what, { timeoutMs: timeout * 1000 })) }); }));
+  server.registerTool('tab_expect', { title: 'Expect', description: 'Assert what the page must show now: text / notText / url / title / selector / ref (with visible:false to require absence). Polls up to timeout seconds; fails with expectation_failed listing the failed checks and the current state. Recorded so tools_compile turns it into a checkpoint of the frozen flow.', inputSchema: { tab: z.string().optional(), text: z.string().optional(), notText: z.string().optional(), url: z.string().optional(), title: z.string().optional(), selector: z.string().optional(), ref: z.string().optional(), visible: z.boolean().optional(), timeout: z.number().default(5) }, annotations: { readOnlyHint: true } }, async ({ tab, timeout, ...what }) => run(async () => { const t = await tabOf(tab); return ok({ tab: t.id, ...(await t.expect(what, { timeoutMs: timeout * 1000 })) }); }));
 
   // ── sites ──
   server.registerTool('sites_search', { title: 'Search sites & commands', description: 'Find site commands by keyword or domain across the adapter corpus (160+ sites). Then site_run a command directly, or sites.enable(site) in js to get typed tools.', inputSchema: { query: z.string(), limit: z.number().int().max(100).default(20) }, annotations: { readOnlyHint: true } }, async ({ query, limit }) => run(async () => ok({ results: api.sites.search(query, limit) })));
@@ -232,7 +235,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
         if (siteTools.has(name)) continue;
         const reg = server.registerTool(name, {
           title: `${site} ${cmd.name}`,
-          description: `${cmd.description}${cmd.domain ? ` (${cmd.domain})` : ''} [${cmd.access}, ${String(cmd.strategy ?? 'public')}]`,
+          description: `${deCli(cmd.description)}${cmd.domain ? ` (${cmd.domain})` : ''} [${cmd.access}, ${String(cmd.strategy ?? 'public')}]`,
           inputSchema: argsToShape(cmd.args),
           annotations: { readOnlyHint: cmd.access === 'read', destructiveHint: cmd.access === 'write', openWorldHint: true },
           ...(cmd.domain ? { icons: [{ src: `https://${cmd.domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '')}/favicon.ico` }] } : {}),
@@ -250,7 +253,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   const onBrowserEvent = (e: { kind: string; session?: string }): void => {
     if (!server.isConnected()) return;
     if (e.session && e.session !== `mcp:${sessionId}`) return;
-    if (e.kind === 'tab_created' || e.kind === 'tab_acquired' || e.kind === 'tab_closed' || e.kind === 'session_released') server.sendResourceListChanged();
+    // tabs are not exposed as a resource, so tab events don't change any resource list — just relay them on the browser log channel.
     void server.sendLoggingMessage({ level: 'info', logger: 'browser', data: e }).catch(() => {});
   };
   if (persistent) rt.on('browser-event', onBrowserEvent);
@@ -259,9 +262,9 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   if (state.enabledSites.size) queueMicrotask(onToolsChanged);
 
   // ── resources ──
-  server.registerResource('docs', new ResourceTemplate('opencli://docs/{name}', { list: async () => ({ resources: DOCS_MANIFEST.map((d) => ({ uri: `opencli://docs/${d.name}`, name: d.name, description: d.description, mimeType: 'text/markdown' })) }) }), { title: 'Documentation', description: 'Agent-facing docs' }, async (uri, { name }) => ({ contents: [{ uri: uri.href, mimeType: 'text/markdown', text: readDoc(String(name)) ?? `no doc ${String(name)}` }] }));
+  server.registerResource('docs', new ResourceTemplate('opencli://docs/{name}', { list: async () => ({ resources: listDocs(docCtx()).filter((d) => d.available).map((d) => ({ uri: `opencli://docs/${d.name}`, name: d.name, description: d.description, mimeType: 'text/markdown' })) }) }), { title: 'Documentation', description: 'Agent-facing docs' }, async (uri, { name }) => ({ contents: [{ uri: uri.href, mimeType: 'text/markdown', text: readDoc(String(name)) ?? `no doc ${String(name)}` }] }));
   server.registerResource('sites', 'opencli://sites', { title: 'Sites', description: 'All sites with command counts', mimeType: 'application/json' }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(api.sites.list(), null, 2) }] }));
-  server.registerResource('site', new ResourceTemplate('opencli://sites/{site}', { list: undefined }), { title: 'Site commands', mimeType: 'application/json' }, async (uri, { site }) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(rt.registry.commands(String(site)).map((c) => ({ name: c.name, description: c.description, access: c.access, strategy: c.strategy, domain: c.domain, args: projectArgs(c.args) })), null, 2) }] }));
+  server.registerResource('site', new ResourceTemplate('opencli://sites/{site}', { list: undefined }), { title: 'Site commands', mimeType: 'application/json' }, async (uri, { site }) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(rt.registry.commands(String(site)).map((c) => ({ name: c.name, description: deCli(c.description), access: c.access, strategy: c.strategy, domain: c.domain, args: projectArgs(c.args) })), null, 2) }] }));
 
   // ── prompts ──
   server.registerPrompt('browse', { title: 'Browse a site for a goal', description: 'Structured plan: prefer site tools, then observe → act → observe, finalize.', argsSchema: { goal: z.string(), url: z.string().optional() } }, ({ goal, url }) => ({ messages: [{ role: 'user', content: { type: 'text', text: `Goal: ${goal}${url ? `\nStart at: ${url}` : ''}\n\n1. sites_search for an existing command that covers the goal; if found, site_run it (or sites.enable(site) in js for typed tools).\n2. Otherwise tab_open with a session name, then loop tab_observe → tab_act → tab_expect, reading error codes.\n3. Confirm before irreversible actions. Finish with session_finalize, keeping only deliverable/handoff tabs.` } }] }));

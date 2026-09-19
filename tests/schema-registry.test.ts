@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { argsToShape, coerceArgs, projectArgs, CLI_ONLY_ARGS } from '../src/sites/schema.js';
+import { argsToShape, coerceArgs, projectArgs, CLI_ONLY_ARGS, deCli } from '../src/sites/schema.js';
 import { SiteRegistry } from '../src/sites/registry.js';
 import { z } from 'zod';
 
@@ -22,9 +22,18 @@ describe('schema', () => {
     const kept = projectArgs(args).map((a) => a.name);
     expect(kept).toEqual(['limit', 'query', 'page', 'file']);
     expect(Object.keys(argsToShape(args)).sort()).toEqual(['file', 'limit', 'page', 'query']);
-    expect([...CLI_ONLY_ARGS]).toEqual(['output', 'output-file', 'resume-file', 'all', 'timeout']);
+    expect([...CLI_ONLY_ARGS]).toEqual(['output', 'output-file', 'resume-file', 'all', 'timeout', 'stdout']);
     // the executor still coerces them (js escape hatch / defaults) — projection hides, it does not delete behaviour
     expect(coerceArgs(args, { all: 'true', timeout: '30' })).toMatchObject({ all: true, timeout: 30 });
+  });
+
+  it('strips CLI --flag grammar from agent-facing text but leaves data words alone', () => {
+    expect(deCli('Seconds the report must stay unchanged when --wait is true')).toBe('Seconds the report must stay unchanged when wait is true');
+    expect(deCli('Conversation index within --project')).toBe('Conversation index within project');
+    expect(deCli('pass --yes to actually delete')).toBe('pass yes to actually delete');
+    expect(deCli('a range 10-20 and a-b hyphen')).toBe('a range 10-20 and a-b hyphen'); // single hyphens untouched
+    expect(deCli(undefined)).toBe('');
+    expect(CLI_ONLY_ARGS.has('stdout')).toBe(true);
   });
 });
 

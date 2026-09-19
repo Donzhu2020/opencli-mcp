@@ -9,7 +9,7 @@ export function argToZod(arg: Arg): ZodTypeAny {
   else if (arg.type === 'number') t = z.number();
   else if (arg.type === 'boolean' || arg.type === 'bool') t = z.boolean();
   else t = z.string();
-  const desc = [arg.help, arg.default !== undefined ? `default: ${JSON.stringify(arg.default)}` : ''].filter(Boolean).join(' · ');
+  const desc = [deCli(arg.help), arg.default !== undefined ? `default: ${JSON.stringify(arg.default)}` : ''].filter(Boolean).join(' · ');
   if (desc) t = t.describe(desc);
   return arg.required ? t : t.optional();
 }
@@ -21,9 +21,17 @@ export function argToZod(arg: Arg): ZodTypeAny {
  *  - resume-file: batch-resume state for long shell jobs.
  *  - all: fetch every page to disk/memory; MCP-native is a bounded page + the agent paging with limit/page/cursor.
  *  - timeout: a per-command wall-clock knob; MCP has progress + cancellation and the runtime's own default.
+ *  - stdout: print to the terminal instead of returning — MCP results always come back over the protocol.
  * The executor still honours any of these if the js escape hatch passes one; we just don't advertise them.
+ * (Deliberately NOT stripped despite CLI-ish names: `no-progress` skips a real API call, `column` selects a data
+ * channel, `formats`/`stable`/`json` are data-shape options — verified per-adapter, not name-matched.)
  */
-export const CLI_ONLY_ARGS = new Set(['output', 'output-file', 'resume-file', 'all', 'timeout']);
+export const CLI_ONLY_ARGS = new Set(['output', 'output-file', 'resume-file', 'all', 'timeout', 'stdout']);
+
+/** Strip CLI-flag grammar (`--flag` → `flag`) from agent-facing help/description text — the corpus was written for a shell. */
+export function deCli(text: string | undefined | null): string {
+  return (text ?? '').replace(/(^|\s)--(?=[A-Za-z])/g, '$1');
+}
 
 /** Drop CLI-only args when projecting a command's Arg[] to any agent-facing surface (tool schema, search signature, site resource). */
 export function projectArgs(args: Arg[]): Arg[] {

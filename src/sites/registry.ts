@@ -10,7 +10,7 @@ import { pathToFileURL } from 'node:url';
 import { registerCommand, getRegistry, fullName, type CliCommand } from '@jackwener/opencli/registry';
 import { opencliClisDir, opencliManifestPath, importDist } from '../lib/opencli.js';
 import { DEFINED_TOOLS_DIR, saveTool, deleteTool, type ToolDefinition } from './define.js';
-import { projectArgs } from './schema.js';
+import { projectArgs, deCli } from './schema.js';
 
 export interface ManifestEntry {
   site: string; name: string; aliases?: string[]; description: string; access: 'read' | 'write';
@@ -142,7 +142,7 @@ export class SiteRegistry {
         if (hay.desc.includes(t)) score += 2;
       }
       // Include a compact param signature so a hit is directly callable (name*=required, :type) — no separate describe step.
-      if (score > 0) hits.push({ site: c.site, name: c.name, description: c.description, score, strategy: String(c.strategy ?? 'public'), access: c.access, domain: c.domain, args: projectArgs(c.args).map((a) => `${a.name}${a.required ? '*' : ''}${a.type ? `:${a.type}` : ''}`) });
+      if (score > 0) hits.push({ site: c.site, name: c.name, description: deCli(c.description), score, strategy: String(c.strategy ?? 'public'), access: c.access, domain: c.domain, args: projectArgs(c.args).map((a) => `${a.name}${a.required ? '*' : ''}${a.type ? `:${a.type}` : ''}`) });
     }
     return hits.sort((a, b) => b.score - a.score).slice(0, limit);
   }

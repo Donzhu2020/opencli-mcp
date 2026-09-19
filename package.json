@@ -27,10 +27,11 @@
     "docs/",
     "README.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "vendor/"
   ],
   "dependencies": {
-    "@jackwener/opencli": "^1.8.7",
+    "@jackwener/opencli": "file:vendor/opencli",
     "@modelcontextprotocol/client": "^2.0.0",
     "@modelcontextprotocol/core": "^2.0.0",
     "@modelcontextprotocol/node": "^2.0.0",

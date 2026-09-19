@@ -71,7 +71,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   const api = createAgentApi(rt, sessionId);
   const state = rt.session(sessionId);
   const docCtx = (): DocContext => ({ backend: rt.backend(), capabilities: [...state.capabilities] });
-  const server = new McpServer({ name: 'opencli-mcp', version: opts.version ?? '0.0.9' }, {
+  const server = new McpServer({ name: 'opencli-mcp', version: opts.version ?? '0.0.10' }, {
     capabilities: { tools: { listChanged: true }, resources: { listChanged: true }, prompts: {}, logging: {} },
     instructions: buildInstructions(docCtx()),
   });

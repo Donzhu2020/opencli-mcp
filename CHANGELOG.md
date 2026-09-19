@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.10 — 2026-09-20
+
+- **Fix: `SyntaxError: Illegal return statement` on any fetchJson-based adapter** (e.g. `sites.twitter.bookmarks()`).
+  `evaluateWithArgs` built a bare `{ …return… }` block, but the page evaluates the string via CDP `Runtime.evaluate`
+  as a script, where a top-level `return` is illegal. It now emits an async IIFE. (Extension unchanged — stays 0.0.9.)
+
 ## 0.0.9 — 2026-09-20
 
 - **New adapter architecture — path-addressed, self-describing modules over a source loader.** An adapter is now just a

@@ -150,7 +150,10 @@ class ExtensionPage {
       if (!/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(key)) throw new Error(`evaluateWithArgs: invalid key "${key}"`);
       return `const ${key} = ${JSON.stringify(value)};`;
     }).join('\n');
-    return this.evaluate(`{\n${declarations}\n${js}\n}`);
+    // Wrap in an async IIFE (not a bare `{…}` block): the page evaluates this string via CDP Runtime.evaluate as a
+    // script, where a top-level `return` (which `js` uses) is illegal. An IIFE makes the return legal and is passed
+    // through unchanged by wrapForEval.
+    return this.evaluate(`(async () => {\n${declarations}\n${js}\n})()`);
   }
   /** Fetch JSON through the page (its cookies, its origin) — the network-first way to freeze a site. */
   async fetchJson(url: string, opts: { method?: string; headers?: Record<string, string>; body?: unknown; timeoutMs?: number } = {}): Promise<unknown> {

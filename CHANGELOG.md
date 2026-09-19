@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.0.9 — 2026-09-20
+
+- **New adapter architecture — path-addressed, self-describing modules over a source loader.** An adapter is now just a
+  file `adapters/<site>/<command>.js` that `export default defineAdapter({ description, access, args, run })`; the file
+  path is its identity and the module is its definition. There is no manifest and no global registry: a `SourceLoader`
+  lists adapters by directory, imports them on demand, and keeps a small mtime-keyed index for search. Sources are an
+  ordered list (built-in `adapters/` + the user's `~/.opencli-mcp/adapters/`), a later source overriding an earlier one
+  — so built-in adapters and `tools.define` outputs are one mechanism.
+- **The adapter interface is the agent's own object model.** `run(ctx)` receives `{ tab, args, sites, recon }` — the same
+  surface an agent drives in the `js` tool. No CDP shadow page, no pipeline DSL, no columns, `access` is the only safety
+  field, args are snake_case, and paging is `{ rows, nextCursor }`.
+- **`@opencli-mcp/adapter-sdk`** carries the contract (defineAdapter + errors + the tab interface), so the corpus is
+  separable and independently versionable.
+- **Curated built-in adapters, all API-first (never DOM when an API exists):** twitter (44 commands),
+  bilibili (20, incl. WBI signing), reddit (20). Writes go through each site's API and the runtime's approval flow.
+- Removed the vendored OpenCLI command corpus and the CLI-projection layer (archived on branch corpus-archive-2026-09-19).
+
 ## 0.0.8 — 2026-09-19
 
 - **The client channel survives host restarts (fix "Transport closed").** The Chrome-spawned host dies whenever the

@@ -38,9 +38,7 @@ export interface AdapterCommand {
   run: (ctx: AdapterContext) => Promise<unknown>;
 }
 
-interface SiteDefaults { domain?: string; description?: string }
-
-const isCommandFile = (f: string): boolean => f.endsWith('.js') && !f.startsWith('_') && f !== 'site.json';
+const isCommandFile = (f: string): boolean => f.endsWith('.js') && !f.startsWith('_');
 const cmdName = (f: string): string => f.replace(/\.js$/, '');
 
 export class SiteRegistry {
@@ -93,14 +91,6 @@ export class SiteRegistry {
     return 'builtin';
   }
 
-  private siteDefaults(site: string): SiteDefaults {
-    for (let i = this.sources.length - 1; i >= 0; i--) {
-      const p = path.join(this.sources[i].dir, site, 'site.json');
-      try { if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf8')) as SiteDefaults; } catch { /* ignore */ }
-    }
-    return {};
-  }
-
   private async importDescriptor(file: string): Promise<Record<string, unknown>> {
     const mod = await import(`${pathToFileURL(file).href}?t=${fs.statSync(file).mtimeMs}`) as { default?: Record<string, unknown> };
     if (!mod.default || typeof mod.default.run !== 'function') throw Object.assign(new Error(`${file} must \`export default defineAdapter({...})\``), { code: 'adapter_load' });
@@ -108,13 +98,12 @@ export class SiteRegistry {
   }
 
   private toCommand(site: string, name: string, file: string, d: Record<string, unknown>): AdapterCommand {
-    const defaults = this.siteDefaults(site);
     return {
       site, name, source: this.kindOf(file),
       description: String(d.description ?? ''),
       access: d.access === 'write' ? 'write' : 'read',
       browser: d.browser !== false,
-      domain: (d.domain as string) ?? defaults.domain,
+      domain: d.domain as string | undefined,
       args: (d.args as Arg[]) ?? [],
       aliases: d.aliases as string[] | undefined,
       run: d.run as (ctx: AdapterContext) => Promise<unknown>,

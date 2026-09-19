@@ -14,10 +14,26 @@ export function argToZod(arg: Arg): ZodTypeAny {
   return arg.required ? t : t.optional();
 }
 
+/**
+ * CLI-only args that OpenCLI exposes for a person at a terminal but that make no sense to an MCP agent, so we never
+ * project them into a tool schema / discovery signature:
+ *  - output / output-file: write results to a path on the HOST's disk — unreadable to a remote agent (results come back over the protocol).
+ *  - resume-file: batch-resume state for long shell jobs.
+ *  - all: fetch every page to disk/memory; MCP-native is a bounded page + the agent paging with limit/page/cursor.
+ *  - timeout: a per-command wall-clock knob; MCP has progress + cancellation and the runtime's own default.
+ * The executor still honours any of these if the js escape hatch passes one; we just don't advertise them.
+ */
+export const CLI_ONLY_ARGS = new Set(['output', 'output-file', 'resume-file', 'all', 'timeout']);
+
+/** Drop CLI-only args when projecting a command's Arg[] to any agent-facing surface (tool schema, search signature, site resource). */
+export function projectArgs(args: Arg[]): Arg[] {
+  return args.filter((a) => !CLI_ONLY_ARGS.has(a.name));
+}
+
 export function argsToShape(args: Arg[], extra: Record<string, ZodTypeAny> = {}): Record<string, ZodTypeAny> {
   const shape: Record<string, ZodTypeAny> = {};
-  for (const a of args) shape[a.name] = argToZod(a);
-  for (const [k, v] of Object.entries(extra)) if (!(k in shape)) shape[k] = v; // a command's own arg (e.g. timeout) wins
+  for (const a of projectArgs(args)) shape[a.name] = argToZod(a);
+  for (const [k, v] of Object.entries(extra)) if (!(k in shape)) shape[k] = v;
   return shape;
 }
 

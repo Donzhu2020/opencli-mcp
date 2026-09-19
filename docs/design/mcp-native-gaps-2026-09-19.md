@@ -53,3 +53,14 @@ Do **#1 first** — the arg-projection filter — because it's the highest agent
 favor of runtime timeouts) from the MCP tool schema, and have the executor ignore them. Then **#2** as the standing
 principle for paged commands (surface a cursor, don't write files). #3/#4/#5 are cleanup that rides along. This keeps the
 CLI corpus intact (we still run it) while making the surface the agent sees genuinely MCP-native.
+
+## Implemented (2026-09-19, owner: "再深度思考一轮，应该该做的都做")
+Deeper pass over the real corpus (`cli-manifest.json`, 1332 commands) refined the strip-list from semantics, not names:
+- **#1 done — arg-projection filter (one seam).** `CLI_ONLY_ARGS = {output, output-file, resume-file, all, timeout}` + `projectArgs()` in `src/sites/schema.ts`; applied at all three agent-facing projection points: `argsToShape` (dynamic `<site>_<cmd>` tool schemas), `registry.search` signatures (the `site_run` discovery path), and the `opencli://sites/{site}` resource. None of the five is ever `required`, all are default-safe, so the executor (`coerceArgs`) still supplies their defaults and the js escape hatch can still pass them — projection *hides*, it does not delete behaviour. Also dropped the schema-wide injected `timeout` param on every site tool.
+- **#2 partial** — stripping `all` is the concrete MCP-native win (bounded page instead of fetch-everything-to-disk); `limit`/`page`/`cursor`/`offset` stay as the agent's paging inputs. Synthesising a real `nextCursor` across ~1200 adapters is per-adapter work, deferred.
+- **#3 partial** — dropped the `→ columns:` suffix from every tool description and `columns` from the site resource (terminal artifact, repeated per tool); kept `columns` in the actual result rows where it can be load-bearing for array rows.
+- **#4 checked** — `tab.screenshot()` already returns bytes (no `path` option), so it is already native. Download commands returning host paths would need per-adapter return-as-bytes/resource work; deferred (dev phase). Stripping `output` already stops agents from picking host paths.
+- **#5 non-issue** — positional order never surfaces to the agent (search signatures + `coerceArgs` are name-based); nothing to do.
+- **Reversed from the first draft after inspecting semantics:** kept `file` (input upload, no MCP alternative), `markdown`/`top-by-engagement`/`no-download` (real data options — `no-download` "only show URL" is the *good* pattern), and `json` (2 cmds, ambiguous data-mode). Judgment per-arg, not by name-matching.
+
+Test: `tests/schema-registry.test.ts` locks the projection (CLI-only stripped from `argsToShape`/`projectArgs`, data+upload args kept, executor still coerces). Gate green (45 tests).

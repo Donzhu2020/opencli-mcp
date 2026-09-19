@@ -9,7 +9,7 @@ import { createAgentApi, Tab, type AgentApi, type Target, type ActAction } from 
 import { ActionError, errorEnvelope } from '../api/errors.js';
 import { JsSession, safeStringify } from './js-session.js';
 import { buildInstructions, listDocs, readDoc, DOCS_MANIFEST, type DocContext } from '../docs/manifest.js';
-import { argsToShape } from '../sites/schema.js';
+import { argsToShape, projectArgs } from '../sites/schema.js';
 import { listDefinedTools } from '../sites/define.js';
 
 type Content = Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>;
@@ -232,8 +232,8 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
         if (siteTools.has(name)) continue;
         const reg = server.registerTool(name, {
           title: `${site} ${cmd.name}`,
-          description: `${cmd.description}${cmd.domain ? ` (${cmd.domain})` : ''} [${cmd.access}, ${String(cmd.strategy ?? 'public')}]${cmd.columns ? ` → columns: ${cmd.columns.join(', ')}` : ''}`,
-          inputSchema: argsToShape(cmd.args, { timeout: z.number().optional().describe('seconds') }),
+          description: `${cmd.description}${cmd.domain ? ` (${cmd.domain})` : ''} [${cmd.access}, ${String(cmd.strategy ?? 'public')}]`,
+          inputSchema: argsToShape(cmd.args),
           annotations: { readOnlyHint: cmd.access === 'read', destructiveHint: cmd.access === 'write', openWorldHint: true },
           ...(cmd.domain ? { icons: [{ src: `https://${cmd.domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '')}/favicon.ico` }] } : {}),
         }, async (args, extra) => run(() => runSiteWithProgress(site, cmd.name, args as Record<string, unknown>, ctxExtra(extra))));
@@ -261,7 +261,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   // ── resources ──
   server.registerResource('docs', new ResourceTemplate('opencli://docs/{name}', { list: async () => ({ resources: DOCS_MANIFEST.map((d) => ({ uri: `opencli://docs/${d.name}`, name: d.name, description: d.description, mimeType: 'text/markdown' })) }) }), { title: 'Documentation', description: 'Agent-facing docs' }, async (uri, { name }) => ({ contents: [{ uri: uri.href, mimeType: 'text/markdown', text: readDoc(String(name)) ?? `no doc ${String(name)}` }] }));
   server.registerResource('sites', 'opencli://sites', { title: 'Sites', description: 'All sites with command counts', mimeType: 'application/json' }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(api.sites.list(), null, 2) }] }));
-  server.registerResource('site', new ResourceTemplate('opencli://sites/{site}', { list: undefined }), { title: 'Site commands', mimeType: 'application/json' }, async (uri, { site }) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(rt.registry.commands(String(site)).map((c) => ({ name: c.name, description: c.description, access: c.access, strategy: c.strategy, domain: c.domain, args: c.args, columns: c.columns })), null, 2) }] }));
+  server.registerResource('site', new ResourceTemplate('opencli://sites/{site}', { list: undefined }), { title: 'Site commands', mimeType: 'application/json' }, async (uri, { site }) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(rt.registry.commands(String(site)).map((c) => ({ name: c.name, description: c.description, access: c.access, strategy: c.strategy, domain: c.domain, args: projectArgs(c.args) })), null, 2) }] }));
 
   // ── prompts ──
   server.registerPrompt('browse', { title: 'Browse a site for a goal', description: 'Structured plan: prefer site tools, then observe → act → observe, finalize.', argsSchema: { goal: z.string(), url: z.string().optional() } }, ({ goal, url }) => ({ messages: [{ role: 'user', content: { type: 'text', text: `Goal: ${goal}${url ? `\nStart at: ${url}` : ''}\n\n1. sites_search for an existing command that covers the goal; if found, site_run it (or sites.enable(site) in js for typed tools).\n2. Otherwise tab_open with a session name, then loop tab_observe → tab_act → tab_expect, reading error codes.\n3. Confirm before irreversible actions. Finish with session_finalize, keeping only deliverable/handoff tabs.` } }] }));

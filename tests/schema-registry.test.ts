@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { argsToShape, coerceArgs } from '../src/sites/schema.js';
+import { argsToShape, coerceArgs, projectArgs, CLI_ONLY_ARGS } from '../src/sites/schema.js';
 import { SiteRegistry } from '../src/sites/registry.js';
 import { z } from 'zod';
 
@@ -11,6 +11,20 @@ describe('schema', () => {
     expect(() => shape.parse({ limit: 3 })).toThrow();
     expect(coerceArgs(args, { q: 'x', limit: '5', all: 'true', sort: 'hot' })).toEqual({ q: 'x', limit: 5, all: true, sort: 'hot' });
     expect(() => coerceArgs(args, { q: 'x', sort: 'weird' })).toThrow(/one of/);
+  });
+
+  it('strips CLI-only args from the agent-facing projection but keeps them for the executor', () => {
+    const args = [
+      { name: 'limit', type: 'int' }, { name: 'query', type: 'str' }, { name: 'page', type: 'int' }, { name: 'file', type: 'str' },
+      { name: 'output', type: 'str' }, { name: 'output-file', type: 'str' }, { name: 'resume-file', type: 'str' }, { name: 'all', type: 'boolean' }, { name: 'timeout', type: 'int' },
+    ];
+    // projection (tool schema, search signatures, site resource): CLI-only args gone, data args (incl. upload `file`) kept
+    const kept = projectArgs(args).map((a) => a.name);
+    expect(kept).toEqual(['limit', 'query', 'page', 'file']);
+    expect(Object.keys(argsToShape(args)).sort()).toEqual(['file', 'limit', 'page', 'query']);
+    expect([...CLI_ONLY_ARGS]).toEqual(['output', 'output-file', 'resume-file', 'all', 'timeout']);
+    // the executor still coerces them (js escape hatch / defaults) — projection hides, it does not delete behaviour
+    expect(coerceArgs(args, { all: 'true', timeout: '30' })).toMatchObject({ all: true, timeout: 30 });
   });
 });
 

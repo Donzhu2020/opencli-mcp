@@ -57,11 +57,18 @@ export function extractBookmarkTweet(result, seen) {
     const screenName = user?.legacy?.screen_name || user?.core?.screen_name || 'unknown';
     const displayName = user?.legacy?.name || user?.core?.name || '';
     const noteText = tw.note_tweet?.note_tweet_results?.result?.text;
+    // Expand t.co short links to their real destinations, in the text and as a `links` list, so the agent gets URLs it
+    // can actually follow (the raw response only carries t.co in the text).
+    const urlEntities = [...(legacy.entities?.urls || []), ...(tw.note_tweet?.note_tweet_results?.result?.entity_set?.urls || [])];
+    let text = noteText || legacy.full_text || '';
+    for (const u of urlEntities) { if (u?.url && u?.expanded_url) text = text.split(u.url).join(u.expanded_url); }
+    const links = [...new Set(urlEntities.map((u) => u?.expanded_url).filter(Boolean))];
     return {
         id: tw.rest_id,
         author: screenName,
         name: displayName,
-        text: noteText || legacy.full_text || '',
+        text,
+        links,
         likes: legacy.favorite_count || 0,
         retweets: legacy.retweet_count || 0,
         bookmarks: legacy.bookmark_count || 0,
@@ -168,7 +175,7 @@ cli({
     site: 'twitter',
     name: 'bookmarks',
     access: 'read',
-    description: 'Fetch your Twitter/X bookmarks (the logged-in user\'s saved tweets, newest first)',
+    description: 'Fetch your Twitter/X bookmarks (the logged-in user\'s saved tweets), in bookmark order — most recently saved first. `created_at` is the tweet\'s post time, not the save time (the API exposes no per-bookmark timestamp); `links` holds the expanded t.co destinations.',
     domain: 'x.com',
     strategy: Strategy.COOKIE,
     browser: true,
@@ -180,7 +187,7 @@ cli({
         { name: 'max-pages', type: 'int', help: `Optional pagination safety cap (default ${DEFAULT_MAX_PAGINATION_PAGES}; raised automatically with --all).` },
         { name: 'top-by-engagement', type: 'int', default: 0, help: 'When set to N>0, re-rank the bookmarks by weighted engagement (likes×1 + retweets×3 + replies×2 + bookmarks×5 + log10(views+1)×0.5) and return the top N. Default 0 keeps the API\'s native (saved-time) ordering. Incompatible with --output-file.' },
     ],
-    columns: ['id', 'author', 'text', 'likes', 'retweets', 'bookmarks', 'created_at', 'url', 'has_media', 'media_urls', 'media_posters'],
+    columns: ['id', 'author', 'text', 'links', 'likes', 'retweets', 'bookmarks', 'created_at', 'url', 'has_media', 'media_urls', 'media_posters'],
     func: async (page, kwargs) => {
         const fetchAll = Boolean(kwargs.all);
         const limit = fetchAll ? Number.POSITIVE_INFINITY : (kwargs.limit || 20);

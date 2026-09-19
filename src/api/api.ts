@@ -13,7 +13,7 @@ import { Browser } from './browser.js';
 import type { SessionContext } from './context.js';
 
 export interface AgentApi {
-  agent: { browsers: { getDefault(): Promise<Browser> }; documentation: { get(name: string): string | null } };
+  agent: { browsers: { getDefault(): Promise<Browser> }; browser: Browser; documentation: { get(name: string): string | null } };
   sites: Record<string, unknown> & { search(q: string, limit?: number): unknown; list(): unknown; enable(site: string, opts?: { write?: boolean }): { site: string; tools: string[] }; disable(site: string): boolean; run(site: string, name: string, args?: Record<string, unknown>): Promise<unknown> };
   recon: { discover(tab: Tab, opts?: Parameters<typeof discoverEndpoints>[1]): Promise<DiscoverResult> };
   tools: { define(def: ToolDefinition | (Omit<ToolDefinition, 'func'> & { func?: string | ((ctx: Record<string, unknown>) => unknown) })): Promise<{ file: string; site: string; name: string }>; compile(opts: Parameters<typeof compileFromTrace>[2]): ToolDefinition; list(): ReturnType<typeof listDefinedTools>; remove(site: string, name: string): boolean };
@@ -62,6 +62,9 @@ export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
   return {
     agent: {
       browsers: { getDefault },
+      // The single default browser, eagerly available (one user, one Chrome) so `browser.tabs/user/...` works in js
+      // without a bootstrap line; ops throw browser_unavailable at call time when Chrome isn't connected.
+      browser: new Browser('chrome', 'extension', ctx),
       documentation: { get: (name: string) => readDoc(name) },
     },
     sites,

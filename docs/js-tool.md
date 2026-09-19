@@ -2,8 +2,9 @@
 
 Top-level `const`/`let` persist across calls (they become session globals). The value of the last expression is returned. Use `nodeRepl.write(text)` for extra output and `await nodeRepl.emitImage({ base64, mimeType })` for images; `tab.screenshot()` already returns an image block when called at top level.
 
+Pre-bound session globals (no import/bootstrap): `browser` (the default Chrome), `agent`, `sites`, `recon`, `tools`, `session`, `Tab`, `nodeRepl`. So `await browser.tabs.new(...)` works directly; `const browser = await agent.browsers.getDefault()` is the same object if you prefer to be explicit.
+
 ```js
-const browser = await agent.browsers.getDefault();
 const tab = await browser.tabs.new('https://news.ycombinator.com');
 const state = await tab.observe();            // accessibility snapshot with [ref=eN] refs
 await tab.act({ target: { text: 'new' }, action: 'click' });

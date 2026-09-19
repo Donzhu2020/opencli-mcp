@@ -196,7 +196,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   server.registerTool('docs_get', { title: 'Read a doc', description: 'Read a documentation page by name (see docs_list).', inputSchema: { name: z.string() }, annotations: { readOnlyHint: true } }, async ({ name }) => run(async () => { const d = readDoc(name); if (!d) throw new ActionError('unknown_doc', `no doc "${name}"`, 'Call docs_list to see available docs.'); return ok(d); }));
 
   // ── code mode ──
-  const jsGlobals = { agent: api.agent, sites: api.sites, recon: api.recon, tools: api.tools, session: api.session, Tab };
+  const jsGlobals = { agent: api.agent, browser: api.agent.browser, sites: api.sites, recon: api.recon, tools: api.tools, session: api.session, Tab };
   server.registerTool('js', {
     title: 'JavaScript session', description: 'Run JavaScript in a persistent session with the object model: agent.browsers, browser.tabs, tab.observe/act/evaluate/screenshot, sites.<site>.<command>(), recon.discover(tab), tools.define(). Top-level const/let persist; the last expression is returned; nodeRepl.write/emitImage add output. First call returns the API documentation.',
     inputSchema: { code: z.string(), timeoutMs: z.number().int().max(1_800_000).default(300_000) },

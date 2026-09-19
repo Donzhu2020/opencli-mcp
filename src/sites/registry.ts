@@ -126,10 +126,10 @@ export class SiteRegistry {
   has(site: string): boolean { return this.all().some((c) => c.site === site); }
 
   /** Rank sites and commands for a free-text query. */
-  search(query: string, limit = 20): Array<{ site: string; name?: string; description: string; score: number; strategy: string; access: string; domain?: string }> {
+  search(query: string, limit = 20): Array<{ site: string; name?: string; description: string; score: number; strategy: string; access: string; domain?: string; args: string[] }> {
     const terms = query.toLowerCase().split(/[\s,]+/).filter(Boolean);
     if (terms.length === 0) return [];
-    const hits: Array<{ site: string; name?: string; description: string; score: number; strategy: string; access: string; domain?: string }> = [];
+    const hits: Array<{ site: string; name?: string; description: string; score: number; strategy: string; access: string; domain?: string; args: string[] }> = [];
     for (const c of this.all()) {
       const hay = { site: c.site.toLowerCase(), name: c.name.toLowerCase(), desc: c.description.toLowerCase(), domain: (c.domain ?? '').toLowerCase(), aliases: (c.aliases ?? []).join(' ').toLowerCase() };
       let score = 0;
@@ -140,7 +140,8 @@ export class SiteRegistry {
         if (hay.aliases.includes(t)) score += 3;
         if (hay.desc.includes(t)) score += 2;
       }
-      if (score > 0) hits.push({ site: c.site, name: c.name, description: c.description, score, strategy: String(c.strategy ?? 'public'), access: c.access, domain: c.domain });
+      // Include a compact param signature so a hit is directly callable (name*=required, :type) — no separate describe step.
+      if (score > 0) hits.push({ site: c.site, name: c.name, description: c.description, score, strategy: String(c.strategy ?? 'public'), access: c.access, domain: c.domain, args: c.args.map((a) => `${a.name}${a.required ? '*' : ''}${a.type ? `:${a.type}` : ''}`) });
     }
     return hits.sort((a, b) => b.score - a.score).slice(0, limit);
   }

@@ -14,7 +14,7 @@ import type { SessionContext } from './context.js';
 
 export interface AgentApi {
   agent: { browsers: { getDefault(): Promise<Browser> }; browser: Browser; documentation: { get(name: string): string | null } };
-  sites: Record<string, unknown> & { search(q: string, limit?: number): unknown; list(): unknown; enable(site: string, opts?: { write?: boolean }): { site: string; tools: string[] }; disable(site: string): boolean; run(site: string, name: string, args?: Record<string, unknown>): Promise<unknown> };
+  sites: Record<string, unknown> & { search(q: string, limit?: number): Promise<unknown>; list(): unknown; enable(site: string, opts?: { write?: boolean }): Promise<{ site: string; tools: string[] }>; disable(site: string): boolean; run(site: string, name: string, args?: Record<string, unknown>): Promise<unknown> };
   recon: { discover(tab: Tab, opts?: Parameters<typeof discoverEndpoints>[1]): Promise<DiscoverResult> };
   tools: { define(def: ToolDefinition | (Omit<ToolDefinition, 'func'> & { func?: string | ((ctx: Record<string, unknown>) => unknown) })): Promise<{ file: string; site: string; name: string }>; compile(opts: Parameters<typeof compileFromTrace>[2]): ToolDefinition; list(): ReturnType<typeof listDefinedTools>; remove(site: string, name: string): boolean };
   session: { id: string; /** approve a website host after the user agreed (needs_origin_approval), for this run */ allowOrigin(host: string): { host: string }; trace(): unknown[]; clearTrace(): void; };
@@ -32,13 +32,13 @@ export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
   const siteBase = {
     search: (q: string, limit = 20) => rt.registry.search(q, limit),
     list: () => rt.registry.sites(),
-    enable: (site: string, opts: { write?: boolean } = {}) => {
+    enable: async (site: string, opts: { write?: boolean } = {}) => {
       if (!rt.registry.has(site)) throw new ActionError('unknown_site', `no site "${site}"`, 'Use sites.search() to find the right name.');
       state.enabledSites.set(site, { write: Boolean(opts.write) });
       rt.emit('tools-changed', { site });
-      const cmds = rt.registry.commands(site).filter((c) => opts.write || c.access === 'read');
+      const cmds = (await rt.registry.commands(site)).filter((c) => opts.write || c.access === 'read');
       const tools = cmds.map((c) => `${site}_${c.name}`.replace(/[^A-Za-z0-9_-]/g, '_'));
-      return { site, tools, commands: cmds.map((c) => ({ tool: `${site}_${c.name}`.replace(/[^A-Za-z0-9_-]/g, '_'), description: c.description, access: c.access, strategy: String(c.strategy ?? 'public'), args: c.args.map((a) => `${a.name}${a.required ? '*' : ''}${a.type ? `:${a.type}` : ''}`) })), note: cmds.some((c) => c.browser) ? 'Browser-backed commands reuse your logged-in Chrome session in a background adapter tab.' : undefined };
+      return { site, tools, commands: cmds.map((c) => ({ tool: `${site}_${c.name}`.replace(/[^A-Za-z0-9_-]/g, '_'), description: c.description, access: c.access, args: c.args.map((a) => `${a.name}${a.required ? '*' : ''}${a.type ? `:${a.type}` : ''}`) })), note: cmds.some((c) => c.browser) ? 'Browser-backed commands reuse your logged-in Chrome session in a background adapter tab.' : undefined };
     },
     disable: (site: string) => { const ok = state.enabledSites.delete(site); if (ok) rt.emit('tools-changed', { site }); return ok; },
     run: async (site: string, name: string, args: Record<string, unknown> = {}) => {
@@ -47,7 +47,7 @@ export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
       if (cmd.access === 'write') Policy.throwIfDenied(rt.policy.checkWrite(`${site}/${name}`, Boolean(confirm)));
       const r = await rt.runSite(sessionId, site, name, rest);
       if (!r.ok) throw new ActionError(r.error.code, r.error.message, r.error.hint, { site, command: name , ...(r.error.details && { details: r.error.details }) });
-      return r.rows ?? r.value;
+      return r.nextCursor ? { rows: r.rows, nextCursor: r.nextCursor } : (r.rows ?? r.value);
     },
   };
   const sites = new Proxy(siteBase as AgentApi['sites'], {

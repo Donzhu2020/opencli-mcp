@@ -9,7 +9,7 @@ import { createAgentApi, Tab, type AgentApi, type Target, type ActAction } from 
 import { ActionError, errorEnvelope } from '../api/errors.js';
 import { JsSession, safeStringify } from './js-session.js';
 import { buildInstructions, listDocs, readDoc, type DocContext } from '../docs/manifest.js';
-import { argsToShape, projectArgs, deCli } from '../sites/schema.js';
+import { argsToShape } from '../sites/schema.js';
 import { listDefinedTools } from '../sites/define.js';
 
 type Content = Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>;
@@ -130,7 +130,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
       const r = await Promise.race([rt.runSite(sessionId, site, command, rest), abort]);
       // Return the data the agent asked for; the agent already knows the site/command it called (drop site/name/elapsedMs bookkeeping).
       if (!r.ok) return fail(new ActionError(r.error.code, r.error.message, r.error.hint, { site, command, ...(r.error.details && { details: r.error.details }) }));
-      return ok(r.rows !== undefined ? { rows: r.rows, ...(r.columns && { columns: r.columns }) } : { value: r.value });
+      return ok(r.rows !== undefined ? { rows: r.rows, ...(r.nextCursor && { nextCursor: r.nextCursor }) } : { value: r.value });
     } finally { if (beat) clearInterval(beat); }
   };
   // ── the entry surface: the few typed tools for the core loop; everything else lives in the object model behind `js` ──
@@ -182,7 +182,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   server.registerTool('tab_expect', { title: 'Expect', description: 'Assert what the page must show now: text / notText / url / title / selector / ref (with visible:false to require absence). Polls up to timeout seconds; fails with expectation_failed listing the failed checks and the current state. Recorded so tools_compile turns it into a checkpoint of the frozen flow.', inputSchema: { tab: z.string().optional(), text: z.string().optional(), notText: z.string().optional(), url: z.string().optional(), title: z.string().optional(), selector: z.string().optional(), ref: z.string().optional(), visible: z.boolean().optional(), timeout: z.number().default(5) }, annotations: { readOnlyHint: true } }, async ({ tab, timeout, ...what }) => run(async () => { const t = await tabOf(tab); return ok({ tab: t.id, ...(await t.expect(what, { timeoutMs: timeout * 1000 })) }); }));
 
   // ── sites ──
-  server.registerTool('sites_search', { title: 'Search sites & commands', description: 'Find site commands by keyword or domain across the adapter corpus (160+ sites). Then site_run a command directly, or sites.enable(site) in js to get typed tools.', inputSchema: { query: z.string(), limit: z.number().int().max(100).default(20) }, annotations: { readOnlyHint: true } }, async ({ query, limit }) => run(async () => ok({ results: api.sites.search(query, limit) })));
+  server.registerTool('sites_search', { title: 'Search sites & commands', description: 'Find site commands by keyword or domain across the adapter corpus (160+ sites). Then site_run a command directly, or sites.enable(site) in js to get typed tools.', inputSchema: { query: z.string(), limit: z.number().int().max(100).default(20) }, annotations: { readOnlyHint: true } }, async ({ query, limit }) => run(async () => ok({ results: await api.sites.search(query, limit) })));
   server.registerTool('site_run', { title: 'Run a site command', description: 'Run any site command without enabling it as a tool (args as an object; see sites_search for names). Write commands ask the user to approve first (the client shows an approval prompt); no confirm flag needed.', inputSchema: { site: z.string(), command: z.string(), args: z.record(z.string(), z.unknown()).default({}) }, annotations: { openWorldHint: true } }, async ({ site, command, args }, extra) => run(() => runSiteWithProgress(site, command, args, ctxExtra(extra))));
 
   // ── capabilities ──
@@ -225,17 +225,17 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
 
   // ── dynamic site tools ──
   const siteTools = new Map<string, RegisteredTool>();
-  const syncSiteTools = (): void => {
+  const syncSiteTools = async (): Promise<void> => {
     const wanted = new Set<string>();
     for (const [site, { write }] of state.enabledSites) {
-      for (const cmd of rt.registry.commands(site)) {
+      for (const cmd of await rt.registry.commands(site)) {
         if (!write && cmd.access === 'write') continue;
         const name = `${site}_${cmd.name}`.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64);
         wanted.add(name);
         if (siteTools.has(name)) continue;
         const reg = server.registerTool(name, {
           title: `${site} ${cmd.name}`,
-          description: `${deCli(cmd.description)}${cmd.domain ? ` (${cmd.domain})` : ''} [${cmd.access}, ${String(cmd.strategy ?? 'public')}]`,
+          description: `${cmd.description}${cmd.domain ? ` (${cmd.domain})` : ''} [${cmd.access}]`,
           inputSchema: argsToShape(cmd.args),
           annotations: { readOnlyHint: cmd.access === 'read', destructiveHint: cmd.access === 'write', openWorldHint: true },
           ...(cmd.domain ? { icons: [{ src: `https://${cmd.domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '')}/favicon.ico` }] } : {}),
@@ -246,7 +246,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     for (const [name, reg] of siteTools) if (!wanted.has(name)) { reg.remove(); siteTools.delete(name); }
     if (server.isConnected()) server.sendToolListChanged();
   };
-  const onToolsChanged = (): void => { try { syncSiteTools(); } catch (err) { rt.emit('log', `syncSiteTools failed: ${(err as Error).message}`); } };
+  const onToolsChanged = (): void => { void syncSiteTools().catch((err) => rt.emit('log', `syncSiteTools failed: ${(err as Error).message}`)); };
   if (persistent) rt.on('tools-changed', onToolsChanged);
   const onLog = (msg: string): void => { if (server.isConnected()) void server.sendLoggingMessage({ level: 'info', logger: 'opencli-mcp', data: msg }).catch(() => {}); };
   if (persistent) rt.on('log', onLog);
@@ -264,7 +264,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   // ── resources ──
   server.registerResource('docs', new ResourceTemplate('opencli://docs/{name}', { list: async () => ({ resources: listDocs(docCtx()).filter((d) => d.available).map((d) => ({ uri: `opencli://docs/${d.name}`, name: d.name, description: d.description, mimeType: 'text/markdown' })) }) }), { title: 'Documentation', description: 'Agent-facing docs' }, async (uri, { name }) => ({ contents: [{ uri: uri.href, mimeType: 'text/markdown', text: readDoc(String(name)) ?? `no doc ${String(name)}` }] }));
   server.registerResource('sites', 'opencli://sites', { title: 'Sites', description: 'All sites with command counts', mimeType: 'application/json' }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(api.sites.list(), null, 2) }] }));
-  server.registerResource('site', new ResourceTemplate('opencli://sites/{site}', { list: undefined }), { title: 'Site commands', mimeType: 'application/json' }, async (uri, { site }) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(rt.registry.commands(String(site)).map((c) => ({ name: c.name, description: deCli(c.description), access: c.access, strategy: c.strategy, domain: c.domain, args: projectArgs(c.args) })), null, 2) }] }));
+  server.registerResource('site', new ResourceTemplate('opencli://sites/{site}', { list: undefined }), { title: 'Site commands', mimeType: 'application/json' }, async (uri, { site }) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify((await rt.registry.commands(String(site))).map((c) => ({ name: c.name, description: c.description, access: c.access, domain: c.domain, args: c.args })), null, 2) }] }));
 
   // ── prompts ──
   server.registerPrompt('browse', { title: 'Browse a site for a goal', description: 'Structured plan: prefer site tools, then observe → act → observe, finalize.', argsSchema: { goal: z.string(), url: z.string().optional() } }, ({ goal, url }) => ({ messages: [{ role: 'user', content: { type: 'text', text: `Goal: ${goal}${url ? `\nStart at: ${url}` : ''}\n\n1. sites_search for an existing command that covers the goal; if found, site_run it (or sites.enable(site) in js for typed tools).\n2. Otherwise tab_open with a session name, then loop tab_observe → tab_act → tab_expect, reading error codes.\n3. Confirm before irreversible actions. Finish with session_finalize, keeping only deliverable/handoff tabs.` } }] }));

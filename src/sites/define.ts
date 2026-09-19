@@ -1,19 +1,14 @@
 /**
- * tools.define / tools.compile — freeze explored flows into first-class tools.
- * A defined tool is a plain OpenCLI adapter module written to ~/.opencli-mcp/tools/<site>/<name>.js,
- * registered live (tools/list_changed), and reloaded on the next start. Three sources share one
- * registry: built-in adapters, agent-defined tools, page-provided (WebMCP) tools.
+ * tools.define / tools.compile — freeze an explored flow into a first-class adapter.
+ * A defined tool is just an adapter file in the USER SOURCE (~/.opencli-mcp/adapters/<site>/<name>.js): the exact same
+ * shape and loader as a built-in adapter, only in a different source directory. There is no separate registry.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { OPENCLI_MCP_DIR } from '../host/state.js';
-import { getRegistry } from '@jackwener/opencli/registry';
-import { opencliRoot } from '../lib/opencli.js';
+import { createRequire } from 'node:module';
+import { USER_ADAPTERS_DIR } from '../lib/sources.js';
 import type { TraceEvent, NetworkEvidence } from '../runtime/trace.js';
-
-/** Where agent-defined tools live. */
-export const DEFINED_TOOLS_DIR = path.join(OPENCLI_MCP_DIR, 'tools');
 
 export interface ArgDef { name: string; type?: 'string' | 'int' | 'number' | 'boolean'; default?: unknown; required?: boolean; help?: string; choices?: string[] }
 
@@ -22,15 +17,12 @@ export interface ToolDefinition {
   name: string;
   description: string;
   access: 'read' | 'write';
-  strategy?: 'public' | 'cookie' | 'intercept' | 'ui' | 'local';
+  /** needs a logged-in page (default: inferred from whether the body uses tab/sites/recon). */
+  browser?: boolean;
   domain?: string;
   args?: ArgDef[];
-  columns?: string[];
-  /** OpenCLI pipeline steps (fetch/map/filter/limit/navigate/click/type/wait/snapshot/evaluate…). */
-  pipeline?: unknown[];
-  /** JavaScript source of `async ({ tab, args, sites, recon, page }) => …` (frozen flow on the exploration object model) or `async (args) => …` (public, no browser). */
-  func?: string;
-  siteSession?: 'ephemeral' | 'persistent';
+  /** JS source of the adapter body: `async ({ tab, args, sites, recon }) => …` */
+  func: string;
 }
 
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -39,93 +31,77 @@ export function validateDefinition(def: ToolDefinition): void {
   if (!NAME_RE.test(def.site) || !NAME_RE.test(def.name)) throw Object.assign(new Error('site and name must match /^[a-z0-9][a-z0-9-]{0,63}$/'), { code: 'invalid_definition' });
   if (!def.description) throw Object.assign(new Error('description is required'), { code: 'invalid_definition' });
   if (def.access !== 'read' && def.access !== 'write') throw Object.assign(new Error("access must be 'read' or 'write'"), { code: 'invalid_definition' });
-  if (!def.pipeline && !def.func) throw Object.assign(new Error('provide `pipeline` steps or `func` source'), { code: 'invalid_definition' });
-  for (const a of def.args ?? []) if (!/^[A-Za-z_$][\w$]*$/.test(a.name)) throw Object.assign(new Error(`arg name ${JSON.stringify(a.name)} must be a JavaScript identifier`), { code: 'invalid_definition' });
-  if (def.func && !/^\s*(async\s*)?(\(|[A-Za-z_$])/.test(def.func)) throw Object.assign(new Error('func must be a function expression such as `async ({ tab, args }) => { … }`'), { code: 'invalid_definition' });
-  if (def.func) {
-    // syntax check only — the function is not executed here
-    try { new Function(`return (${def.func});`); } catch (err) { throw Object.assign(new Error(`func does not parse: ${(err as Error).message}`), { code: 'invalid_definition' }); }
-  }
+  if (!def.func) throw Object.assign(new Error('provide `func` source (async ({ tab, args }) => …)'), { code: 'invalid_definition' });
+  for (const a of def.args ?? []) if (!/^[a-z][a-z0-9_]*$/.test(a.name)) throw Object.assign(new Error(`arg name ${JSON.stringify(a.name)} must be snake_case`), { code: 'invalid_definition' });
+  if (!/^\s*(async\s*)?(\(|[A-Za-z_$])/.test(def.func)) throw Object.assign(new Error('func must be a function expression such as `async ({ tab, args }) => { … }`'), { code: 'invalid_definition' });
+  try { new Function(`return (${def.func});`); } catch (err) { throw Object.assign(new Error(`func does not parse: ${(err as Error).message}`), { code: 'invalid_definition' }); }
 }
 
-/** Make `@jackwener/opencli/registry` resolvable from the user tools dir via a node_modules symlink. */
-export function ensureToolsDir(): string {
-  fs.mkdirSync(DEFINED_TOOLS_DIR, { recursive: true });
-  const nm = path.join(path.dirname(DEFINED_TOOLS_DIR), 'node_modules', '@jackwener');
-  fs.mkdirSync(nm, { recursive: true });
-  const link = path.join(nm, 'opencli');
+/** Ensure the user source dir exists and can resolve `@opencli-mcp/adapter-sdk` (a symlink, so a dropped-in file just works). */
+export function ensureUserSource(): string {
+  fs.mkdirSync(USER_ADAPTERS_DIR, { recursive: true });
+  const home = path.dirname(USER_ADAPTERS_DIR); // ~/.opencli-mcp
+  const nmScope = path.join(home, 'node_modules', '@opencli-mcp');
+  fs.mkdirSync(nmScope, { recursive: true });
+  const link = path.join(nmScope, 'adapter-sdk');
   try {
+    const sdkDir = path.dirname(createRequire(import.meta.url).resolve('@opencli-mcp/adapter-sdk'));
     const current = fs.existsSync(link) ? fs.realpathSync(link) : null;
-    if (current !== fs.realpathSync(opencliRoot)) {
-      if (fs.existsSync(link) || fs.lstatSync(link)) fs.rmSync(link, { recursive: true, force: true });
-      fs.symlinkSync(opencliRoot, link, 'dir');
-    }
-  } catch {
-    try { fs.rmSync(link, { recursive: true, force: true }); fs.symlinkSync(opencliRoot, link, 'dir'); } catch { /* best effort */ }
-  }
-  const pkg = path.join(path.dirname(DEFINED_TOOLS_DIR), 'package.json');
-  if (!fs.existsSync(pkg)) fs.writeFileSync(pkg, JSON.stringify({ name: 'opencli-mcp-user-tools', private: true, type: 'module' }, null, 2));
-  return DEFINED_TOOLS_DIR;
+    if (current !== fs.realpathSync(sdkDir)) { try { fs.rmSync(link, { recursive: true, force: true }); } catch { /* ignore */ } fs.symlinkSync(sdkDir, link, 'dir'); }
+  } catch { /* best effort; a globally-installed sdk also resolves */ }
+  const pkg = path.join(home, 'package.json');
+  if (!fs.existsSync(pkg)) fs.writeFileSync(pkg, JSON.stringify({ name: 'opencli-mcp-user-adapters', private: true, type: 'module' }, null, 2));
+  return USER_ADAPTERS_DIR;
 }
 
-export function renderToolModule(def: ToolDefinition): string {
-  const funcParams = def.func ? (/^\s*(?:async\s*)?(?:\(([^)]*)\)|([A-Za-z_$][\w$]*))\s*=>/.exec(def.func) ?? /^\s*(?:async\s+)?function\s*[\w$]*\s*\(([^)]*)\)/.exec(def.func)) : null;
-  const paramCount = funcParams ? (funcParams[1] ?? funcParams[2] ?? '').split(',').filter((x) => x.trim()).length : 0;
-  const browserSteps = def.pipeline?.some((s) => s && typeof s === 'object' && ['navigate', 'click', 'type', 'fill', 'wait', 'press', 'snapshot', 'evaluate', 'intercept', 'tap'].some((k) => k in (s as object)));
-  const usesBrowser = Boolean(def.func && /\b(tab|page|sites|recon)\b/.test(def.func));
-  const strategy = (def.strategy ?? (paramCount >= 2 || browserSteps || usesBrowser ? 'cookie' : 'public')).toUpperCase();
-  const browser = strategy !== 'PUBLIC' && strategy !== 'LOCAL';
-  const lines = [
+export function renderAdapterModule(def: ToolDefinition): string {
+  // browser:false lets the adapter run without provisioning a page. Infer it from the body: a func that never touches
+  // tab/sites/recon is a pure call and needs no browser.
+  const browser = def.browser ?? /\b(tab|sites|recon)\b/.test(def.func);
+  return [
     `// Generated by opencli-mcp tools.define on ${new Date().toISOString()}`,
-    `import { cli, Strategy } from '@jackwener/opencli/registry';`,
+    `import { defineAdapter } from '@opencli-mcp/adapter-sdk';`,
     ``,
-    `cli({`,
-    `  site: ${JSON.stringify(def.site)},`,
-    `  name: ${JSON.stringify(def.name)},`,
+    `export default defineAdapter({`,
     `  description: ${JSON.stringify(def.description)},`,
     `  access: ${JSON.stringify(def.access)},`,
+    browser ? null : `  browser: false,`,
     def.domain ? `  domain: ${JSON.stringify(def.domain)},` : null,
-    `  strategy: Strategy.${strategy},`,
-    `  browser: ${browser},`,
-    def.siteSession ? `  siteSession: ${JSON.stringify(def.siteSession)},` : null,
     `  args: ${JSON.stringify(def.args ?? [], null, 2).replace(/\n/g, '\n  ')},`,
-    def.columns ? `  columns: ${JSON.stringify(def.columns)},` : null,
-    def.pipeline ? `  pipeline: ${JSON.stringify(def.pipeline, null, 2).replace(/\n/g, '\n  ')},` : null,
-    def.func ? `  func: ${def.func.trim()},` : null,
+    `  run: ${def.func.trim()},`,
     `});`,
     ``,
-  ].filter((l): l is string => l !== null);
-  return lines.join('\n');
+  ].filter((l): l is string => l !== null).join('\n');
 }
 
 export async function saveTool(def: ToolDefinition): Promise<{ file: string; site: string; name: string }> {
   validateDefinition(def);
-  const dir = path.join(ensureToolsDir(), def.site);
+  const dir = path.join(ensureUserSource(), def.site);
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${def.name}.js`);
-  fs.writeFileSync(file, renderToolModule(def));
-  await import(`${pathToFileURL(file).href}?t=${Date.now()}`);
+  fs.writeFileSync(file, renderAdapterModule(def));
+  await import(`${pathToFileURL(file).href}?t=${Date.now()}`); // load once now to surface a bad descriptor immediately
   return { file, site: def.site, name: def.name };
 }
 
 export function deleteTool(site: string, name: string): boolean {
-  const file = path.join(DEFINED_TOOLS_DIR, site, `${name}.js`);
+  const file = path.join(USER_ADAPTERS_DIR, site, `${name}.js`);
   if (!fs.existsSync(file)) return false;
   fs.rmSync(file);
-  getRegistry().delete(`${site}/${name}`);
   return true;
 }
 
 export function listDefinedTools(): Array<{ site: string; name: string; file: string }> {
-  if (!fs.existsSync(DEFINED_TOOLS_DIR)) return [];
+  if (!fs.existsSync(USER_ADAPTERS_DIR)) return [];
   const out: Array<{ site: string; name: string; file: string }> = [];
-  for (const site of fs.readdirSync(DEFINED_TOOLS_DIR)) {
-    const d = path.join(DEFINED_TOOLS_DIR, site);
-    if (!fs.statSync(d).isDirectory()) continue;
-    for (const f of fs.readdirSync(d)) if (f.endsWith('.js')) out.push({ site, name: f.replace(/\.js$/, ''), file: path.join(d, f) });
+  for (const site of fs.readdirSync(USER_ADAPTERS_DIR)) {
+    const d = path.join(USER_ADAPTERS_DIR, site);
+    try { if (!fs.statSync(d).isDirectory()) continue; } catch { continue; }
+    for (const f of fs.readdirSync(d)) if (f.endsWith('.js') && !f.startsWith('_')) out.push({ site, name: f.replace(/\.js$/, ''), file: path.join(d, f) });
   }
   return out;
 }
+
 
 /**
  * Compile a recorded session trace into a tool draft.
@@ -309,5 +285,6 @@ export function compileFromTrace(trace: TraceEvent[], net: NetworkEvidence[], op
     body.push(`  return await tab.observe({ diff: false });`);
   }
   const func = `async ({ tab, args }) => {\n${body.join('\n')}\n}`;
-  return { site: opts.site, name: opts.name, description: opts.description, access: opts.access ?? 'read', strategy: 'cookie', domain: opts.domain, args: argDefs, func, siteSession: 'persistent', ...(warnings.length && { warnings }) };
+  return { site: opts.site, name: opts.name, description: opts.description, access: opts.access ?? 'read', domain: opts.domain, args: argDefs, func, ...(warnings.length && { warnings }) };
 }
+

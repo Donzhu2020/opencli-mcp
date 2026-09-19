@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildInstructions, listDocs, readDoc } from '../src/docs/manifest.js';
-import { compileFromTrace, renderToolModule, validateDefinition } from '../src/sites/define.js';
+import { compileFromTrace, renderAdapterModule, validateDefinition } from '../src/sites/define.js';
 
 describe('docs manifest', () => {
   it('builds instructions per backend and gates cdp', () => {
@@ -19,11 +19,11 @@ describe('docs manifest', () => {
 
 describe('tools.define', () => {
   it('renders a valid adapter module and compiles a trace', () => {
-    const def = { site: 'demo', name: 'thing', description: 'd', access: 'read' as const, args: [{ name: 'q', required: true }], func: 'async (page, args) => { await page.goto("https://x.test/?q=" + args.q); return await page.snapshot(); }' };
+    const def = { site: 'demo', name: 'thing', description: 'd', access: 'read' as const, args: [{ name: 'q', required: true }], func: 'async ({ tab, args }) => { await tab.goto("https://x.test/?q=" + args.q); return await tab.observe(); }' };
     validateDefinition(def);
-    const mod = renderToolModule(def);
-    expect(mod).toContain("import { cli, Strategy } from '@jackwener/opencli/registry'");
-    expect(mod).toContain('Strategy.COOKIE'); expect(mod).toContain('browser: true');
+    const mod = renderAdapterModule(def);
+    expect(mod).toContain("import { defineAdapter } from '@opencli-mcp/adapter-sdk'");
+    expect(mod).toContain('export default defineAdapter({'); expect(mod).toContain('run: async ({ tab, args }) =>');
     expect(() => validateDefinition({ ...def, func: 'not a function {' })).toThrow(/parse/);
     const draft = compileFromTrace([
       { t: 1, kind: 'goto', url: 'https://x.test/search?q=shoes' },

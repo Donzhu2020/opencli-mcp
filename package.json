@@ -29,7 +29,8 @@
     "CHANGELOG.md",
     "LICENSE",
     "vendor/",
-    "packages/"
+    "packages/",
+    "adapters/"
   ],
   "dependencies": {
     "@jackwener/opencli": "file:vendor/opencli",

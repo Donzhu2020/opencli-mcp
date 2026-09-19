@@ -6,14 +6,14 @@
 import { EventEmitter } from 'node:events';
 import type { ExtensionBridge } from '../host/bridge.js';
 import type { BrowserEvent } from '../protocol.js';
-import { SiteRegistry } from '../sites/registry.js';
-import { runSiteCommand, type CommandRunResult, type CommandRunError, type PageProvider } from '../sites/executor.js';
-import { listDefinedTools, ensureToolsDir, type ToolDefinition } from '../sites/define.js';
+import { SiteRegistry } from '../sites/loader.js';
+import { runAdapter, type CommandRunResult, type CommandRunError, type PageProvider } from '../sites/executor.js';
+import { listDefinedTools, ensureUserSource, saveTool, deleteTool, type ToolDefinition } from '../sites/define.js';
+import { defaultSources } from '../lib/sources.js';
 import { createExtensionPage, type ExtensionRuntimePage } from '../backends/extension-page.js';
 import type { RuntimePage } from '../backends/page-types.js';
 import { TraceRecorder, type NetworkEvidence } from './trace.js';
 import { JsSession } from '../mcp/js-session.js';
-import { opencliVersion } from '../lib/opencli.js';
 import { Policy } from './policy.js';
 import { Tab, createAgentApi, type AgentApi } from '../api/agent.js';
 
@@ -55,7 +55,6 @@ export interface SessionState {
 export interface DoctorReport {
   backend: Backend;
   extension: { connected: boolean; version: string | null; contextId?: string };
-  opencliVersion: string;
   sites: number;
   commands: number;
   definedTools: number;
@@ -71,7 +70,7 @@ export interface RuntimeEvents {
 }
 
 export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider {
-  readonly registry = new SiteRegistry();
+  readonly registry = new SiteRegistry(defaultSources());
   readonly sessions = new Map<string, SessionState>();
   private readonly adapterPages = new Map<string, Promise<RuntimePage>>();
   private readonly siteApis = new Map<string, AgentApi>();
@@ -96,7 +95,7 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
 
   async init(): Promise<void> {
     await this.registry.load();
-    try { ensureToolsDir(); } catch (err) { this.emit('log', `tools dir unavailable: ${(err as Error).message}`); }
+    try { ensureUserSource(); } catch (err) { this.emit('log', `user adapter dir unavailable: ${(err as Error).message}`); }
   }
 
   backend(): Backend {
@@ -167,18 +166,18 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
 
   async runSite(sessionId: string | null, site: string, name: string, args: Record<string, unknown>, opts: { timeoutMs?: number } = {}): Promise<CommandRunResult | CommandRunError> {
     const cmd = await this.registry.resolve(site, name);
-    const r = await runSiteCommand(this, cmd, args, opts);
+    const r = await runAdapter(this, cmd, args, opts);
     if (sessionId) this.session(sessionId).trace.record({ kind: 'site', site, name, ok: r.ok, elapsedMs: r.elapsedMs });
     return r;
   }
 
   async defineTool(def: ToolDefinition): Promise<{ file: string; site: string; name: string }> {
-    const saved = await this.registry.define(def);
+    const saved = await saveTool(def);
     this.emit('tools-changed', { site: def.site });
     return saved;
   }
   removeTool(site: string, name: string): boolean {
-    const ok = this.registry.remove(site, name);
+    const ok = deleteTool(site, name);
     if (ok) this.emit('tools-changed', { site });
     return ok;
   }
@@ -202,13 +201,12 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
   }
 
   doctor(): DoctorReport {
-    const all = this.registry.all();
+    const list = this.registry.sites();
     return {
       backend: this.backend(),
       extension: { connected: Boolean(this.bridge?.connected), version: this.bridge?.extensionVersion ?? null, contextId: this.bridge?.contextId },
-      opencliVersion,
-      sites: new Set(all.map((c) => c.site)).size,
-      commands: all.length,
+      sites: list.length,
+      commands: list.reduce((n, s) => n + s.commands, 0),
       definedTools: listDefinedTools().length,
       // Count only real MCP sessions; background adapter contexts are keyed `site:<site>` and are not agents.
       sessions: [...this.sessions.keys()].filter((k) => !k.startsWith('site:')).length,

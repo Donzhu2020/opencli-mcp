@@ -1,95 +1,43 @@
 import { describe, expect, it } from 'vitest';
-import { argsToShape, coerceArgs, projectArgs, CLI_ONLY_ARGS, deCli, projectedArgName, restoreArgNames } from '../src/sites/schema.js';
-import { SiteRegistry } from '../src/sites/registry.js';
-import { resolveTimeoutMs, DEFAULT_TIMEOUT_MS } from '../src/sites/executor.js';
+import { argsToShape, coerceArgs, type Arg } from '../src/sites/schema.js';
+import { SiteRegistry } from '../src/sites/loader.js';
+import { defaultSources } from '../src/lib/sources.js';
 import { z } from 'zod';
 
 describe('schema', () => {
-  it('maps OpenCLI args to zod and coerces', () => {
-    const args = [{ name: 'limit', type: 'int', default: 20, help: 'n' }, { name: 'q', required: true }, { name: 'sort', choices: ['hot', 'new'] }, { name: 'all', type: 'boolean' }];
+  it('maps adapter args to zod and coerces', () => {
+    const args: Arg[] = [{ name: 'limit', type: 'int', default: 20, help: 'n' }, { name: 'q', required: true }, { name: 'sort', choices: ['hot', 'new'] }];
     const shape = z.object(argsToShape(args));
     expect(shape.parse({ q: 'x', limit: 3 })).toEqual({ q: 'x', limit: 3 });
     expect(() => shape.parse({ limit: 3 })).toThrow();
-    expect(coerceArgs(args, { q: 'x', limit: '5', all: 'true', sort: 'hot' })).toEqual({ q: 'x', limit: 5, all: true, sort: 'hot' });
+    expect(coerceArgs(args, { q: 'x', limit: '5', sort: 'hot' })).toEqual({ q: 'x', limit: 5, sort: 'hot' });
     expect(() => coerceArgs(args, { q: 'x', sort: 'weird' })).toThrow(/one of/);
-  });
-
-  it('strips CLI-only args from the agent-facing projection but keeps them for the executor', () => {
-    const args = [
-      { name: 'limit', type: 'int' }, { name: 'query', type: 'str' }, { name: 'page', type: 'int' }, { name: 'file', type: 'str' },
-      { name: 'output', type: 'str' }, { name: 'output-file', type: 'str' }, { name: 'resume-file', type: 'str' }, { name: 'all', type: 'boolean' }, { name: 'timeout', type: 'int' },
-    ];
-    // projection (tool schema, search signatures, site resource): CLI-only args gone, data args (incl. upload `file`) kept
-    const kept = projectArgs(args).map((a) => a.name);
-    expect(kept).toEqual(['limit', 'query', 'page', 'file']);
-    expect(Object.keys(argsToShape(args)).sort()).toEqual(['file', 'limit', 'page', 'query']);
-    expect([...CLI_ONLY_ARGS]).toEqual(['output', 'output-file', 'resume-file', 'all', 'timeout', 'stdout']);
-    // the executor still coerces them (js escape hatch / defaults) — projection hides, it does not delete behaviour
-    expect(coerceArgs(args, { all: 'true', timeout: '30' })).toMatchObject({ all: true, timeout: 30 });
-  });
-
-  it('strips CLI --flag grammar from agent-facing text but leaves data words alone', () => {
-    expect(deCli('Seconds the report must stay unchanged when --wait is true')).toBe('Seconds the report must stay unchanged when wait is true');
-    expect(deCli('Conversation index within --project')).toBe('Conversation index within project');
-    expect(deCli('pass --yes to actually delete')).toBe('pass yes to actually delete');
-    expect(deCli('a range 10-20 and a-b hyphen')).toBe('a range 10-20 and a-b hyphen'); // single hyphens untouched
-    expect(deCli(undefined)).toBe('');
-    expect(CLI_ONLY_ARGS.has('stdout')).toBe(true);
-  });
-
-  it('projects kebab arg names to snake_case for the agent and reverses them for the executor', () => {
-    const args = [{ name: 'note-id', required: true }, { name: 'profile-url' }, { name: 'limit', type: 'int' }];
-    // agent-facing schema/discovery shows snake_case
-    expect(Object.keys(argsToShape(args)).sort()).toEqual(['limit', 'note_id', 'profile_url']);
-    expect(projectArgs(args).map((a) => a.name)).toEqual(['note_id', 'profile_url', 'limit']);
-    // executor gets the adapter's original kebab names back
-    expect(restoreArgNames(args, { note_id: 'x', profile_url: 'u', limit: 3 })).toEqual({ 'note-id': 'x', 'profile-url': 'u', limit: 3 });
-    // an agent that already used the kebab name (js escape hatch) is left untouched
-    expect(restoreArgNames(args, { 'note-id': 'x' })).toEqual({ 'note-id': 'x' });
-  });
-
-  it('keeps kebab names when snake-casing would collide within the same command (no data loss)', () => {
-    const args = [{ name: 'max-pages', type: 'int' }, { name: 'max_pages', type: 'int' }];
-    expect(projectedArgName(args, 'max-pages')).toBe('max-pages'); // collision → keep original
-    expect(projectArgs(args).map((a) => a.name).sort()).toEqual(['max-pages', 'max_pages']);
-    // both distinct args round-trip unchanged
-    expect(restoreArgNames(args, { 'max-pages': 1, max_pages: 2 })).toEqual({ 'max-pages': 1, max_pages: 2 });
+    expect(() => coerceArgs(args, {})).toThrow(/required/);
   });
 });
 
-describe('site registry', () => {
-  it('loads the OpenCLI corpus and resolves a public command', async () => {
-    const r = new SiteRegistry();
+describe('SourceLoader', () => {
+  it('lists sites from the directory tree and resolves an adapter by path', async () => {
+    const r = new SiteRegistry(defaultSources());
     await r.load();
-    expect(r.sites().length).toBeGreaterThan(100);
-    expect(r.all().length).toBeGreaterThan(1000);
-    const hits = r.search('hackernews top');
-    expect(hits[0].site).toBe('hackernews');
-    const cmd = await r.resolve('hackernews', 'top');
-    expect(cmd.browser).toBe(false);
-    expect(cmd.pipeline || cmd.func).toBeTruthy();
-    expect((cmd as { source?: string }).source).toBe('builtin');
+    // twitter is a built-in adapter directory; the path is the identity
+    expect(r.has('twitter')).toBe(true);
+    expect(r.commandNames('twitter')).toEqual(expect.arrayContaining(['bookmarks', 'search']));
+    const cmd = await r.resolve('twitter', 'bookmarks');
+    expect(cmd.site).toBe('twitter');
+    expect(cmd.access).toBe('read');
+    expect(cmd.browser).toBe(true);
+    expect(typeof cmd.run).toBe('function');
+    expect(cmd.args.map((a) => a.name)).toContain('limit');
+    // site.json defaults flow into the command
+    expect(cmd.domain).toBe('x.com');
   });
-  it('a tool defined now resolves as source "defined" at once (no restart), and as builtin once removed', async () => {
-    // OpenCLI's cli() copies a fixed field list, so the registry's own record is the only carrier of the mark
-    const r = new SiteRegistry();
-    await r.load();
-    const def = { site: 'hackernews', name: 'zz-probe', description: 'probe', access: 'read' as const, args: [], func: 'async ({ tab, args }) => ({ ok: true })' };
-    try {
-      await r.define(def);
-      expect((await r.resolve('hackernews', 'zz-probe') as { source?: string }).source).toBe('defined');
-      expect((await r.resolve('hackernews', 'top') as { source?: string }).source).toBe('builtin'); // siblings untouched
-    } finally { r.remove('hackernews', 'zz-probe'); }
-    await expect(r.resolve('hackernews', 'zz-probe')).rejects.toMatchObject({ code: 'unknown_command' });
-  });
-});
 
-describe('site command timeout is runtime-managed', () => {
-  it('honors the command declared default (regression: slow logins/deep-research must not be capped at 60s)', () => {
-    const login = [{ name: 'timeout', type: 'int', default: 300 }];
-    expect(resolveTimeoutMs(login, undefined, undefined)).toBe(300_000); // declared default wins over runtime default
-    expect(resolveTimeoutMs(login, 600, undefined)).toBe(600_000);       // explicit (js) wins over declared
-    expect(resolveTimeoutMs([], undefined, undefined)).toBe(DEFAULT_TIMEOUT_MS); // no declaration → runtime default
-    expect(resolveTimeoutMs([], undefined, 5_000)).toBe(5_000);          // opts default when provided
+  it('searches across the index and rejects an unknown command', async () => {
+    const r = new SiteRegistry(defaultSources());
+    await r.load();
+    const hits = await r.search('twitter bookmarks');
+    expect(hits[0]?.site).toBe('twitter');
+    await expect(r.resolve('twitter', 'nope')).rejects.toMatchObject({ code: 'unknown_command' });
   });
 });

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.7 — 2026-09-19
+
+- **Fix a CSP error on strict sites.** The favicon-badge feature rewrote the page favicon to a `data:` SVG, which pages
+  with a strict `img-src` CSP (e.g. Hacker News) block — logging a Content-Security-Policy violation from the content
+  script on every such page. Removed the favicon badge (it was decorative; agent tabs are marked by the named tab group
+  and the cursor overlay). Reload the extension to clear existing errors.
+
 ## 0.0.6 — 2026-09-19
 
 - **We own the site corpus.** The OpenCLI adapter corpus (1387 adapters + manifest) and its runtime are vendored into

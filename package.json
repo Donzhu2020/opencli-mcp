@@ -1,6 +1,6 @@
 {
   "name": "opencli-mcp",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "OpenCLI reborn as an MCP-native browser runtime: Chrome-spawned host, object API + code mode, site capabilities, recon.",
   "type": "module",
   "license": "Apache-2.0",

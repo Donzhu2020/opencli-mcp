@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.0.6 — 2026-09-19
+
+- **We own the site corpus.** The OpenCLI adapter corpus (1387 adapters + manifest) and its runtime are vendored into
+  `vendor/opencli/` and consumed via a local `file:` dependency — git-tracked and editable, no pull from upstream.
+- **One engine, no shadow.** `ExtensionPage` no longer extends OpenCLI's `CDPBasePage`; every adapter now runs on the
+  single Playwright injected-script engine (the second locator/AX engine is gone). The corpus-used methods (wait,
+  autoScroll, interceptors, fetchJson, snapshot→aria, …) are served on our transport.
+- **Agent-friendly output formats.** One result envelope everywhere — `{ok:true,…}` / `{ok:false,error:{code,message,
+  hint?,…}}` with an in-band `ok`; `js` errors now carry the same branchable envelope; `tab_act` returns only what
+  changes the next move (full telemetry stays in the trace); every actionable error carries a next-step hint; results
+  are compact JSON and no longer double-sent as structuredContent.
+- **Leaner startup.** The always-on instructions bundle is ~21% smaller (mechanics moved to on-demand docs; safety
+  de-duplicated; the site catalogue is now a lookup doc) with no capability or safety content lost.
+- **New icon.**
+
 ## 0.0.5 — 2026-09-19
 
 - **MCP 2026-07-28 (v2 SDK).** Migrated to `@modelcontextprotocol/server`/`core`/`client`/`node` 2.0.0: stateless HTTP

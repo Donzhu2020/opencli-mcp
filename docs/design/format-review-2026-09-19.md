@@ -62,3 +62,18 @@ Gap: not every thrown error carries a `hint`. Sweep the throw sites so an agent 
 
 All safe, gate-verifiable, no real Chrome. The through-line: **one predictable shape + always-actionable errors + only
 the fields the agent acts on.** That is the agent-friendly optimization; the token savings come along for free.
+
+## What the ChatGPT plugin does well here (studied from the local bundle) — and what to adopt
+Source: `/Applications/ChatGPT.app/.../plugins/chrome/docs/{api.json,api-use-behavior.md}`.
+- **Interaction methods return void/minimal.** api.json has `ClickOptions`/`DoubleClickOptions`/… (inputs) but **no
+  `ClickResult`/`ActResult` type** — click/type return essentially nothing; the agent re-observes for state. Their
+  api-use-behavior rule: "after clicking/typing, collect the cheapest state check that answers the next question."
+  → **Strongly validates our #3. Go further:** make `tab_act` return near-nothing — only what a fresh observe can't
+  cheaply give: `navigated`+`url` (so the agent knows to re-observe) and `matches_n` when >1 (ambiguity). Keep our
+  fill/check verification (`verified`/`actual`) — that is a genuine plus over the plugin (saves a confirm-observe).
+- **Result types are tight and per-field documented.** e.g. `TabsContentResult { content, title, url }` — every field
+  purposeful, commented, no bookkeeping (no elapsedMs/site/name noise). → Model our results the same way (#1, #4).
+- **Where we are AHEAD — keep our design, don't copy theirs:** the plugin's error model is Playwright **exceptions
+  (strings)** via its Locator API (strict-mode throws). Our **coded + hinted envelope** (`{error:{code,message,hint,…}}`)
+  is more agent-friendly: branchable and self-correcting. So #1/#2/#4 (one coded envelope everywhere, including the `js`
+  path) is the right call — the plugin study reinforces it by contrast. Adopt their *minimalism*, keep our *coded errors*.

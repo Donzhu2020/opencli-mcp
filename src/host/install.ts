@@ -105,9 +105,14 @@ export function writeLauncher(): string {
 
 export function install(opts: { browsers?: string[]; extensionId?: string; userDataDirs?: string[] } = {}): { extensionId: string; extensionDir: string; launcher: string; manifests: Array<{ browser: string; file: string; written: boolean }> } {
   const extDir = extensionDir();
-  const id = opts.extensionId ?? extensionId();
+  // Allow-list every extension build that may talk to this host: the key-derived dev ID (unpacked from extension/) plus
+  // any store IDs passed via --extension-id (comma-separated) — the key-stripped store build gets a different ID.
+  const derived = (() => { try { return extensionId(); } catch { return null; } })();
+  const provided = (opts.extensionId ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  const ids = [...new Set([...(derived ? [derived] : []), ...provided])];
+  const id = provided[0] ?? derived ?? '';
   const launcher = writeLauncher();
-  const manifest = { name: NATIVE_HOST_NAME, description: 'opencli-mcp browser runtime host', path: launcher, type: 'stdio', allowed_origins: [`chrome-extension://${id}/`] };
+  const manifest = { name: NATIVE_HOST_NAME, description: 'opencli-mcp browser runtime host', path: launcher, type: 'stdio', allowed_origins: ids.map((x) => `chrome-extension://${x}/`) };
   const manifests: Array<{ browser: string; file: string; written: boolean }> = [];
   // Chrome resolves user-level hosts relative to its user data dir: custom --user-data-dir profiles get their own copy
   const profiles = new Set([...(opts.userDataDirs ?? []), ...runningProfileDirs()]);

@@ -62,3 +62,12 @@ literal per-adapter logic rewrite, that is a separate, much larger effort to sco
    our aria refs.
 3. **Owning the manifest build** (`build-manifest`) and the lazy `_lazy`/`_modulePath` loader.
 4. **Electron exclusion** + user-adapter + defined-tool loading paths must be preserved.
+
+## Status (2026-09-19)
+- **Phase 1 DONE** (88a9fe3): `ExtensionPage` no longer extends `CDPBasePage`; the shadow engine is gone. The
+  corpus-used inherited methods are reimplemented on our engine + pure helper JS. Gate green, embedded smoke ok.
+- **Phase 2 DONE** (59561e7, 23ff9f2): corpus + OpenCLI runtime vendored into `vendor/opencli/`; dependency is
+  `file:vendor/opencli` (git-tracked, editable, no upstream pull). OpenCLI's runtime deps hoisted into our
+  package.json so a packaged install resolves them (verified: clean tarball install loads 168 sites / 1208 commands).
+- **Phase 3 (converge corpus onto the `Tab` surface)**: not required for "one engine / own the corpus" — deferred.
+- **Remaining gate:** real-Chrome regression of the corpus running on the one engine — for the tester.

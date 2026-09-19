@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.0.8 — 2026-09-19
+
+- **The client channel survives host restarts (fix "Transport closed").** The Chrome-spawned host dies whenever the
+  extension's Native port drops (an extension reload/update, a crash, or the service worker being replaced). The stdio
+  launcher used to exit on that drop, permanently killing the client's MCP channel (Codex/Claude don't auto-reconnect a
+  dead server). The launcher now keeps the channel up and reconnects to the host on demand — re-reading the fresh
+  port/token a respawned host writes — and returns a retryable `host_unavailable` while the host is briefly down.
+  Combined with the extension's existing auto-reconnect, the channel self-heals after a reload instead of going
+  "Transport closed". See docs/design/host-resilience-2026-09-19.md for the architecture review behind this.
+
 ## 0.0.7 — 2026-09-19
 
 - **Fix a CSP error on strict sites.** The favicon-badge feature rewrote the page favicon to a `data:` SVG, which pages

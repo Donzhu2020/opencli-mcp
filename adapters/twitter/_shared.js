@@ -246,25 +246,6 @@ export function applyTopByEngagement(rows, topN) {
  * so write actions target the exact <article> matching a status id (not the first one).
  * Bindings: tweetId, __twGetStatusIdFromHref(href), __twHasLinkToTarget(root), findTargetArticle().
  */
-export function buildTwitterArticleScopeSource(tweetId) {
-  return `
-    const tweetId = ${JSON.stringify(tweetId)};
-    const __twTweetPathRe = /^\\/(?:[^/]+|i)\\/status\\/(\\d+)\\/?$/;
-    const __twIsTwitterHost = (hostname) => hostname === 'x.com' || hostname === 'twitter.com'
-      || hostname.endsWith('.x.com') || hostname.endsWith('.twitter.com');
-    const __twGetStatusIdFromHref = (href) => {
-      try {
-        const parsed = new URL(href, window.location.origin);
-        if (parsed.protocol !== 'https:' || !__twIsTwitterHost(parsed.hostname.toLowerCase())) return null;
-        return parsed.pathname.match(__twTweetPathRe)?.[1] || null;
-      } catch { return null; }
-    };
-    const __twHasLinkToTarget = (root) => Array.from(root.querySelectorAll('a[href*="/status/"]'))
-      .some((link) => __twGetStatusIdFromHref(link.href) === tweetId);
-    const findTargetArticle = () => Array.from(document.querySelectorAll('article')).find(__twHasLinkToTarget);
-  `;
-}
-
 // ── Lists management (owned + subscribed lists), shared by lists / list-add / list-remove / list-delete ──
 export const LISTS_MANAGEMENT_QUERY_ID = '78UbkyXwXBD98IgUWXOy9g';
 const OWNED_SUBSCRIBED_ENTRY_PREFIX = 'owned-subscribed-list-module-';
@@ -308,127 +289,57 @@ export async function fetchManagedLists(tab) {
   return parseListsManagement(data, new Set());
 }
 
-/** Navigate to `url`, then run a write-capable page script (returns whatever the script returns). */
-export async function domRun(tab, url, script) {
-  await tab.goto(url, { waitUntil: 'load', settleMs: 1500 });
-  return tab.evaluate(script, { allowWrite: true });
+// ── Write layer: API-first (X has GraphQL mutations + legacy /1.1 REST for these; DOM clicking is never used) ──
+// GraphQL mutation queryIds used by the x.com web app. These (like the read queryIds) are the app's own operation ids
+// and can rotate when X ships a new bundle; refresh them from the live app if a write starts returning 404.
+export const MUTATIONS = {
+  FavoriteTweet: 'lI07N6Otwv1PhnEgXILM7A',
+  UnfavoriteTweet: 'ZYKSe-w7KEslx3JhSIk5LA',
+  CreateRetweet: 'ojPdsZsimiJrUGLR1sjUtA',
+  DeleteRetweet: 'iQtK4dl5hBmXewYZuEOKVw',
+  CreateBookmark: 'aoDbu3RHznuiSkQ9aNM67Q',
+  DeleteBookmark: 'Wlmlj2-xzyS1GN3a6cj-mQ',
+  DeleteTweet: 'VaenaVgh5q5ih7kvyVjgtg',
+  CreateTweet: 'xT36w0XM3A8jDynpkram2A',
+  ModerateTweet: 'p_a8Uz2vX3W3Yqk3z0Q6yg',
+  UnmoderateTweet: 'pjFnHGVqCjTcZol0xcBJjw',
+  DeleteList: 'UnN9Th1BDbeLjpgjGSpL3Q',
+  ListsPinMany: '2X7Ph9jUpAX_qh6bDVs0Vw',
+};
+
+// The features blob CreateTweet requires; other mutations accept an empty features object.
+export const CREATE_TWEET_FEATURES = {
+  communities_web_enable_tweet_community_results_fetch: true, c9s_tweet_anatomy_moderator_badge_enabled: true,
+  responsive_web_grok_analyze_button_fetch_trends_enabled: false, responsive_web_edit_tweet_api_enabled: true,
+  graphql_is_translatable_rweb_tweet_is_translatable_enabled: true, view_counts_everywhere_api_enabled: true,
+  longform_notetweets_consumption_enabled: true, responsive_web_twitter_article_tweet_consumption_enabled: true,
+  tweet_awards_web_tipping_enabled: false, longform_notetweets_rich_text_read_enabled: true,
+  longform_notetweets_inline_media_enabled: true, rweb_video_timestamps_enabled: true,
+  responsive_web_graphql_exclude_directive_enabled: true, verified_phone_label_enabled: false,
+  freedom_of_speech_not_reach_fetch_enabled: true, standardized_nudges_misinfo: true,
+  tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled: true,
+  responsive_web_graphql_skip_user_profile_image_extensions_enabled: false,
+  responsive_web_graphql_timeline_navigation_enabled: true, responsive_web_enhance_cards_enabled: false,
+};
+
+/** Run a GraphQL mutation by operation name (queryId from MUTATIONS). Returns parsed JSON; throws on API errors. */
+export async function mutate(tab, op, variables, opts = {}) {
+  const queryId = opts.queryId || MUTATIONS[op];
+  if (!queryId) throw errors.upstream(`No queryId known for mutation ${op}`);
+  await ensureOnX(tab);
+  const features = opts.features ?? (op === 'CreateTweet' ? CREATE_TWEET_FEATURES : {});
+  const data = await gql(tab, queryId, op, variables, { method: 'POST', features });
+  if (data && typeof data === 'object' && Array.isArray(data.errors) && data.errors.length) {
+    throw errors.upstream(`${op}: ${data.errors.map((e) => e.message).join('; ')}`);
+  }
+  return data;
 }
 
-/** Run a write-capable page script on the current page (no navigation). */
-export function domEval(tab, script) {
-  return tab.evaluate(script, { allowWrite: true });
-}
-
-// ── Composer helpers (post / reply / quote) ──
-export const COMPOSER_FILE_INPUT_SELECTOR = 'input[type="file"][data-testid="fileInput"]';
-const SUPPORTED_IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
-const MIME_BY_EXT = { '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg' };
-const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
-
-/** Read local image paths (comma-separated string or array) into base64 upload descriptors. */
-export function resolveLocalImages(input, max = 4) {
-  const paths = (Array.isArray(input) ? input : String(input || '').split(',')).map((s) => String(s).trim()).filter(Boolean);
-  if (paths.length > max) throw errors.argument(`Too many images: ${paths.length} (max ${max})`);
-  return paths.map((p) => {
-    const abs = path.resolve(p);
-    const ext = path.extname(abs).toLowerCase();
-    if (!SUPPORTED_IMAGE_EXTS.has(ext)) throw errors.argument(`Unsupported image format "${ext}". Supported: jpg, png, gif, webp`);
-    if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) throw errors.argument(`Image file not found: ${abs}`);
-    if (fs.statSync(abs).size > MAX_IMAGE_BYTES) throw errors.argument(`Image too large: ${abs}`);
-    return { name: path.basename(abs), mime: MIME_BY_EXT[ext] || 'image/jpeg', base64: fs.readFileSync(abs).toString('base64') };
-  });
-}
-
-/** Download a remote image URL into a base64 upload descriptor. */
-export async function downloadRemoteImage(url) {
-  let parsed;
-  try { parsed = new URL(url); } catch { throw errors.argument(`Invalid image URL: ${url}`); }
-  if (!/^https?:$/.test(parsed.protocol)) throw errors.argument(`Unsupported image URL protocol: ${parsed.protocol}`);
-  const resp = await fetch(url);
-  if (!resp.ok) throw errors.upstream(`Image download failed: HTTP ${resp.status}`);
-  const ct = (resp.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-  const extByCt = { 'image/jpeg': '.jpg', 'image/jpg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp' };
-  let ext = extByCt[ct];
-  if (!ext) { try { const e = path.extname(new URL(url).pathname).toLowerCase(); if (SUPPORTED_IMAGE_EXTS.has(e)) ext = e; } catch { /* ignore */ } }
-  if (!ext) throw errors.argument(`Unsupported remote image format "${ct || 'unknown'}"`);
-  const buf = Buffer.from(await resp.arrayBuffer());
-  if (buf.byteLength > MAX_IMAGE_BYTES) throw errors.argument('Remote image too large');
-  return { name: `image${ext}`, mime: MIME_BY_EXT[ext] || 'image/jpeg', base64: buf.toString('base64') };
-}
-
-/** Attach base64 image descriptors to the current composer's file input, then wait for previews. */
-export async function attachComposerImages(tab, files) {
-  const script = `(async () => {
-    const files = ${JSON.stringify(files)};
-    const input = document.querySelector(${JSON.stringify(COMPOSER_FILE_INPUT_SELECTOR)});
-    if (!input) return { ok: false, message: 'No file input found on the composer.' };
-    const dt = new DataTransfer();
-    for (const f of files) { const bin = atob(f.base64); const bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i); dt.items.add(new File([bytes], f.name, { type: f.mime })); }
-    let assigned = false;
-    try { Object.defineProperty(input, 'files', { value: dt.files, writable: false, configurable: true }); assigned = input.files && input.files.length >= files.length; }
-    catch { try { const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'files'); if (s && s.set) { s.set.call(input, dt.files); assigned = input.files && input.files.length >= files.length; } } catch {} }
-    if (!assigned) return { ok: false, message: 'Could not assign files to the composer input.' };
-    input.dispatchEvent(new Event('change', { bubbles: true }));
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    for (let i = 0; i < 60; i++) {
-      await new Promise(r => setTimeout(r, 500));
-      const previews = Math.max(
-        document.querySelectorAll('[data-testid="attachments"] img, [data-testid="attachments"] video, [data-testid="tweetPhoto"], img[src^="blob:"], video[src^="blob:"]').length,
-        document.querySelectorAll('[data-testid="media-upload-preview"], [data-testid="card.layoutLarge.media"]').length
-      );
-      if (previews >= files.length) return { ok: true };
-    }
-    return { ok: false, message: 'Image upload timed out.' };
-  })()`;
-  return domEval(tab, script);
-}
-
-/** Insert text into the current composer's Draft.js editor and verify it landed. */
-export async function insertComposerText(tab, text) {
-  const script = `(async () => {
-    try {
-      const visible = (el) => !!el && (el.offsetParent !== null || el.getClientRects().length > 0);
-      const boxes = Array.from(document.querySelectorAll('[data-testid="tweetTextarea_0"]'));
-      const box = boxes.find(visible) || boxes[0];
-      if (!box) return { ok: false, message: 'Could not find the composer text area. Are you logged in?' };
-      box.focus();
-      const t = ${JSON.stringify(text)};
-      if (!document.execCommand('insertText', false, t)) {
-        const dt = new DataTransfer(); dt.setData('text/plain', t);
-        box.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
-      }
-      await new Promise(r => setTimeout(r, 800));
-      const norm = (s) => String(s || '').replace(/\\u00a0/g, ' ').replace(/\\s+/g, ' ').trim();
-      const actual = box.innerText || box.textContent || '';
-      return norm(actual).includes(norm(t)) ? { ok: true } : { ok: false, message: 'Could not verify composer text after typing.' };
-    } catch (e) { return { ok: false, message: String(e) }; }
-  })()`;
-  return domEval(tab, script);
-}
-
-/** Click the composer's Post button and wait for a success/failure toast. Returns { ok, message, id?, url? }. */
-export async function submitComposer(tab, text) {
-  const script = `(async () => {
-    try {
-      const visible = (el) => !!el && (el.offsetParent !== null || el.getClientRects().length > 0);
-      for (const toast of Array.from(document.querySelectorAll('[role="alert"], [data-testid="toast"]'))) if (visible(toast)) toast.setAttribute('data-oc-before', '1');
-      let btn = null;
-      for (let i = 0; i < 30; i++) { btn = Array.from(document.querySelectorAll('[data-testid="tweetButton"], [data-testid="tweetButtonInline"]')).find((el) => visible(el) && !el.disabled && el.getAttribute('aria-disabled') !== 'true'); if (btn) break; await new Promise(r => setTimeout(r, 500)); }
-      if (!btn) return { ok: false, message: 'Post button is disabled or not found.' };
-      btn.click();
-      const statusUrl = (root) => { if (!root || typeof root.querySelectorAll !== 'function') return {}; for (const link of Array.from(root.querySelectorAll('a[href*="/status/"]'))) { const href = link.href || link.getAttribute('href') || ''; try { const u = new URL(href, window.location.origin); const host = u.hostname.toLowerCase().replace(/^www\\./, ''); if (!['x.com','twitter.com','mobile.twitter.com'].includes(host)) continue; const m = u.pathname.match(/^\\/([^/]+)\\/status\\/(\\d+)\\/?$/); if (m) return { url: u.href, id: m[2] }; } catch {} } return {}; };
-      const norm = (s) => String(s || '').replace(/\\u00a0/g, ' ').replace(/\\s+/g, ' ').trim();
-      const expected = norm(${JSON.stringify(text)});
-      for (let i = 0; i < 30; i++) {
-        await new Promise(r => setTimeout(r, 500));
-        const toasts = Array.from(document.querySelectorAll('[role="alert"], [data-testid="toast"]')).filter((el) => visible(el) && !el.hasAttribute('data-oc-before'));
-        const ok = toasts.find((el) => /sent|posted|your post was sent|your tweet was sent/i.test(el.textContent || ''));
-        if (ok) return { ok: true, message: 'Posted.', ...statusUrl(ok) };
-        const err = toasts.find((el) => /failed|error|try again|not sent|could not/i.test(el.textContent || ''));
-        if (err) return { ok: false, message: (err.textContent || 'Post failed.').trim() };
-      }
-      return { ok: false, unconfirmed: true, message: 'Submission did not complete before timeout.' };
-    } catch (e) { return { ok: false, message: String(e) }; }
-  })()`;
-  return domEval(tab, script);
+/** POST to a legacy /1.1 REST endpoint (follow/block/mute/accept), form-encoded, through the logged-in page. */
+export async function rest(tab, path, params = {}) {
+  await ensureOnX(tab);
+  const headers = await authHeaders(tab);
+  headers['content-type'] = 'application/x-www-form-urlencoded';
+  const body = Object.entries(params).filter(([, v]) => v !== undefined && v !== null).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`).join('&');
+  return tab.fetchJson(`/i/api/1.1/${path}`, { method: 'POST', headers, body });
 }

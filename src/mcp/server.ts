@@ -42,17 +42,19 @@ function pickTarget(t: z.infer<typeof targetSchema> | undefined): Target | undef
 }
 
 function text(s: string): Content[number] { return { type: 'text', text: s }; }
+// One result envelope everywhere: success is `{ ok:true, …data }`, failure is `{ ok:false, error:{…} }` — compact JSON,
+// in-band `ok` (the agent reads content text), no duplicate structuredContent. Raw strings (docs/markdown) pass through.
 function ok(data: unknown, images: Array<{ mimeType: string; base64: string }> = []): ToolResult {
   const content: Content = [];
   if (typeof data === 'string') content.push(text(data));
-  else if (data !== undefined) content.push(text(safeStringify(data, 120_000)));
+  else if (Array.isArray(data)) content.push(text(safeStringify({ ok: true, value: data }, 120_000)));
+  else if (data && typeof data === 'object') content.push(text(safeStringify({ ok: true, ...(data as Record<string, unknown>) }, 120_000)));
+  else content.push(text(safeStringify({ ok: true }, 120_000)));
   for (const img of images) content.push({ type: 'image', data: img.base64, mimeType: img.mimeType });
-  const structured = data && typeof data === 'object' && !Array.isArray(data) ? (data as Record<string, unknown>) : undefined;
-  return { content, ...(structured && { structuredContent: structured }) };
+  return { content };
 }
 function fail(err: unknown): ToolResult {
-  const env = errorEnvelope(err);
-  return { content: [text(safeStringify(env))], structuredContent: env, isError: true };
+  return { content: [text(safeStringify(errorEnvelope(err)))], isError: true };
 }
 function stripImage<T extends Record<string, unknown>>(o: T): { data: Record<string, unknown>; images: Array<{ mimeType: string; base64: string }> } {
   const images: Array<{ mimeType: string; base64: string }> = [];
@@ -126,7 +128,9 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     const abort = new Promise<never>((_, rej) => { extra.signal?.addEventListener('abort', () => rej(new ActionError('cancelled', `${site}/${command} cancelled by the client`)), { once: true }); });
     try {
       const r = await Promise.race([rt.runSite(sessionId, site, command, rest), abort]);
-      return r.ok ? ok(r) : fail(new ActionError(r.error.code, r.error.message, r.error.hint, { site, command, ...(r.error.details && { details: r.error.details }) }));
+      // Return the data the agent asked for; the agent already knows the site/command it called (drop site/name/elapsedMs bookkeeping).
+      if (!r.ok) return fail(new ActionError(r.error.code, r.error.message, r.error.hint, { site, command, ...(r.error.details && { details: r.error.details }) }));
+      return ok(r.rows !== undefined ? { rows: r.rows, ...(r.columns && { columns: r.columns }) } : { value: r.value });
     } finally { if (beat) clearInterval(beat); }
   };
   // ── the entry surface: the few typed tools for the core loop; everything else lives in the object model behind `js` ──
@@ -189,7 +193,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
 
   // ── docs ──
   server.registerTool('docs_list', { title: 'List docs', description: 'Documentation available for this backend.', inputSchema: {}, annotations: { readOnlyHint: true } }, async () => run(async () => ok({ docs: listDocs(docCtx()).filter((d) => d.available).map(({ name, mode, description }) => ({ name, mode, description })) })));
-  server.registerTool('docs_get', { title: 'Read a doc', description: 'Read a documentation page by name (see docs_list).', inputSchema: { name: z.string() }, annotations: { readOnlyHint: true } }, async ({ name }) => run(async () => { const d = readDoc(name); if (!d) throw new ActionError('unknown_doc', `no doc "${name}"`); return ok(d); }));
+  server.registerTool('docs_get', { title: 'Read a doc', description: 'Read a documentation page by name (see docs_list).', inputSchema: { name: z.string() }, annotations: { readOnlyHint: true } }, async ({ name }) => run(async () => { const d = readDoc(name); if (!d) throw new ActionError('unknown_doc', `no doc "${name}"`, 'Call docs_list to see available docs.'); return ok(d); }));
 
   // ── code mode ──
   const jsGlobals = { agent: api.agent, sites: api.sites, recon: api.recon, tools: api.tools, session: api.session, Tab };
@@ -204,9 +208,13 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     const content: Content = [];
     if (first) { const b = rt.backend(); const ref = readDoc('api-reference') ?? ''; const doc = b === 'none' ? `${readDoc('js-tool') ?? ''}\n\n${ref}\n\n(No browser backend connected: browser objects will throw browser_unavailable; sites.* public commands work.)` : `${readDoc('js-tool') ?? ''}\n\n${ref}`; content.push(text(`# API\n${doc}\n\n# Result`)); }
     if (r.writes.length) content.push(text(r.writes.join('\n')));
-    if (r.error) content.push(text(`Error: ${r.error.name}: ${r.error.message}${r.error.stack ? `\n${r.error.stack}` : ''}`));
-    else if (r.value !== undefined) content.push(text(safeStringify(r.value, 120_000)));
-    else if (!r.writes.length) content.push(text('(undefined)'));
+    if (r.error) {
+      // Same coded envelope as every other tool: branchable code/hint/data when the throw was an ActionError, else a generic js_error.
+      const e = r.error;
+      const env = { ok: false as const, error: { code: e.code ?? 'js_error', message: e.message, ...(e.hint && { hint: e.hint }), ...(e.data && { ...e.data }), ...(!e.code && e.stack && { stack: e.stack }) } };
+      content.push(text(safeStringify(env, 120_000)));
+    } else if (r.value !== undefined) content.push(text(safeStringify({ ok: true, value: r.value }, 120_000)));
+    else if (!r.writes.length) content.push(text(safeStringify({ ok: true, value: null }, 120_000)));
     for (const img of r.images) content.push({ type: 'image', data: img.base64, mimeType: img.mimeType });
     return { content, isError: Boolean(r.error) };
   }));

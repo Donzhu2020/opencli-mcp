@@ -5,7 +5,7 @@
  */
 import vm from 'node:vm';
 
-export interface JsRunResult { value: unknown; writes: string[]; images: Array<{ mimeType: string; base64: string }>; error?: { name: string; message: string; stack?: string } }
+export interface JsRunResult { value: unknown; writes: string[]; images: Array<{ mimeType: string; base64: string }>; error?: { name: string; message: string; stack?: string; code?: string; hint?: string; data?: Record<string, unknown> } }
 export interface JsImage { mimeType?: string; base64?: string; bytes?: Uint8Array | ArrayBuffer }
 
 const STATEMENT_KEYWORDS = /^(return|if|else|for|while|do|switch|try|catch|finally|throw|const|let|var|function|class|import|export|break|continue|\}|\/\/|\/\*|\*)/;
@@ -145,8 +145,9 @@ export class JsSession {
       if (isImageValue(value)) { images.push({ mimeType: value.mimeType, base64: value.base64 }); out = { image: `${value.mimeType} (${Math.round(value.base64.length * 0.75 / 1024)} KB)` }; }
       return { value: out, writes: [...this.writes], images };
     } catch (err) {
-      const e = err as Error & { code?: string; hint?: string };
-      return { value: undefined, writes: [...this.writes], images: [...this.images], error: { name: e.name ?? 'Error', message: e.message ?? String(err), stack: e.stack?.split('\n').slice(0, 4).join('\n') } };
+      const e = err as Error & { code?: string; hint?: string; data?: Record<string, unknown> };
+      // Preserve the branchable code/hint/data (ActionError) so the js path gets the same coded error envelope as everywhere else.
+      return { value: undefined, writes: [...this.writes], images: [...this.images], error: { name: e.name ?? 'Error', message: e.message ?? String(err), stack: e.stack?.split('\n').slice(0, 4).join('\n'), ...(e.code && { code: e.code }), ...(e.hint && { hint: e.hint }), ...(e.data && typeof e.data === 'object' && { data: e.data }) } };
     } finally { if (timer) clearTimeout(timer); }
   }
 }
@@ -171,7 +172,7 @@ export function safeStringify(v: unknown, limit = 200_000): string {
       if (typeof val === 'function') return `[function ${val.name || 'anonymous'}]`;
       if (val && typeof val === 'object') { if (seen.has(val)) return '[circular]'; seen.add(val); }
       return val;
-    }, 2) ?? String(v);
+    }) ?? String(v);
   } catch { s = String(v); }
   return s.length > limit ? `${s.slice(0, limit)}\n…(truncated ${s.length - limit} chars)` : s;
 }

@@ -174,7 +174,7 @@ export class Tab {
       // same engine and the same compiled selector as act: what find lists is exactly what act would resolve
       const spec = target as Record<string, unknown>;
       const selector = targetToSelector(spec);
-      if (!selector) throw new ActionError('invalid_target', 'find needs a selector, an aria ref (eN), a semantic locator (role/name/label/text/testid), or a point {x,y}');
+      if (!selector) throw new ActionError('invalid_target', 'find needs a selector, an aria ref (eN), a semantic locator (role/name/label/text/testid), or a point {x,y}', 'Pass one of: {ref} from observe, {selector}, {role,name}, {label}, {text}, {testid}, or {x,y}.');
       return await page.pageCall('find', { selector, fallback: fallbackSelector(spec), limit: target.limit ?? 20 }) as FindResult;
     });
   }
@@ -186,17 +186,25 @@ export class Tab {
       const record = (ok: boolean, extra: Record<string, unknown> = {}) => this.ctx.state.trace.record({ kind: 'act', action, target: describeTarget(opts.target), targetSpec: opts.target as Record<string, unknown> | undefined, targetSelector: typeof extra.selector === 'string' ? extra.selector : undefined, targetRef: typeof extra.ref === 'string' ? extra.ref : undefined, value: opts.value, matchLevel: extra.match_level as string | undefined, ok, page: this.id });
       try {
         // use the page already held by this.use(): calling this.reload()/back()/forward() here would re-enter the session lock and deadlock
-        if (action === 'back' || action === 'forward' || action === 'reload') { const h = await page.history(action); record(true, { url: h.url }); return { ok: true, action, ...h }; }
+        if (action === 'back' || action === 'forward' || action === 'reload') { const h = await page.history(action); record(true, { url: h.url }); return { action, ...h }; }
         if (action === 'scroll' && !opts.target) {
           // no target: wheel at the viewport centre
           const vp = await page.evaluate<{ x: number; y: number }>('({ x: innerWidth / 2, y: innerHeight / 2 })');
           opts = { ...opts, target: { x: vp.x, y: vp.y } };
         }
-        if (!opts.target) throw new ActionError('missing_target', `action "${action}" needs a target`);
+        if (!opts.target) throw new ActionError('missing_target', `action "${action}" needs a target`, 'Pass a target: a {ref} from observe, or a selector/role+name/label/text/testid.');
         const r = await page.act({ kind: action, target: opts.target as Record<string, unknown>, value: opts.value, files: opts.files, to: opts.to as Record<string, unknown> | undefined, direction: opts.direction, amount: opts.amount, timeoutMs: opts.timeoutMs, settleMs: opts.settleMs ?? 600, cursor: this.ctx.rt.cursorEnabled });
         record(true, { ...r, ref: r.ref ?? undefined });
         await this.harvest(page, action);
-        return { action, target: describeTarget(opts.target), ...r, ok: true };
+        // Lean result: only what changes the agent's next move. Full telemetry (point/method/timings/selector/…) is in the trace.
+        return {
+          action,
+          ...(r.matches_n > 1 ? { matches_n: r.matches_n } : {}),
+          ...(r.navigated ? { navigated: true, ...(r.url !== undefined && { url: r.url }) } : {}),
+          ...(r.ref ? { ref: r.ref } : {}),
+          ...(r.filled !== undefined ? { filled: r.filled, verified: r.verified, actual: r.actual } : {}),
+          ...(r.checked !== undefined ? { checked: r.checked, changed: r.changed } : {}),
+        };
       } catch (err) {
         record(false);
         if (err instanceof ActionError) throw err;

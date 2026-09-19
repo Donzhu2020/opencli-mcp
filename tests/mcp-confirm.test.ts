@@ -12,6 +12,12 @@ import type { PolicyConfig } from '../src/runtime/policy.js';
 
 type ElicitResult = { action: 'accept' | 'decline' | 'cancel'; content?: Record<string, string | number | boolean | string[]> };
 
+/** Parse the tool result's text content (the one result envelope: {ok,…} | {ok:false,error}). */
+function body(r: { content?: Array<{ type: string; text?: string }> }): Record<string, unknown> {
+  const t = (r.content ?? []).find((c) => c.type === 'text')?.text ?? '{}';
+  try { return JSON.parse(t) as Record<string, unknown>; } catch { return { raw: t }; }
+}
+
 async function harness(policy: PolicyConfig, responder: (n: number) => ElicitResult) {
   const rt = new Runtime({ policy, log: () => {} });
   await rt.init();
@@ -35,7 +41,7 @@ describe('MRTR confirmations (D1)', () => {
       const r = await h.client.callTool({ name: 'site_run', arguments: { site: h.site, command: 'poke', args: {} } });
       expect(r.isError).toBeFalsy();
       expect(h.elicits()).toBe(1); // the approval prompt actually fired
-      expect(r.structuredContent ?? {}).toMatchObject({ ok: true, value: { done: true } });
+      expect(body(r)).toMatchObject({ ok: true, value: { done: true } });
     } finally { await h.cleanup(); }
   });
 
@@ -45,7 +51,7 @@ describe('MRTR confirmations (D1)', () => {
       const r = await h.client.callTool({ name: 'site_run', arguments: { site: h.site, command: 'poke', args: {} } });
       expect(h.elicits()).toBe(1);
       expect(r.isError).toBe(true);
-      expect(JSON.stringify(r.structuredContent ?? r.content)).toContain('user_declined');
+      expect(body(r)).toMatchObject({ ok: false, error: { code: 'user_declined' } });
     } finally { await h.cleanup(); }
   });
 

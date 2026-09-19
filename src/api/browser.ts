@@ -14,17 +14,17 @@ export class Browser {
   constructor(readonly id: 'chrome', readonly type: 'extension', private readonly ctx: SessionContext) {}
   private page(): Promise<RuntimePage> { return this.ctx.rt.getBrowserPage(this.ctx.sessionId); }
   private ext(page: RuntimePage): ExtensionRuntimePage {
-    if (!this.ctx.rt.isExtensionPage(page)) throw new ActionError('unsupported_backend', 'This operation needs the Chrome extension backend');
+    if (!this.ctx.rt.isExtensionPage(page)) throw new ActionError('unsupported_backend', 'This operation needs the Chrome extension backend', 'Run doctor; make sure Chrome is running with the opencli-mcp extension.');
     return page;
   }
 
   readonly tabs = {
     new: async (url?: string): Promise<Tab> => {
       const page = await this.page();
-      if (url && !/^(https?:\/\/|data:text\/html)/i.test(url)) throw new ActionError('invalid_url', 'Only http(s) (or data:text/html) URLs can be opened');
+      if (url && !/^(https?:\/\/|data:text\/html)/i.test(url)) throw new ActionError('invalid_url', 'Only http(s) (or data:text/html) URLs can be opened', 'Pass an absolute http:// or https:// URL.');
       if (url && !url.startsWith('data:')) Policy.throwIfDenied(this.ctx.rt.policy.checkOrigin(url));
       const id = await page.newTab(url); // the extension creates the tab and waits for its first load
-      if (!id) throw new ActionError('tab_create_failed', 'Could not create a tab');
+      if (!id) throw new ActionError('tab_create_failed', 'Could not create a tab', 'Retry; if it persists run doctor to check the browser bridge.');
       this.ctx.state.finalized = false; // new tabs after a finalize are the session's again
       this.ctx.state.selected = id;
       this.ctx.state.trace.record({ kind: 'goto', url: url ?? 'about:blank', page: id });
@@ -90,8 +90,8 @@ export class Browser {
       if (id === 'cdp') return { send: (method: string, params?: Record<string, unknown>) => page.cdp(method, params), documentation: () => readDoc('capabilities/cdp') };
       if (id === 'viewport') return { set: ({ width, height }: { width: number; height: number }) => page.cdp('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false }), reset: () => page.cdp('Emulation.clearDeviceMetricsOverride', {}) };
       if (id === 'visibility') { const ext = this.ext(page); return { get: () => ext.getVisibility(), set: (v: boolean) => ext.setVisibility(v), documentation: () => readDoc('capabilities/visibility') }; }
-      if (id === 'webmcp') { const sel = await this.tabs.selected(); if (!sel) throw new ActionError('no_tab', 'Open a tab first'); return { list: () => sel.webmcp.list(), call: (name: string, input?: Record<string, unknown>) => sel.webmcp.call(name, input), documentation: () => readDoc('capabilities/webmcp') }; }
-      throw new ActionError('unknown_capability', `no capability "${id}"`);
+      if (id === 'webmcp') { const sel = await this.tabs.selected(); if (!sel) throw new ActionError('no_tab', 'Open a tab first', 'Call tab_open (or tab_claim a user tab) before using this capability.'); return { list: () => sel.webmcp.list(), call: (name: string, input?: Record<string, unknown>) => sel.webmcp.call(name, input), documentation: () => readDoc('capabilities/webmcp') }; }
+      throw new ActionError('unknown_capability', `no capability "${id}"`, 'Use browser.capabilities to see what this backend supports.');
     },
   };
 

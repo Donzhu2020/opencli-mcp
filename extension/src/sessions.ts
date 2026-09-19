@@ -349,9 +349,9 @@ export class SessionManager {
     try { const r = await chrome.tabs.sendMessage(tabId, { type: 'opencli:ping' }); if (r?.ok) return true; } catch { /* inject */ }
     try { await chrome.scripting.executeScript({ target: { tabId }, files: [CONTENT_FILE], injectImmediately: true }); return true; } catch { return false; }
   }
-  async badge(tabId: number, badge: Badge): Promise<void> {
-    try { if (await this.ensureContent(tabId)) await chrome.tabs.sendMessage(tabId, { type: 'opencli:badge', badge }); } catch { /* not injectable (chrome://, pdf) */ }
-  }
+  // Favicon badging was removed — a data: SVG favicon violates strict `img-src` CSP pages (e.g. Hacker News) and a
+  // content script can't avoid or catch that, so it logged a CSP error. Agent tabs are marked by the named tab group.
+  async badge(_tabId: number, _badge: Badge): Promise<void> { /* no-op */ }
   /**
    * Cursor overlay state, owned here (the ChatGPT plugin's arrangement): the content script is a renderer that pulls
    * this on load and receives pushes, so the cursor survives navigations, hides when the session finalizes, and is

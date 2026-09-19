@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { argsToShape, coerceArgs, projectArgs, CLI_ONLY_ARGS, deCli } from '../src/sites/schema.js';
+import { argsToShape, coerceArgs, projectArgs, CLI_ONLY_ARGS, deCli, projectedArgName, restoreArgNames } from '../src/sites/schema.js';
 import { SiteRegistry } from '../src/sites/registry.js';
 import { z } from 'zod';
 
@@ -34,6 +34,25 @@ describe('schema', () => {
     expect(deCli('a range 10-20 and a-b hyphen')).toBe('a range 10-20 and a-b hyphen'); // single hyphens untouched
     expect(deCli(undefined)).toBe('');
     expect(CLI_ONLY_ARGS.has('stdout')).toBe(true);
+  });
+
+  it('projects kebab arg names to snake_case for the agent and reverses them for the executor', () => {
+    const args = [{ name: 'note-id', required: true }, { name: 'profile-url' }, { name: 'limit', type: 'int' }];
+    // agent-facing schema/discovery shows snake_case
+    expect(Object.keys(argsToShape(args)).sort()).toEqual(['limit', 'note_id', 'profile_url']);
+    expect(projectArgs(args).map((a) => a.name)).toEqual(['note_id', 'profile_url', 'limit']);
+    // executor gets the adapter's original kebab names back
+    expect(restoreArgNames(args, { note_id: 'x', profile_url: 'u', limit: 3 })).toEqual({ 'note-id': 'x', 'profile-url': 'u', limit: 3 });
+    // an agent that already used the kebab name (js escape hatch) is left untouched
+    expect(restoreArgNames(args, { 'note-id': 'x' })).toEqual({ 'note-id': 'x' });
+  });
+
+  it('keeps kebab names when snake-casing would collide within the same command (no data loss)', () => {
+    const args = [{ name: 'max-pages', type: 'int' }, { name: 'max_pages', type: 'int' }];
+    expect(projectedArgName(args, 'max-pages')).toBe('max-pages'); // collision → keep original
+    expect(projectArgs(args).map((a) => a.name).sort()).toEqual(['max-pages', 'max_pages']);
+    // both distinct args round-trip unchanged
+    expect(restoreArgNames(args, { 'max-pages': 1, max_pages: 2 })).toEqual({ 'max-pages': 1, max_pages: 2 });
   });
 });
 

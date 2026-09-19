@@ -33,9 +33,32 @@ export function deCli(text: string | undefined | null): string {
   return (text ?? '').replace(/(^|\s)--(?=[A-Za-z])/g, '$1');
 }
 
-/** Drop CLI-only args when projecting a command's Arg[] to any agent-facing surface (tool schema, search signature, site resource). */
+/**
+ * The name we show the agent for a corpus arg. OpenCLI arg names are CLI flags (kebab-case, `note-id`); MCP tool inputs
+ * are JSON keys an agent destructures, so we project them to snake_case (`note_id`) — matching what `tools.define`
+ * already requires of agent-authored tools. Collision guard: if snake-casing would clash with another arg in the SAME
+ * command (both `max-pages` and `max_pages` exist across the corpus), keep the original name so nothing is lost.
+ */
+export function projectedArgName(allArgs: Arg[], name: string): string {
+  if (!name.includes('-')) return name;
+  const snake = name.replace(/-/g, '_');
+  const collides = allArgs.some((a) => a.name !== name && (a.name === snake || a.name.replace(/-/g, '_') === snake));
+  return collides ? name : snake;
+}
+
+/** Drop CLI-only args and project names to snake_case when showing a command's Arg[] to the agent (tool schema, search signature, site resource). */
 export function projectArgs(args: Arg[]): Arg[] {
-  return args.filter((a) => !CLI_ONLY_ARGS.has(a.name));
+  return args.filter((a) => !CLI_ONLY_ARGS.has(a.name)).map((a) => ({ ...a, name: projectedArgName(args, a.name) }));
+}
+
+/** Reverse the name projection at execution time: an agent passes `note_id`, the adapter expects `note-id`. One seam for every call path (typed tool, site_run, js). */
+export function restoreArgNames(cmdArgs: Arg[], raw: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...raw };
+  for (const a of cmdArgs) {
+    const proj = projectedArgName(cmdArgs, a.name);
+    if (proj !== a.name && proj in out && !(a.name in out)) { out[a.name] = out[proj]; delete out[proj]; }
+  }
+  return out;
 }
 
 export function argsToShape(args: Arg[], extra: Record<string, ZodTypeAny> = {}): Record<string, ZodTypeAny> {

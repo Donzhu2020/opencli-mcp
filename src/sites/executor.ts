@@ -6,7 +6,7 @@
 import type { CliCommand } from '@jackwener/opencli/registry';
 import { executePipeline } from '@jackwener/opencli/pipeline';
 import { toEnvelope } from '@jackwener/opencli/errors';
-import { coerceArgs } from './schema.js';
+import { coerceArgs, restoreArgNames } from './schema.js';
 import { ActionError, normalizeErrorCode } from '../api/errors.js';
 import type { RuntimePage } from '../backends/page-types.js';
 
@@ -56,6 +56,8 @@ export async function runSiteCommand(
   const started = Date.now();
   const key = `${cmd.site}/${cmd.name}`;
   try {
+    // Agents call with the projected (snake_case) arg names; map them back to the adapter's original CLI names before coercion.
+    rawArgs = restoreArgNames(cmd.args, rawArgs);
     const declaresTimeout = cmd.args.some((a) => a.name === 'timeout');
     const { timeout, ...rest } = rawArgs;
     const userArgs = declaresTimeout ? rawArgs : rest;

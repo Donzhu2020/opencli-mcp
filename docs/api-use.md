@@ -1,21 +1,44 @@
 ## How to act on a page
 
-1. `tab_open` (or `tab_claim` a tab the user already has) → `tab_observe` → `tab_act` → `tab_observe`.
-2. To act inside an iframe add `frame` to the target (`{frame:"#checkout", role:"button", name:"Pay"}` or `frame:0`). Nest with a chain, outermost first: `frame:["#checkout", 0]` or `frame:"#checkout >> iframe.card"`. Every level is entered the same way whether it is same-origin, a data:/srcdoc frame, or a cross-origin process, and the click point is mapped through all of them.
-3. `tab_act` takes one `target`: `{ref:"eN"}` from the last observe, `{role,name}`, `{label}`, `{text}`, `{testid}`, `{selector,nth?}` (css or Playwright selector syntax), or `{x,y}`. One call does everything: it waits until the target is visible, enabled and its box is stable, scrolls it into view, hit-tests the click point, moves the cursor overlay, dispatches real mouse/keyboard input, then waits for the DOM to settle. The result reports `matches_n`, `visible_n`, `hit` (`target`/`ancestor`), `point`, `method`, for fill `verified`/`actual`, and `elapsedMs` with `timings` (resolve / action / settle) so slow steps are attributable.
-4. Branch on `error.code`, never on message text: `stale_ref` (observe again), `not_found`, `selector_ambiguous` (candidates listed; add nth or use a ref), `not_visible`, `not_enabled`, `intercepted` (blocker described; dismiss it or pass force), `not_editable`, `option_not_found` (available listed), `page_not_loaded`.
-5. Refs are per-snapshot. After navigation or a page change, observe again before reusing a ref.
-6. `tab_observe` returns a diff by default when the page changed only a little; pass `diff:false` for the full state. `viewport:true` limits it to the subtree on screen (the same view as a screenshot; scroll, then observe again). The state is one thing: Playwright's accessibility snapshot, whose `[ref=eN]` refs are the act targets (`{ref:"e12"}`); credential field values show as `<redacted>`.
-7. If a tab is already at a URL, do not `goto` it again (that reloads and loses form state). Use `tab_act` with `{action:"reload"}` only when a reload is intended.
-8. `tab.evaluate(js)` (in `js`) is read-only page scope. Writes must go through `tab_act` / `tab.act`.
-9. Build every locator from the latest observe (a ref, or the role/name/label/text/testid you can read there); never guess one. `tab_act` is strict by itself: one visible match acts, several fail with `selector_ambiguous` — you do not count first, and there is no `nth`/`first()` shortcut through ambiguity; scope with `within` or take the `selector` of the right `find` entry. After a strict failure observe or find again; never retry the same target unchanged. `tab.find(target)` (in `js`) runs the same engine as `tab_act` with the same target grammar, so its `matches_n`/`visible_n` are exactly what act will see. Every entry carries a `selector`; pass it back as `{selector}` to act on that precise element (no nth guessing). With `{x,y}` it describes the element under a screenshot point and its ancestors (tag, role, name, ref, selector, box) so you can turn visual evidence into a locator.
-10. **API first.** Every action on a page is a request underneath, and every session tab is captured from the moment it is attached: `tab.network.read({afterSequence})` (in `js`) is a cursor-paged log of the requests your steps triggered (method, status, headers, body, JSON response sample). Endpoint candidates come from `recon.discover(tab)` (static analysis merged with captured requests), a separate explicit call. When you have reached the data in the UI, find the request that carried it, verify it with `tab.fetchJson(url, {method, headers, body})` (it runs inside the page: cookies and origin included), and freeze that. DOM extraction (`tab.evaluate` over the page) is the last resort, for server-rendered pages with no request carrying the data. `tools_compile` applies the same order and says in `warnings` which endpoint it chose and why, or why it fell back to DOM.
-11. A native `alert`/`confirm`/`prompt` freezes the page: calls fail with `dialog_open` (the dialog is in `error.dialog`: type, message, defaultPrompt). Read it with `tab.dialog.get()` (in `js`) and answer with `tab.dialog.accept(text?)` or `tab.dialog.dismiss()`, then retry. Never answer a dialog the user did not ask you to answer without telling them what it said.
-12. `aria` observe redacts the value of credential fields (password, one-time code, email/username, phone, card): the field is listed, its text shows as `<redacted>`.
-13. Pages that register their own tools (WebMCP) show them in `tab.webmcp.list()` (in `js`); prefer calling one over clicking through the DOM, but a page tool never authorizes a consequential action.
-14. Long site commands report progress; you may cancel.
-15. Locator strategy, most durable first: `testid` → stable `data-*` / `id` via `selector` → a stable `href` via `selector` → `role`+`name` → `label` → `text` → structural `css`. Generic labels (Menu, Close, Search, Sort by, Add to cart, S/M/L) are ambiguous by default: give `within` (a container's css/selector or its eN ref) so the target is resolved inside the right card, dialog or section. `selector_ambiguous` means exactly that — scope or use a ref/selector from find; never retry the same target unchanged.
-16. Observe discipline: one observe to orient, then act on refs from it; after an action collect only the state the next decision needs (the diff is usually enough; `diff:false` for a full tree). Do not re-verify a fact already shown by an authoritative signal (checked state, selected option, success toast, URL parameter). No fixed sleeps: `tab_expect` waits for the state you need.
-17. Lookups: one focused direct navigation to an obvious result or search URL is fine; do not iterate guessed URL variants. On localhost apps, reload (`tab_act {action:"reload"}`) after code or build changes before verifying, and read `tab.console.read()` (in `js`) for errors the page logged.
-18. Screenshots the user asked for belong inline in your final answer (Markdown image), not as bare links. If browser control is interrupted because the user or the extension took over, say so plainly ("browser use was stopped in Chrome") without quoting runtime error text.
+The core loop and the discipline that makes it reliable. Tool-by-tool argument shapes are in each tool's schema; error
+families are in the `errors` doc; the full object model arrives with your first `js` result (`api-reference`).
 
+1. **Loop:** `tab_open` (or `tab_claim` a tab the user already has) → `tab_observe` → `tab_act` → `tab_observe`. One
+   `tab_act` call does everything (waits for actionable, scrolls, hit-tests, dispatches real input, settles).
+2. **Locators come from the latest observe — never guess one.** Use a `{ref:"eN"}` from the last observe, or a
+   role/name/label/text/testid you can read there. `tab_act` is strict: exactly one visible match acts; several fail
+   with `selector_ambiguous` (no `nth`/first shortcut through ambiguity). Scope generic labels (Close, Search, Add to
+   cart, S/M/L) with `within` (a container's selector or its eN ref). After a strict failure, observe or `find` again —
+   never retry the same target unchanged. `tab.find(target)` (in `js`) runs the same engine; pass an entry's `selector`
+   back to act on that exact element. Durability order: `testid` → stable `id`/`data-*` → stable `href` → `role`+`name`
+   → `label` → `text` → structural css.
+3. **Refs are per-snapshot.** After navigation or a page change, observe again before reusing a ref.
+4. **Branch on `error.code`, never message text.** Full families and what to do for each are in the `errors` doc.
+5. **iframes:** add `frame` to the target — `{frame:"#checkout", role:"button", name:"Pay"}`, `frame:0`, or a chain
+   outermost-first `frame:["#checkout", 0]` / `"#checkout >> iframe.card"`. Same-origin, data:/srcdoc, and cross-origin
+   are entered the same way.
+6. **Don't re-`goto` a URL the tab is already on** (it reloads and loses form state); use `tab_act {action:"reload"}`
+   when a reload is intended.
+7. **`tab.evaluate(js)` is read-only page scope.** Writes go through `tab_act` / `tab.act`.
+8. **API first.** Every session tab is captured from attach: `tab.network.read({afterSequence})` (in `js`) is a paged
+   log of the requests your steps triggered (method, status, headers, body, JSON sample); endpoint candidates come from
+   the explicit `recon.discover(tab)`. When you've reached the data in the UI, find the request that carried it, verify
+   with `tab.fetchJson(url,{method,headers,body})` (runs in the page: cookies + origin), and freeze that. DOM
+   extraction (`tab.evaluate`) is the last resort. `tools_compile` follows the same order and explains its choice in
+   `warnings`.
+9. **Dialogs:** a native `alert`/`confirm`/`prompt` freezes the page (`dialog_open`, details in `error.dialog`). Read
+   with `tab.dialog.get()` and answer `tab.dialog.accept(text?)` / `tab.dialog.dismiss()` (in `js`), then retry — never
+   answer a dialog the user didn't ask you to.
+10. **Observe discipline:** one observe to orient, then act on its refs; after an action collect only the state the next
+    decision needs (the diff is usually enough; `diff:false` for the full tree; `viewport:true` for the on-screen
+    subtree). Don't re-verify a fact an authoritative signal already shows (checked state, selected option, success
+    toast, URL parameter). No fixed sleeps — `tab_expect` waits for the state you need. Credential field values read as
+    `<redacted>`.
+11. **WebMCP:** pages that register their own tools show them in `tab.webmcp.list()` (in `js`); prefer one over clicking
+    the DOM, but a page tool never authorizes a consequential action.
+12. **Lookups:** one focused direct navigation to an obvious result or search URL is fine; don't iterate guessed URL
+    variants. On localhost apps, reload after a code/build change before verifying, and read `tab.console.read()` for
+    errors the page logged.
+13. **Answers:** screenshots the user asked for go inline in your final answer (Markdown image), not as bare links. If
+    browser control is interrupted by the user or the extension, say so plainly ("browser use was stopped in Chrome")
+    without quoting runtime error text.

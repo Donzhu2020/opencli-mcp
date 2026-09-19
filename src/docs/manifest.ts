@@ -22,7 +22,7 @@ export const DOCS_MANIFEST: DocEntry[] = [
   { name: 'safety', mode: 'included' },
   { name: 'confirmations', mode: 'included' },
   { name: 'tab-lifecycle', mode: 'included', when: { backends: ['extension'] } },
-  { name: 'sites', mode: 'included' },
+  { name: 'sites', mode: 'lookup', description: 'the site-command corpus: search, enable as tools, and freeze flows into tools' },
   { name: 'js-tool', mode: 'model' },
   { name: 'api-reference', mode: 'model', description: 'the whole object model, generated from its TypeScript declarations' },
   { name: 'errors', mode: 'lookup', description: 'error code families and what to do for each' },

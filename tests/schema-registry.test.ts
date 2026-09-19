@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { argsToShape, coerceArgs, projectArgs, CLI_ONLY_ARGS, deCli, projectedArgName, restoreArgNames } from '../src/sites/schema.js';
 import { SiteRegistry } from '../src/sites/registry.js';
+import { resolveTimeoutMs, DEFAULT_TIMEOUT_MS } from '../src/sites/executor.js';
 import { z } from 'zod';
 
 describe('schema', () => {
@@ -80,5 +81,15 @@ describe('site registry', () => {
       expect((await r.resolve('hackernews', 'top') as { source?: string }).source).toBe('builtin'); // siblings untouched
     } finally { r.remove('hackernews', 'zz-probe'); }
     await expect(r.resolve('hackernews', 'zz-probe')).rejects.toMatchObject({ code: 'unknown_command' });
+  });
+});
+
+describe('site command timeout is runtime-managed', () => {
+  it('honors the command declared default (regression: slow logins/deep-research must not be capped at 60s)', () => {
+    const login = [{ name: 'timeout', type: 'int', default: 300 }];
+    expect(resolveTimeoutMs(login, undefined, undefined)).toBe(300_000); // declared default wins over runtime default
+    expect(resolveTimeoutMs(login, 600, undefined)).toBe(600_000);       // explicit (js) wins over declared
+    expect(resolveTimeoutMs([], undefined, undefined)).toBe(DEFAULT_TIMEOUT_MS); // no declaration → runtime default
+    expect(resolveTimeoutMs([], undefined, 5_000)).toBe(5_000);          // opts default when provided
   });
 });

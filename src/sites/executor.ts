@@ -36,6 +36,18 @@ export interface CommandRunError {
 
 export const DEFAULT_TIMEOUT_MS = 60_000;
 
+/**
+ * Resolve the wall-clock for a site command. Timeout is runtime-managed (the CLI `timeout` arg is not exposed to the
+ * agent). Precedence: explicit value (js escape hatch) → the command's own declared default (logins/deep-research
+ * legitimately need minutes) → the runtime default. The client can always cancel via MCP.
+ */
+export function resolveTimeoutMs(cmdArgs: CliCommand['args'], explicit: unknown, optsTimeoutMs?: number): number {
+  const declared = cmdArgs.find((a) => a.name === 'timeout')?.default;
+  if (typeof explicit === 'number') return explicit * 1000;
+  if (typeof declared === 'number') return declared * 1000;
+  return optsTimeoutMs ?? DEFAULT_TIMEOUT_MS;
+}
+
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: NodeJS.Timeout;
   const t = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`), { code: 'TIMEOUT' })), ms); });
@@ -63,7 +75,7 @@ export async function runSiteCommand(
     const userArgs = declaresTimeout ? rawArgs : rest;
     const args = coerceArgs(cmd.args, userArgs);
     cmd.validateArgs?.(args);
-    const timeoutMs = typeof timeout === 'number' ? timeout * 1000 : (opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+    const timeoutMs = resolveTimeoutMs(cmd.args, timeout, opts.timeoutMs);
 
     let result: unknown;
     if (!cmd.browser) {

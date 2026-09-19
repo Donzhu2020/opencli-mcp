@@ -19,7 +19,8 @@
     "smoke": "node scripts/smoke.mjs --dist",
     "smoke:browser": "node scripts/smoke-browser.mjs",
     "prepare": "npm run build",
-    "check": "npm run typecheck && npm run build && npm test"
+    "check": "npm run typecheck && npm run build && npm test",
+    "pack:store": "npm run build && node scripts/pack-store-extension.mjs"
   },
   "files": [
     "dist/",

@@ -4,3 +4,4 @@ extension/dist/
 *.log
 .DS_Store
 coverage/
+opencli-mcp-extension-store-*.zip

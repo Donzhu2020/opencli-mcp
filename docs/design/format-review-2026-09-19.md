@@ -1,59 +1,64 @@
-# Output-format & interaction review (owner: "返回 JSON / 错误码 / 格式交互细节，深入想一下")
+# Output-format & interaction review — agent-friendly first (owner: "重新思考，一定要 Agent 友好")
 
-What the agent actually reads back from every tool: the JSON text, the error envelope, the act/observe shapes. Goal:
-token efficiency, consistency, agent-readability. Ranked by impact (token cost × call frequency). Grounded in code.
+Re-done with agent-friendliness as the primary lens, token-efficiency second. The question is not "what's smallest" but
+"what lets the agent decide its next step reliably, with one consistent pattern." That flips one of my first-pass calls.
 
-## 1. `tab_act` returns ~13 telemetry fields; the model needs ~3 (highest impact — act is the hottest tool)
-`src/protocol.ts:113` (ActResult) → surfaced via `tab_act` `ok({ tab, action, target, ...r, ok:true })` (`server.ts`).
-Every action returns: `kind, ref, matches_n, visible_n, match_level, point{x,y}, method, hit, tag, waitedMs, elapsedMs,
-timings{resolveMs,actionMs,settleMs}, selector, ok` + `action, target`. The model acts on almost none of it:
-- `match_level` is **hardcoded `'exact'`** everywhere (one engine) — a constant, pure noise on every act.
-- `point`, `method`, `hit`, `tag`, `waitedMs`, `elapsedMs`, `timings`, `visible_n`, `selector` are debug/telemetry.
-- The model needs: did it work (already the protocol `isError`), `matches_n` **only when >1** (ambiguity), and a
-  minted `ref` when relevant.
-**Recommendation:** return a lean act result to the model — `{ action, ...(matches_n>1 && {matches_n}), ...(ref && {ref}) }`
-(+ `navigated`/`url` when it navigated). Keep the full telemetry only in the trace (tools_compile) / structuredContent,
-not in the model text. Biggest single token win.
+## First principle: the agent reads the `content` text
+Whatever the model acts on is the `content` block. Protocol metadata (`isError`, `structuredContent`) is rendered by
+the client and may or may not reach the model prominently. So **the signal the agent needs must be IN the content, in a
+shape that is identical across every tool.** Consistency and in-band signal beat terseness.
 
-## 2. All model-facing JSON is pretty-printed (indent 2) — ~15-30% wasted tokens everywhere
-`safeStringify(v, limit) → JSON.stringify(v, …, 2)` (`js-session.ts:174`), used by `ok()` (`server.ts:48`), `fail()`
-(`:55`), the `js` value (`:208`), site values. Indentation is for humans; the model pays for the whitespace on every
-result. **Recommendation:** serialize model-facing text as **compact** JSON (no indent). Keep indent only for the
-human-facing resources (`opencli://…`). Cheap, global, safe.
+## 1. One result envelope, everywhere (the top agent-friendly win)
+Today there are four success shapes: typed tools → bare object; site commands → `{ok:true,site,name,value|rows,elapsedMs}`
+(`executor.ts:20`); `js` → raw value; errors → `{ok:false,error:{…}}`. An agent has to learn four patterns.
+**Make it one:** every result is `{ ok: true, …data }` or `{ ok: false, error: { code, message, hint?, …data } }`.
+- **Keep `ok` in-band** (revising my first pass, which said drop it). `ok` is the agent's reliable inline success signal;
+  relying only on the protocol `isError` is less agent-friendly because the model reads the text, not the envelope flag.
+  Mirror it to `isError` too, but the in-band `ok` stays.
+- Uniform shape means one branch: `if (!r.ok) handle(r.error.code)`. Same for typed tools, site commands, and js.
 
-## 3. Typed tools double-send the payload: `content` text + `structuredContent` (same object)
-`ok()` sets both (`server.ts:50-51`); `fail()` too (`:55`). The `js` tool sends **text only** (`:203-212`) — so the
-surface is already inconsistent. We removed output schemas in the over-engineering pass, so `structuredContent` is no
-longer advertised/validated; a model client reads `content`. Sending both risks 2× tokens if the client forwards
-structuredContent into the model context. **Recommendation:** pick one model channel. Either drop `structuredContent`
-from results (rely on `content`, matching the `js` tool), or keep `structuredContent` and make `content` a short
-pointer. Simplest + consistent: drop `structuredContent`, keep compact `content`.
+## 2. `js` errors must carry the branchable envelope, not a stack string (agent-friendly gap)
+`js` on error returns `Error: <name>: <message>\n<stack>` as text (`server.ts:209`). An agent driving via `js` therefore
+**cannot branch on `error.code`** the way it can everywhere else — the code/hint are lost in a string. **Fix:** when the
+thrown error is an `ActionError`, surface `{ ok:false, error:{ code, message, hint, …data } }` (same envelope as #1);
+keep the stack only as an extra field. This closes the biggest consistency gap for the power-user surface.
 
-## 4. Success has no consistent shape, and `ok:true/false` duplicates the protocol's `isError`
-- typed tools → bare object (`{tab,url,title,state,…}`)
-- site commands → `{ ok:true, site, name, value|rows, columns?, elapsedMs }` (`executor.ts:20-27`)
-- `js` → the raw value
-- errors → `{ ok:false, error:{code,message,hint?,…} }` + `isError:true`
-So the model sees four success shapes, and the in-payload `ok` restates `isError` (the model already knows success from
-the protocol). **Recommendation:** (a) drop the `ok` field from payloads — branch on `isError` (keep the rich
-`error:{code,…}` object, that's the useful part); (b) site results: return the data (`rows`/`value`) directly, drop the
-`site`/`name`/`elapsedMs` bookkeeping from model text (the model called it; elapsed is rarely actionable) — keep
-`columns` as a header if useful. Uniform "success = the data, failure = {error}" everywhere.
+## 3. Act results: keep the signal that changes the next move, drop telemetry (agent-friendly = signal, not noise)
+`tab_act` returns ~13 fields (`protocol.ts:113`). Judged by "does it change what the agent does next":
+- **Keep:** `ok`; `navigated` + `url` (the agent MUST know the page changed → re-observe); `matches_n` **when >1**
+  (ambiguity to resolve); fill/check semantics (`verified`, `actual`, `changed`) — the agent learns if the input took;
+  a minted `ref`.
+- **Drop from the model view (keep in the trace for tools_compile):** `match_level` (constant `'exact'` — a lie of
+  choice, pure noise), `point`, `method`, `hit`, `tag`, `visible_n`, `waitedMs`, `elapsedMs`, `timings`, `selector`.
+These are debug telemetry; they don't inform the agent and they crowd out the fields that do. Leaner is *more* readable.
 
-## 5. Error envelope is good; keep it — small tightening only
-`{ code, message, hint?, …data }` with lowercase families (now unified) is the right shape; branchable, actionable.
-Minor: ensure every thrown error carries a `hint` where an action is possible; `retryable` only where it means
-something. No structural change.
+## 4. Actionable errors are the highest-leverage agent-friendly feature — strengthen, don't just keep
+The whole point of the error envelope is self-correction. Audit every error for three things the agent needs:
+- a **branchable `code`** (done — one lowercase vocabulary now),
+- a **`hint` that names the next action** ("observe again for fresh refs", "scope with `within`", "call docs_get …"),
+- the **structured data to act on** (`candidates` for `selector_ambiguous`, `available` for `option_not_found`,
+  `failed`/`expect`/`state` for `expectation_failed`).
+Gap: not every thrown error carries a `hint`. Sweep the throw sites so an agent always gets "what to do next," not just
+"what went wrong." This does more for agent success than any token trim.
 
-## 6. Lower-impact / keep
-- `observe`: `{url,title,state,diff?,changed?}` is lean; the "no change since last observe" sentence is fine (terse).
-- `js` first call dumps the full api-reference + js-tool doc (~7 KB) once — a real one-time cost but it is discovery;
-  keep (could trim the reference later).
-- images already split into their own content block (correct).
+## 5. Token hygiene — real, and it does NOT hurt agent-friendliness
+- **Compact JSON for model-facing text.** `safeStringify` pretty-prints (indent 2, `js-session.ts:174`); an LLM parses
+  compact JSON equally well, so this is a free 15-30% saving on every result. Exception: the `observe` accessibility
+  tree is already bespoke agent-optimized text (indentation there is structure) — leave it alone.
+- **Stop double-sending `content` + `structuredContent`.** With output schemas removed, `structuredContent` is
+  unadvertised and the agent reads `content`; the `js` tool is already text-only. Keep the compact `content` (the agent
+  channel), drop the duplicate. Neutral for the agent, removes a 2× risk.
 
-## Suggested order (all are safe, gate-verifiable; no real-Chrome needed)
-1. Lean `tab_act` result (#1) — biggest win.
-2. Compact model-facing JSON (#2).
-3. One model channel: drop `structuredContent`, keep compact `content` (#3), unify with `js`.
-4. Uniform success/`isError`, lean site results (#4).
-5. Error hints tightening (#5) — as encountered.
+## 6. Minor consistency (agent-friendly polish)
+- Field casing is mixed (`matches_n` snake vs `elapsedMs` camel). One convention reads more predictably; low priority.
+- Keep the `observe` diff format (`~`/`+`/`removed: e3–e5`) — it is already compact and scannable; agent-friendly.
+
+## Revised order (agent-friendly first)
+1. One envelope everywhere + keep in-band `ok` (#1).
+2. `js` errors emit the branchable envelope (#2).
+3. Lean, signal-only act results (#3).
+4. Error-hint sweep — every error says what to do next (#4).
+5. Compact model-facing JSON + drop structuredContent double-send (#5).
+
+All safe, gate-verifiable, no real Chrome. The through-line: **one predictable shape + always-actionable errors + only
+the fields the agent acts on.** That is the agent-friendly optimization; the token savings come along for free.

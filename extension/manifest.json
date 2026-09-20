@@ -3,7 +3,7 @@
   "name": "opencli-mcp",
   "version": "0.0.9",
   "description": "Browser runtime for opencli-mcp: drives your logged-in Chrome for MCP agents via a Chrome-spawned native host.",
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvISJt0o1dfQCf9AUsuAds3Qn3gEA3b27IWs6X+6bhI4ywX+7rk6ywimd+PA7TH1+7ldMLSSbxnIHg4GNrPs0F2JvPSB3owGUsoqYCMnl9TmNXFcw/MUf8fOSJJ921svzgrKqYGlVtoogBenGNAOy5q3tyt17DyLeargZ1OdWYoVQ4EojSbR7A1j6Lyy9ay5mhx0G0wyyXbMduhHjDnjh0X4hXyFmAiBAo7cGH7n3Gw8bLHzE+PUs57Lrg/hKg3r/doS3WdogtgX0V/NiYxg/57hHfwDP3BY4nkHhMXm2Gdq/z8lRwz7o/e3CW1uL8+TJmK6RzDiMhNjJye9jzvAFtwIDAQAB",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1DKzfAqudbl9AylDyPDJtv4/Uf0DsfYtNmkB42Drff0IJVZ0pRGznikRyz3gNpSSairFyg50pWtuh0EKM/QsU1VrTlHycY529ho8+xMLFO64w3OolId18F73YQ4wRFEo3ESTYLLKVPRrK23dewElkVqtl0u3a63tm6YFkxUxzlS3l6xLMFoSId135BNdVLqHUZe9s/SGE0nD44sDMoNmkJk3qw+oUg65LH+69uc80PtSsXz9uiU6Ma77t2UG42Szvm5HfEDlWfX0NMM042emU8gZ3Id77DKe4195LZs/uEolqwyL12WsUkXcXyhCF7iQ09H/Ye8I6D6SqiEklX1S8QIDAQAB",
   "permissions": [
     "nativeMessaging",
     "debugger",

@@ -238,6 +238,12 @@ function intersectsViewport(el: Element): boolean {
   return false;
 }
 const REF_LINE = /^(\s*)-\s.*\[ref=(e\d+|f\d+e\d+)\](:.*)?$/;
+/** Trim noise from a snapshot line: long URLs (google redirect chains etc.) and very long quoted text. */
+function capLine(s: string): string {
+  return s
+    .replace(/(https?:\/\/[^\s"')\]]+)/g, (u) => (u.length > 72 ? u.slice(0, 69) + '…' : u))
+    .replace(/"([^"]{200,})"/g, (_m, t: string) => '"' + t.slice(0, 197) + '…"');
+}
 export function aria(args: AriaArgs = {}): string {
   const i = injected();
   const raw: string = i.ariaSnapshot(document.body, { mode: 'ai' });
@@ -252,19 +258,26 @@ export function aria(args: AriaArgs = {}): string {
     if (dropBelow !== null) { if (indent > dropBelow) continue; dropBelow = null; }
     const m = REF_LINE.exec(line);
     if (!m) { out.push(line); continue; }
-    const entry = info.get(m[2]);
-    const el = entry?.element;
+    const el = info.get(m[2])?.element;
+    if (!el) {
+      // An unmapped Playwright ref lives in a DIFFERENT numbering space than our stable eN and can't be resolved by act
+      // (aria-ref=eN → refToEl only holds stable refs). Emitting it raw made e2/e13 collide across elements — so we
+      // never emit a ref we can't back with an element. Keep the node, drop the ref.
+      out.push(line.replace(/\s*\[ref=(?:e\d+|f\d+e\d+)\]/, ''));
+      continue;
+    }
     // pin the line to the element's stable ref (identity is independent of the viewport filter below)
-    const ref = el ? stableRefOf(el) : m[2];
-    const rline = ref === m[2] ? line : line.replace('[ref=' + m[2] + ']', '[ref=' + ref + ']');
-    if (args.viewport && el && !intersectsViewport(el)) { dropBelow = indent; continue; }
-    if (el && m[3] && isCredentialField(el)) { out.push(rline.slice(0, rline.length - m[3].length) + ': <redacted>'); continue; }
+    let rline = line.replace('[ref=' + m[2] + ']', '[ref=' + stableRefOf(el) + ']');
+    if (args.viewport && !intersectsViewport(el)) { dropBelow = indent; continue; }
+    if (m[3] && isCredentialField(el)) { out.push(rline.slice(0, rline.length - m[3].length) + ': <redacted>'); continue; }
+    // Drop a value that just repeats the accessible name (Playwright renders `textbox "X": X` → the reported "X X" dup).
+    if (m[3]) { const val = m[3].replace(/^:\s*/, '').trim(); if (val && rline.includes('"' + val + '"')) rline = rline.slice(0, rline.length - m[3].length); }
     out.push(rline);
   }
   // the plugin always ends its state with the focused element; ours names the focused ref so the next action can target it
   const active = document.activeElement;
   const focusRef = active && active !== document.body ? ariaRefOf(active) : null;
-  return out.join('\n') + (focusRef ? `\nFocused: [ref=${focusRef}]` : '');
+  return out.map(capLine).join('\n') + (focusRef ? `\nFocused: [ref=${focusRef}]` : '');
 }
 
 const describe = (el: Element, i: number): FindEntry => {

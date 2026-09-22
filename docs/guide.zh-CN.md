@@ -61,58 +61,40 @@ Chrome ──connectNative──► opencli-mcp host   （Native Messaging ⇄ �
 
 ## 4. 安装
 
-### 4.1 从源码
+### 4.1 推荐：npm + Chrome Web Store
+
+需要 Node.js >= 22。先启动一次 Chrome，再安装本地 host：
 
 ```bash
-git clone https://github.com/jackwener/opencli-mcp && cd opencli-mcp
-npm install && npm run build
-node dist/src/main.js setup            # 一条命令：写清单，检测到 Claude Code / Codex 就自动注册，其它客户端打印通用配置，
-                                       # 打开 chrome://extensions 并把扩展路径复制到剪贴板，等扩展连上后报绿
+npm install -g opencli-mcp
+opencli-mcp install --extension-id lnaoghmfcdnbhgcihkakfobckmfhllkg
 ```
 
-唯一要手点的一步：在打开的页面里开「开发者模式」→「加载已解压的扩展程序」→ 粘贴路径。分步等价：`install` → `extension-path` → 加载 → `doctor`。
+然后从 [Chrome Web Store 安装 opencli-mcp](https://chromewebstore.google.com/detail/opencli-mcp/lnaoghmfcdnbhgcihkakfobckmfhllkg)。如果扩展已经安装，在 `chrome://extensions` 中停用再启用，让它重新连接 host。
 
-可选 `npm link`，之后直接用 `opencli-mcp` 命令。
+商店版 extension ID 是 `lnaoghmfcdnbhgcihkakfobckmfhllkg`，当前源码与 npm 0.0.10 使用相同 ID。当前 `setup` 仍引导加载 unpacked 扩展，因此商店版请按以上步骤安装，无需开启 Developer mode。
 
-### 4.2 从 Release 的 tarball
+连接 MCP client 后运行 `opencli-mcp doctor`，确认 `ok: true` 和 `host.extensionConnected: true`。完整快速上手见 [README](../README.md#quick-start)。
 
-```bash
-npm install -g ./opencli-mcp-0.0.1.tgz
-opencli-mcp setup
-```
+### 4.2 从源码或 Release 安装
 
-Release 也附扩展 zip（`opencli-mcp-extension-<版本>.zip`）：解压到任意目录「加载已解压」即可。扩展 ID 由 manifest 里项目固定的公钥决定（`bpjiolaihhdecffckoljgckkcbglbpih`），在任何机器上都一样，Native Messaging 清单只认这个 ID。
-
-### 4.3 命令一览
-
-```
-opencli-mcp                 stdio MCP（代理到 Chrome 拉起的 host；host 不在则内嵌 runtime）
-opencli-mcp host --native   Native Messaging host（由 Chrome 拉起，不要手动跑）
-opencli-mcp serve [--port]  HTTP MCP + 内嵌 runtime（开发用）
-opencli-mcp setup [--no-open] [--wait 秒]   首次安装一条龙
-opencli-mcp install [--browsers chrome,chromium,…] [--user-data-dir /a,/b] [--extension-id …]
-opencli-mcp uninstall
-opencli-mcp doctor
-opencli-mcp extension-path
-opencli-mcp version
-```
-
-自定义 profile：Chrome 按 user data dir 找用户级 Native Messaging 清单。用 `--user-data-dir=/some/dir` 启动的 Chrome（如 Chrome for Testing）要 `opencli-mcp install --user-data-dir /some/dir`；`install` 会自动识别当前正在运行的自定义 profile。
-
-### 4.4 更新扩展后
-
-加载的是"已解压"扩展，Chrome 重启不会重新读取 dist：改了扩展代码后要在 `chrome://extensions` 点"重新加载"（或 `chrome.runtime.reload()`），再重启 host。
+源码开发、unpacked 扩展、Release tarball、自定义 browser profile 和连接排障统一见 [安装与配置](setup.md)。
 
 ## 5. 接入方式
 
 **Claude Code**
 ```bash
-claude mcp add opencli-mcp -- node /path/to/opencli-mcp/dist/src/main.js
+claude mcp add -s user opencli-mcp -- opencli-mcp
+```
+
+**Codex**
+```bash
+codex mcp add opencli-mcp -- opencli-mcp
 ```
 
 **Cursor / Claude Desktop / 任何 stdio 客户端**
 ```json
-{ "mcpServers": { "opencli-mcp": { "command": "node", "args": ["/path/to/opencli-mcp/dist/src/main.js"] } } }
+{ "mcpServers": { "opencli-mcp": { "command": "opencli-mcp" } } }
 ```
 
 **云端 agent（Streamable HTTP）**：host 监听 `http://127.0.0.1:19991/mcp`，请求头 `Authorization: Bearer $(cat ~/.opencli-mcp/token)`。通过带认证的隧道暴露（`ssh -R`、cloudflared、带 auth 的 ngrok），把 agent 的 MCP connector 指过去。不要裸露端口。

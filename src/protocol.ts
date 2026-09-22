@@ -12,9 +12,9 @@
  */
 
 export type Action =
-  // page control (superset of OpenCLI's bridge actions so the page semantics port cleanly)
+  // page control
   | 'exec' | 'navigate' | 'tabs' | 'cookies' | 'screenshot'
-  | 'set-file-input' | 'insert-text' | 'network-capture-start' | 'network-capture-read'
+  | 'network-capture-start' | 'network-capture-read'
   | 'wait-download' | 'cdp' | 'frames'
   // session & tab-lifecycle (Codex-style: name, claim, finalize)
   | 'session-name' | 'session-finalize' | 'user-tabs' | 'claim' | 'mark'
@@ -43,7 +43,7 @@ export interface Command {
   /** exec: evaluate in the page's main world (default) or in the engine's isolated world */
   world?: 'main' | 'engine';
   url?: string;
-  op?: 'list' | 'new' | 'close' | 'select';
+  op?: 'list' | 'new' | 'close';
   dialogOp?: 'get' | 'accept' | 'dismiss';
   historyOp?: 'reload' | 'back' | 'forward';
   /** console read: cursor paging */
@@ -51,15 +51,12 @@ export interface Command {
   limit?: number;
   levels?: string[];
   filter?: string;
-  index?: number;
   domain?: string;
   format?: 'png' | 'jpeg';
   quality?: number;
   fullPage?: boolean;
   width?: number;
   height?: number;
-  files?: string[];
-  selector?: string;
   text?: string;
   pattern?: string;
   timeoutMs?: number;

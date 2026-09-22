@@ -281,7 +281,7 @@ async function attachNow(tabId: number, aggressiveRetry: boolean): Promise<void>
     } catch (e: unknown) {
       lastError = e instanceof Error ? e.message : String(e);
       if (attempt < MAX_ATTACH_RETRIES) {
-        console.warn(`[opencli] attach attempt ${attempt}/${MAX_ATTACH_RETRIES} failed: ${lastError}, retrying in ${RETRY_DELAY_MS}ms...`);
+        console.warn(`[opencli-mcp] attach attempt ${attempt}/${MAX_ATTACH_RETRIES} failed: ${lastError}, retrying in ${RETRY_DELAY_MS}ms...`);
         await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
         // Re-verify tab URL before retrying (it may have changed)
         try {
@@ -309,7 +309,7 @@ async function attachNow(tabId: number, aggressiveRetry: boolean): Promise<void>
       finalUrl = tab.url ?? 'undefined';
       finalWindowId = String(tab.windowId);
     } catch { /* tab gone */ }
-    console.warn(`[opencli] attach failed for tab ${tabId}: url=${finalUrl}, windowId=${finalWindowId}, error=${lastError}`);
+    console.warn(`[opencli-mcp] attach failed for tab ${tabId}: url=${finalUrl}, windowId=${finalWindowId}, error=${lastError}`);
 
     const hint = lastError.includes('chrome-extension://')
       ? '. Tip: another Chrome extension may be interfering — try disabling other extensions'
@@ -357,11 +357,8 @@ export async function evaluate(
   aggressiveRetry: boolean = false,
   timeoutMs: number = CDP_COMMAND_TIMEOUT_MS,
 ): Promise<unknown> {
-  // No retry loop here: failures carry a machine-readable errorCode (see
-  // classifyExtensionError in background.ts) and the CLI decides whether a
-  // NEW logical attempt is safe. ensureAttached still does its own local
-  // attach retries; a debugger error mid-evaluate invalidates the attach
-  // cache so the next attempt re-attaches.
+  // The host controls command retries. ensureAttached retries attachment locally;
+  // a debugger error mid-evaluate invalidates the cache for the next attempt.
   try {
     await ensureAttached(tabId, aggressiveRetry);
 
@@ -390,8 +387,6 @@ export async function evaluate(
     throw e;
   }
 }
-
-export const evaluateAsync = evaluate;
 
 /**
  * Capture a screenshot via CDP Page.captureScreenshot.
@@ -456,82 +451,6 @@ export async function screenshot(
     if (needsOverride) {
       await sendDebuggerCommand({ tabId }, 'Emulation.clearDeviceMetricsOverride').catch(() => {});
     }
-  }
-}
-
-/**
- * Set local file paths on a file input element via CDP DOM.setFileInputFiles.
- * This bypasses the need to send large base64 payloads through the message channel —
- * Chrome reads the files directly from the local filesystem.
- *
- * @param tabId - Target tab ID
- * @param files - Array of absolute local file paths
- * @param selector - CSS selector to find the file input (optional, defaults to first file input)
- */
-export async function setFileInputFiles(
-  tabId: number,
-  files: string[],
-  selector?: string,
-): Promise<void> {
-  await ensureAttached(tabId);
-
-  // Enable DOM + Page domains. Page is needed for file-chooser interception.
-  await sendDebuggerCommand({ tabId }, 'DOM.enable');
-  await sendDebuggerCommand({ tabId }, 'Page.enable');
-
-  // Find the file input element (used to trigger the chooser).
-  const query = selector || 'input[type="file"]';
-  const found = await sendDebuggerCommand({ tabId }, 'Runtime.evaluate', {
-    expression: `!!document.querySelector(${JSON.stringify(query)})`,
-    returnByValue: true,
-  }) as { result?: { value?: boolean } };
-  if (!found.result?.value) {
-    throw new Error(`No element found matching selector: ${query}`);
-  }
-
-  // Chrome rejects DOM.setFileInputFiles with a plain nodeId/backendNodeId when
-  // the debugger is attached via chrome.debugger (crbug 928255, "-32000 Not
-  // allowed"). The only accepted path is file-chooser interception: enable it,
-  // programmatically open the chooser, and use the backendNodeId that the
-  // intercepted Page.fileChooserOpened event hands back. See issue #2108.
-  await sendDebuggerCommand({ tabId }, 'Page.setInterceptFileChooserDialog', { enabled: true });
-  try {
-    const backendNodeId = await new Promise<number>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        cleanup();
-        reject(new Error('Page.fileChooserOpened not received within 5s — the input may not have opened a file chooser'));
-      }, 5000);
-      const listener = (source: chrome.debugger.Debuggee, method: string, params: unknown) => {
-        if (source.tabId !== tabId || method !== 'Page.fileChooserOpened') return;
-        // This is our chooser event — settle now either way, so a malformed
-        // event rejects immediately instead of hanging until the 5s timeout.
-        cleanup();
-        const backend = (params as { backendNodeId?: number })?.backendNodeId;
-        if (typeof backend === 'number') resolve(backend);
-        else reject(new Error('Page.fileChooserOpened carried no backendNodeId'));
-      };
-      const cleanup = () => {
-        clearTimeout(timer);
-        chrome.debugger.onEvent.removeListener(listener);
-      };
-      chrome.debugger.onEvent.addListener(listener);
-      // Open the chooser programmatically — interception suppresses the native
-      // dialog and fires Page.fileChooserOpened instead. Works for hidden inputs.
-      void sendDebuggerCommand({ tabId }, 'Runtime.evaluate', {
-        expression: `document.querySelector(${JSON.stringify(query)}).click()`,
-      }).catch((err) => {
-        cleanup();
-        reject(err instanceof Error ? err : new Error(String(err)));
-      });
-    });
-
-    // backendNodeId from the intercepted chooser IS accepted by Chrome.
-    await sendDebuggerCommand({ tabId }, 'DOM.setFileInputFiles', {
-      files,
-      backendNodeId,
-    });
-  } finally {
-    await sendDebuggerCommand({ tabId }, 'Page.setInterceptFileChooserDialog', { enabled: false }).catch(() => {});
   }
 }
 
@@ -726,19 +645,6 @@ export async function sendCommandInFrameTarget(
 ): Promise<unknown> {
   const target = await frameDebuggee(tabId, frameId, aggressiveRetry);
   return sendDebuggerCommand(target, method, params, timeoutMs);
-}
-
-export async function insertText(
-  tabId: number,
-  text: string,
-): Promise<void> {
-  await ensureAttached(tabId);
-  await sendDebuggerCommand({ tabId }, 'Input.insertText', { text });
-}
-
-export async function getFrameTree(tabId: number): Promise<any> {
-  await ensureAttached(tabId);
-  return sendDebuggerCommand({ tabId }, 'Page.getFrameTree');
 }
 
 export interface FrameEntry { index: number; frameId: string; url: string; name: string; crossOrigin: boolean; /** lives in its own renderer process (site isolation) */ oopif: boolean }

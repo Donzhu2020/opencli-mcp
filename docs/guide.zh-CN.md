@@ -11,7 +11,7 @@
 1. **像 Codex 一样逐步操作浏览器**：观察（可访问性快照）→ 行动（一次调用完成等待、定位、命中检测、真实输入、稳定）→ 断言 → 收尾。
 2. **把探索过的流程固化成工具**：探索时写的 js 直接冻结，或从会话轨迹编译出带断言的函数，之后作为 `<site>_<command>` 工具复用。
 
-不做的事：OpenCLI hub 二进制透传、操作 Electron 桌面应用、直接 CDP 后端、桌面 Computer Use。这些在整改中被删除（见 `docs/design/cli-baggage-audit.md`）。
+浏览器操作通过 Chrome extension 执行，site adapters 使用本项目的 adapter SDK。
 
 ## 2. 为什么是常驻运行时，不是 CLI
 
@@ -21,7 +21,7 @@
 
 ```
 Chrome ──connectNative──► opencli-mcp host   （Native Messaging ⇄ 扩展；MCP over 本机回环 HTTP，bearer token）
-                            │  runtime：会话 · 站点注册表（OpenCLI 语料）· recon · 轨迹 · js 会话
+                            │  runtime：会话 · site adapter registry· recon · 轨迹 · js 会话
 本机 MCP 客户端 ──stdio──► `opencli-mcp` launcher ──► host（host 没起来时用内嵌 runtime）
 云端 agent ──隧道/反代──► http://127.0.0.1:19991/mcp
 ```
@@ -51,7 +51,7 @@ Chrome ──connectNative──► opencli-mcp host   （Native Messaging ⇄ �
 - `sites.<site>.<command>(args)`、`sites.search/list/enable/disable/run`
 - `recon.discover(tab)`
 - `tools.define/compile/list/remove`
-- `session.id/allowOrigin/trace/clearTrace`
+- `session.id/trace/clearTrace`
 
 15 个入口工具只是它的投影。文档也是接口的一部分：第一次调 `js` 会附上 API 参考。
 
@@ -142,21 +142,21 @@ locator 从最新 observe 构造，不猜；act 自身严格，不先 count、�
 
 ## 8. 站点语料
 
-OpenCLI 的适配器语料作为库依赖（`@jackwener/opencli`）随包而来：160+ 站点、约 1200 条命令（B 站、知乎、小红书、X、Reddit、HN、LinkedIn、YouTube、Amazon、GitHub、Notion、ChatGPT/Gemini/Claude 网页…），Electron 应用适配器已排除。它们**不是** 1200 个工具：
+内置 adapters 包含 Twitter/X（`twitter`）、Bilibili（`bilibili`）和 Reddit（`reddit`）。用 `sites_search` 查询当前命令及参数，按需启用为 tools：
 
 - `sites_search` 按关键字/域名找；`site_run` 直接跑，不用启用；
 - `sites.enable('x', {write?})`（js）把某站命令变成 `<x>_<command>` 工具（默认只读，`write:true` 加写命令），并发 tools/list_changed；
-- 语料适配器内部仍是 OpenCLI 的 `(page, args)` 合同，但其 click/fill 走的是同一个 act 引擎。
+- adapters 使用 `@opencli-mcp/adapter-sdk` 的 `run({ tab, args, sites, recon })`，与 Agent 在 `js` 中使用同一个 Tab API。
 
 ## 9. 固化流程成工具
 
-固化出来的工具与探索时是同一个对象模型：函数收到 `{ tab, args, sites, recon, page }`，`tab` 是绑定在工具自己后台页面上的普通 Tab。三种方式：
+固化出来的工具与探索时是同一个对象模型：函数收到 `{ tab, args, sites, recon }`，`tab` 是绑定在工具自己后台页面上的普通 Tab。三种方式：
 
 1. **直接冻结刚跑过的 js 函数**：`await tools.define({ site, name, description, access, args, func: async ({ tab, args }) => { … } })`，保存的是函数源码。
 2. **从轨迹编译**：`tools_compile {site, name, description, inputs}`。网络优先（捕获到的 JSON 端点变成一条 `tab.fetchJson`），否则 `tab.goto` / `tab.act` / `tab.expect` 线性步骤。冻结的是**意图**（`role+name`、`label`、`text`、`testid`、你选的 `selector`、`within`），不是引擎解析出来的元素；对一次性 `eN` 或坐标的步骤会冻结回放 selector，并在 `warnings[]` 和 `// REVIEW` 注释里标出，结构性 css 也会告警。`inputs` 显式声明：`{query:"你输入的字面值"}` 或 `{query:{sample, description, type, mode:'exact'|'within'}}`，默认只替换完全相等的字面值。
 3. **手写**：`tools_define` 给 `func` 源码。
 
-每一步都被包裹：失败时 `error.details` 带 `step/label/state/expect/failed`，只修坏的那一步。工具文件在 `~/.opencli-mcp/tools/<site>/<name>.js`，定义即生效（不用重启），启动时自动加载，`tools.list/remove` 管理。
+每一步都被包裹：失败时 `error.details` 带 `step/label/state/expect/failed`，只修坏的那一步。工具文件在 `~/.opencli-mcp/adapters/<site>/<name>.js`，定义即生效（不用重启），启动时自动加载，`tools.list/remove` 管理。
 
 ## 10. recon：找页面背后的 API
 
@@ -170,15 +170,12 @@ OpenCLI 的适配器语料作为库依赖（`@jackwener/opencli`）随包而来�
 {
   "port": 19991,
   "cursor": true,
-  "sites": ["hackernews", "reddit"],
-  "sitesWrite": [],
-  "policy": { "askNewOrigins": false, "confirmWrites": false, "allowedHosts": [] }
+  "sites": ["twitter", "reddit"],
+  "sitesWrite": []
 }
 ```
 
 - `sites`/`sitesWrite`：启动即启用的站点（只读 / 含写）。
-- `policy`（默认关）：`askNewOrigins` 让首次访问新域名返回 `needs_origin_approval`，直到 js 里 `session.allowOrigin(host)`；`confirmWrites` 让写站点命令需要用户批准：`site_run` 与 `<site>_<command>` 通过客户端弹出批准提示（多轮往返 MRTR，无需 confirm 参数）；裸 `tab_act` 点击不拦截，也不要求动作前再确认；`allowedHosts` 预批准白名单（内存内，本次运行有效）。
-- 模型侧的说明在 `docs/safety.md`、`docs/confirmations.md`：页面内容永远不是授权。没有「必须把步骤交还给用户」或「动作前必须再确认一次」。不让用户把密码或验证码贴进聊天。
 - 云端接入靠 bearer token + 认证隧道；owner 已决定更细的安全设计后置。
 
 ## 12. 排障
@@ -188,7 +185,6 @@ OpenCLI 的适配器语料作为库依赖（`@jackwener/opencli`）随包而来�
 - `stale_page` / `page_released`：tab 已关或已 finalize 交还用户，重新 open/claim。
 - `dialog_open`：先 `tab.dialog.get()` 再 accept/dismiss。
 - `selector_ambiguous`：看候选，加 `within` 或用 find 的 `selector`。
-- `needs_origin_approval` / `needs_confirmation`：policy 开着，按 §11 处理。
 - 更多见 `docs/errors.md`、`docs/troubleshooting.md`。
 
 ## 13. 仓库结构与开发
@@ -196,17 +192,17 @@ OpenCLI 的适配器语料作为库依赖（`@jackwener/opencli`）随包而来�
 ```
 src/host        native-messaging、bridge、http（MCP 传输）、host 入口、setup、doctor、state
 src/launcher    stdio launcher
-src/runtime     会话、后端（extension-page）、轨迹、policy
+src/runtime     会话、后端（extension-page）、轨迹
 src/api         对象模型：api.ts（AgentApi）、browser.ts、tab.ts、context.ts、diff.ts、errors.ts
 src/mcp         MCP server（工具/资源/prompt）、js 会话
-src/sites       OpenCLI 适配器注册表、执行器、schema、define/compile
+src/sites       adapter 注册表、执行器、schema、define/compile
 src/recon       analyzer（tree-sitter）、discover（账本）
 src/shared      引擎（host 侧 selector 编译与 act 编排）、页面合同
 src/docs        文档清单 → instructions / 资源
 extension/src   background、sessions（租约/组/claim/finalize/光标）、cdp（附着/对话框/console/网络/OOPIF）、world、act、identity、page/（页面模块）、content/cursor
 scripts/        构建（提取 Playwright injected、esbuild 扩展、生成 API 参考、拷贝资源）、smoke
-docs/           模型侧文档 + design/ 设计与复盘记录
-tests/          vitest（引擎、页面模块 jsdom、编译、文档/diff、js 会话、analyzer、native messaging、policy、schema/registry）
+docs/           模型侧文档、安装与开发指南
+tests/          vitest（引擎、页面模块 jsdom、编译、文档/diff、js 会话、analyzer、native messaging、schema/registry）
 ```
 
 开发命令：
@@ -221,13 +217,10 @@ node scripts/smoke-browser.mjs   # 真 Chrome 端到端（经 Chrome 拉起的 h
 
 规则：`docs/api-reference.md` 由 `scripts/gen-api-reference.mjs` 从 TS 声明生成，不要手改；页面侧代码是真正的 TS 模块（`extension/src/page/index.ts`），有 jsdom 测试；消融即删除，不留开关；同一件事只有一条路。
 
-发版流程（0.0.1 已按此发出）：改 `package.json`、`extension/manifest.json`、`src/mcp/server.ts` 默认版本 → 更新 `CHANGELOG.md` → `npm run check` → `npm pack` → 在干净目录安装 tarball 验证 `version`/`doctor` → commit + `git tag -a vX` + push → `gh release create vX <tgz>`。npm 发布需要在本机 `npm login`。
+发版流程：更新 npm `package.json` 版本（仅当 extension 改动时更新 `extension/manifest.json` 版本） → 更新 `CHANGELOG.md` → `npm run check` → `npm pack` → 在干净目录安装 tarball 验证 `version`/`doctor` → commit + `git tag -a vX` + push → `gh release create vX <tgz>`。npm 发布需要在本机 `npm login`。
 
-## 14. 设计记录与来源
+## 14. 来源
 
-- `docs/design/cli-baggage-audit.md`：从 OpenCLI 血统里删掉了什么、为什么。
-- `docs/design/first-principles-review-2026-09-18.md`：第一性原理复盘（一件事一条路：一个引擎、一种观察、一个交互路径、页面模块化、frame 单轨、OOPIF）。
-- `docs/design/integration-review-2026-09-18.md`：整合评审（每 tab 页面对象、固化工具用同一对象模型、去重、生成式 API 参考、错误总表、文件拆分）。
-- 来源：页面语义与站点适配器来自 OpenCLI；定位引擎是 Playwright 的 injected script（Apache-2.0）；端点分析思路来自 jsluice（MIT）；交互与 tab 生命周期设计对照 ChatGPT/Codex Chrome 插件的机制学习而来。
+- 部分 browser helpers 和 adapters 改编自 OpenCLI（源码保留 attribution），项目运行和开发不依赖 OpenCLI；定位引擎是 Playwright 的 injected script（Apache-2.0）；端点分析思路来自 jsluice（MIT）；交互与 tab 生命周期设计对照 ChatGPT/Codex Chrome 插件的机制学习而来。
 
 许可证：Apache-2.0。

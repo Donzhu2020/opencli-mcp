@@ -17,7 +17,6 @@ interface AgentApi {
   };
   session: {
     id: string;
-    allowOrigin(host: string): { host: string; };
     trace(): Array<unknown>;
     clearTrace(): void;
   };
@@ -60,7 +59,7 @@ class Tab {
   act(opts: ActOptions): Promise<Record<string, unknown>>; // wait + act in one call at the runtime edge: locate → wait actionable → hit-test → real input → settle.
   webmcp: { // WebMCP: tools the page itself registers via navigator.modelContext (page-provided tool source).
     list(): Promise<Array<{ name: string; description?: string; inputSchema?: unknown; }>>;
-    call(name: string, input?: Record<string, unknown>, opts?: { confirm?: boolean; }): Promise<unknown>;
+    call(name: string, input?: Record<string, unknown>): Promise<unknown>;
   };
   expect(what: Expectation, opts?: { timeoutMs?: number; }): Promise<CheckResult>; // Assert what the page must show now (polled up to timeoutMs). Recorded in the trace so tools_compile emits it as a checkpoint.
   evaluate(js: string, opts?: { allowWrite?: boolean; frame?: number; }): Promise<unknown>; // Read-only page evaluation.

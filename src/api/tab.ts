@@ -4,7 +4,6 @@
  */
 import type { RuntimePage } from '../backends/page-types.js';
 import { ActionError } from './errors.js';
-import { Policy } from '../runtime/policy.js';
 import { ariaDiff } from './diff.js';
 import { targetToSelector, fallbackSelector } from '../shared/engine.js';
 import type { FindEntry, FindResult, ElementAtResult, Expectation, CheckResult } from '../shared/page-contract.js';
@@ -82,7 +81,6 @@ export class Tab {
 
   async goto(url: string, opts: { waitUntil?: 'load' | 'none'; settleMs?: number } = {}): Promise<{ url: string | null; title: string | null }> {
     if (!/^(https?:\/\/|data:text\/html)/i.test(url)) throw new ActionError('invalid_url', 'Only http(s) (or data:text/html) URLs can be opened', 'Pass an absolute http:// or https:// URL');
-    if (!url.startsWith('data:')) Policy.throwIfDenied(this.ctx.rt.policy.checkOrigin(url));
     return this.use(async (page) => {
       await page.goto(url, opts);
       this.ctx.state.trace.record({ kind: 'goto', url, page: this.id });
@@ -222,8 +220,7 @@ export class Tab {
       const r = await p.evaluate(`(async () => { const mc = navigator.modelContext || document.modelContext; if (!mc || typeof mc.getTools !== 'function') return []; const tools = await mc.getTools(); return (tools || []).map(t => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })); })()`);
       return Array.isArray(r) ? r as Array<{ name: string; description?: string; inputSchema?: unknown }> : [];
     }),
-    call: async (name: string, input: Record<string, unknown> = {}, opts: { confirm?: boolean } = {}): Promise<unknown> => this.use(async (p) => {
-      if (this.ctx.rt.policy.confirmWrites) Policy.throwIfDenied(this.ctx.rt.policy.checkWrite(`webmcp ${name}`, Boolean(opts.confirm)));
+    call: async (name: string, input: Record<string, unknown> = {}): Promise<unknown> => this.use(async (p) => {
       this.ctx.state.trace.record({ kind: 'note', text: `webmcp ${name}(${JSON.stringify(input).slice(0, 120)})`, page: this.id });
       return p.evaluateWithArgs(`(async () => { const mc = navigator.modelContext || document.modelContext; if (!mc) throw new Error('page exposes no modelContext'); if (typeof mc.executeTool === 'function') return await mc.executeTool(name, input); const tools = await mc.getTools(); const t = (tools || []).find(x => x.name === name); if (!t || typeof t.execute !== 'function') throw new Error('unknown page tool ' + name); return await t.execute(input); })()`, { name, input });
     }),

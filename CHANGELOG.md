@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Remove the unused OpenCLI CLI dependency tree, legacy page wrappers and CLI argument filtering; use the adapter SDK argument type throughout. Keep only runtime docs in the npm package, clean build output before compilation, and remove historical release artifacts, obsolete design drafts and scripts. Remove unused extension transport operations and error-code compatibility mapping; adapters emit native error codes.
+
+- Remove origin and write-approval policies. Site commands and WebMCP calls execute directly without confirmation prompts; remove policy configuration, `session.allowOrigin`, and confirmation arguments.
+
 ## 0.0.11 — 2026-09-23
 
 - Reject ambiguous browser actions and missing action values before execution. Return full snapshots by default, with diff available explicitly.

@@ -2,7 +2,7 @@
 /**
  * Command journal — the executor-side half of the transport's retry contract.
  *
- * The CLI retries a failed transport attempt with the SAME command id; this
+ * The host retries a failed transport attempt with the SAME command id; this
  * journal makes that retry safe by making execution idempotent per id:
  *
  * - a command currently executing attaches to the in-flight promise;
@@ -12,7 +12,7 @@
  *
  * Persisted in chrome.storage.session: survives service-worker restarts,
  * cleared when the browser exits — exactly the lifetime of "results a retry
- * might still ask for". When storage is unavailable (tests, very old Chrome)
+ * might still ask for". When storage is unavailable
  * the journal degrades to in-memory only.
  */
 

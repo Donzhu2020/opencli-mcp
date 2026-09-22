@@ -1,7 +1,7 @@
 /**
  * stdio launcher for local MCP hosts (Claude Code, Cursor, Codex, …).
  * If the Chrome-spawned host is running, proxy to it (shared browser runtime). Otherwise embed a
- * runtime in-process: site commands with strategy `public` work; browsing needs Chrome + the extension.
+ * runtime in-process: site commands with `browser: false` work; browsing needs Chrome + the extension.
  */
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { Server } from '@modelcontextprotocol/server';

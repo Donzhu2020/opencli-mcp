@@ -85,8 +85,6 @@ async function handleCommand(cmd: Command): Promise<Result> {
       case 'cookies': return await handleCookies(cmd);
       case 'screenshot': { const tabId = await sessions.resolveTab(s, cmd.page); return pageScoped(cmd.id, tabId, await executor.screenshot(tabId, { format: cmd.format, quality: cmd.quality, fullPage: cmd.fullPage, width: cmd.width, height: cmd.height })); }
       case 'cdp': return await handleCdp(cmd, s);
-      case 'set-file-input': { if (!cmd.files?.length) return { id: cmd.id, ok: false, error: 'Missing files' }; const tabId = await sessions.resolveTab(s, cmd.page); await executor.setFileInputFiles(tabId, cmd.files, cmd.selector); return pageScoped(cmd.id, tabId, { count: cmd.files.length }); }
-      case 'insert-text': { if (typeof cmd.text !== 'string') return { id: cmd.id, ok: false, error: 'Missing text' }; const tabId = await sessions.resolveTab(s, cmd.page); await executor.insertText(tabId, cmd.text); return pageScoped(cmd.id, tabId, { inserted: true }); }
       case 'frames': { const tabId = await sessions.resolveTab(s, cmd.page); return { id: cmd.id, ok: true, data: await executor.listFrames(tabId) }; }
       case 'network-capture-start': { const tabId = await sessions.resolveTab(s, cmd.page); await executor.startNetworkCapture(tabId, cmd.pattern); return pageScoped(cmd.id, tabId, { started: true }); }
       case 'network-capture-read': { const tabId = await sessions.resolveTab(s, cmd.page); return pageScoped(cmd.id, tabId, await executor.readNetworkCapture(tabId)); }
@@ -163,13 +161,13 @@ async function handleExec(cmd: Command, s: Session): Promise<Result> {
     if (!f) return { id: cmd.id, ok: false, error: `Frame index ${cmd.frameIndex} out of range (${frames.length})`, errorCode: 'frame_not_found' };
     return pageScoped(cmd.id, tabId, await evaluateMain(tabId, f.frameId, cmd.code, aggressive, commandTimeoutMs(cmd)));
   }
-  return pageScoped(cmd.id, tabId, await executor.evaluateAsync(tabId, cmd.code, aggressive, commandTimeoutMs(cmd)));
+  return pageScoped(cmd.id, tabId, await executor.evaluate(tabId, cmd.code, aggressive, commandTimeoutMs(cmd)));
 }
 
 /** True when the tab's committed document is Chrome's error page (blocked / DNS / refused), which the tabs API hides behind the requested URL. */
 async function isErrorDocument(tabId: number): Promise<string | null> {
   try {
-    const r = await executor.evaluateAsync(tabId, `document.documentURI`, false, 2_000);
+    const r = await executor.evaluate(tabId, `document.documentURI`, false, 2_000);
     const uri = typeof r === 'string' ? r : '';
     return uri.startsWith('chrome-error://') ? uri : null;
   } catch { return null; }
@@ -249,7 +247,6 @@ async function handleTabs(cmd: Command, s: Session): Promise<Result> {
     case 'close': {
       let tabId: number | undefined;
       if (cmd.page) tabId = await identity.resolveTabId(cmd.page).catch(() => undefined);
-      else if (cmd.index !== undefined) tabId = (await sessions.liveLeases(s))[cmd.index]?.tabId;
       else tabId = s.preferredTabId ?? undefined;
       if (tabId === undefined) return { id: cmd.id, ok: false, error: 'Page no longer exists', errorCode: 'stale_page' };
       const lease = s.leases.get(tabId);
@@ -262,15 +259,6 @@ async function handleTabs(cmd: Command, s: Session): Promise<Result> {
       if (lease.origin === 'agent') await chrome.tabs.remove(tabId).catch(() => {});
       identity.evictTab(tabId);
       return { id: cmd.id, ok: true, data: { closed: page, released: lease.origin === 'user' } };
-    }
-    case 'select': {
-      let tabId: number | undefined;
-      if (cmd.page) tabId = await identity.resolveTabId(cmd.page).catch(() => undefined);
-      else if (cmd.index !== undefined) tabId = (await sessions.liveLeases(s))[cmd.index]?.tabId;
-      if (tabId === undefined || !s.leases.has(tabId)) return { id: cmd.id, ok: false, error: 'Page is not in this session', errorCode: 'page_not_in_session' };
-      s.preferredTabId = tabId;
-      if (s.visible) await chrome.tabs.update(tabId, { active: true }).catch(() => {});
-      return pageScoped(cmd.id, tabId, { selected: true });
     }
     default: return { id: cmd.id, ok: false, error: `Unknown tabs op: ${String(cmd.op)}` };
   }

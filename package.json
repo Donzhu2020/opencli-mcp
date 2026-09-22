@@ -1,7 +1,7 @@
 {
   "name": "opencli-mcp",
   "version": "0.0.11",
-  "description": "OpenCLI reborn as an MCP-native browser runtime: Chrome-spawned host, object API + code mode, site capabilities, recon.",
+  "description": "MCP-native browser runtime with a Chrome extension, object API, site adapters, and endpoint discovery.",
   "type": "module",
   "license": "Apache-2.0",
   "engines": {
@@ -11,7 +11,7 @@
     "opencli-mcp": "dist/src/main.js"
   },
   "scripts": {
-    "build": "node scripts/extract-playwright-injected.mjs && tsc -p tsconfig.json && node scripts/gen-api-reference.mjs && node scripts/render-icons.mjs && node scripts/build-extension.mjs && node scripts/copy-assets.mjs",
+    "build": "node scripts/clean.mjs && node scripts/extract-playwright-injected.mjs && tsc -p tsconfig.json && node scripts/gen-api-reference.mjs && node scripts/render-icons.mjs && node scripts/build-extension.mjs && node scripts/copy-assets.mjs",
     "build:ext": "node scripts/render-icons.mjs && node scripts/build-extension.mjs",
     "dev": "tsx src/main.ts",
     "test": "vitest run",
@@ -26,32 +26,21 @@
   "files": [
     "dist/",
     "extension/dist/",
-    "docs/",
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
-    "vendor/",
     "packages/",
     "adapters/"
   ],
   "dependencies": {
-    "@jackwener/opencli": "file:vendor/opencli",
     "@modelcontextprotocol/client": "^2.0.0",
     "@modelcontextprotocol/core": "^2.0.0",
     "@modelcontextprotocol/node": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
-    "playwright-core": "^1.63.0",
     "tree-sitter-javascript": "^0.25.0",
     "web-tree-sitter": "^0.27.0",
     "ws": "^8.21.3",
     "zod": "^4.6.5",
-    "@mozilla/readability": "^0.6.0",
-    "cli-table3": "^0.6.5",
-    "commander": "^14.0.3",
-    "js-yaml": "^4.3.1",
-    "turndown": "^7.2.2",
-    "turndown-plugin-gfm": "^1.0.2",
-    "undici": "^6.27.0",
     "@opencli-mcp/adapter-sdk": "file:packages/adapter-sdk"
   },
   "devDependencies": {
@@ -64,6 +53,7 @@
     "jsdom": "^29.1.1",
     "tsx": "^4.23.13",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "playwright-core": "^1.63.0"
   }
 }

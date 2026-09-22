@@ -103,12 +103,6 @@ export class SessionManager {
     const ms = IDLE_MS[s.surface];
     s.idleTimer = setTimeout(() => { void this.finalize(s, []).catch(() => {}); }, ms);
   }
-  /** Leases whose tabs still exist, in insertion order (the same order `tabs list` reports). */
-  async liveLeases(s: Session): Promise<Lease[]> {
-    const out: Lease[] = [];
-    for (const l of s.leases.values()) { try { await chrome.tabs.get(l.tabId); out.push(l); } catch { s.leases.delete(l.tabId); } }
-    return out;
-  }
   ownerOf(tabId: number): Session | null { for (const s of this.sessions.values()) if (s.leases.has(tabId)) return s; return null; }
 
   private async pickWindow(): Promise<number> {

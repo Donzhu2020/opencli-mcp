@@ -2,33 +2,8 @@
 import { z, type ZodTypeAny } from 'zod';
 import { ActionError } from '../api/errors.js';
 
-/** One typed input to an adapter. Names are snake_case (agent-native JSON keys), enforced by defineAdapter. */
-export interface Arg {
-  name: string;
-  type?: 'string' | 'int' | 'number' | 'boolean' | 'bool';
-  required?: boolean;
-  default?: unknown;
-  choices?: string[];
-  help?: string;
-}
-
-/**
- * Host-filesystem and batch-CLI knobs. Not agent data on any path, including js.
- * Hidden from schemas and search. coerceArgs drops a caller-supplied value and, if the
- * adapter declared a default, applies that default. `format` and `json` stay: some commands
- * use them as real data options.
- */
-export const CLI_ONLY_ARGS = new Set(['output', 'output-file', 'resume-file', 'all', 'timeout']);
-
-export function projectArgs(args: Arg[] = []): Arg[] {
-  return args.filter((a) => !CLI_ONLY_ARGS.has(a.name));
-}
-
-export function omitCliArgs(kwargs: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(kwargs)) if (!CLI_ONLY_ARGS.has(k)) out[k] = v;
-  return out;
-}
+import type { Arg } from '@opencli-mcp/adapter-sdk';
+export type { Arg } from '@opencli-mcp/adapter-sdk';
 
 export interface ArgView {
   name: string;
@@ -41,7 +16,7 @@ export interface ArgView {
 
 /** Agent-facing parameter table: enough to call the command without a failed attempt. */
 export function argSpec(args: Arg[] = []): ArgView[] {
-  return projectArgs(args).map((a) => ({
+  return args.map((a) => ({
     name: a.name,
     ...(a.type && { type: a.type }),
     ...(a.required && { required: true }),
@@ -56,7 +31,7 @@ export function argToZod(arg: Arg): ZodTypeAny {
   if (arg.choices && arg.choices.length > 0) t = z.enum(arg.choices as [string, ...string[]]);
   else if (arg.type === 'int') t = z.number().int();
   else if (arg.type === 'number') t = z.number();
-  else if (arg.type === 'boolean' || arg.type === 'bool') t = z.boolean();
+  else if (arg.type === 'boolean') t = z.boolean();
   else t = z.string();
   const desc = [arg.help, arg.default !== undefined ? `default: ${JSON.stringify(arg.default)}` : ''].filter(Boolean).join(' · ');
   if (desc) t = t.describe(desc);
@@ -65,7 +40,7 @@ export function argToZod(arg: Arg): ZodTypeAny {
 
 export function argsToShape(args: Arg[] = [], extra: Record<string, ZodTypeAny> = {}): Record<string, ZodTypeAny> {
   const shape: Record<string, ZodTypeAny> = {};
-  for (const a of projectArgs(args)) shape[a.name] = argToZod(a);
+  for (const a of args) shape[a.name] = argToZod(a);
   for (const [k, v] of Object.entries(extra)) if (!(k in shape)) shape[k] = v;
   return shape;
 }
@@ -77,7 +52,6 @@ function invalidArgs(message: string, args: Arg[]): never {
 /** Coerce + validate kwargs against Arg[] (types, choices, required, defaults). */
 export function coerceArgs(cmdArgs: Arg[] = [], kwargs: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = { ...kwargs };
-  for (const key of CLI_ONLY_ARGS) delete out[key];
   for (const def of cmdArgs) {
     const val = out[def.name];
     if (def.required && (val === undefined || val === null || val === '')) invalidArgs(`Argument "${def.name}" is required. ${def.help ?? ''}`.trim(), cmdArgs);
@@ -86,7 +60,7 @@ export function coerceArgs(cmdArgs: Arg[] = [], kwargs: Record<string, unknown>)
         const n = Number(val);
         if (!Number.isFinite(n) || (def.type === 'int' && !Number.isInteger(n))) invalidArgs(`Argument "${def.name}" must be a ${def.type}`, cmdArgs);
         out[def.name] = n;
-      } else if (def.type === 'boolean' || def.type === 'bool') {
+      } else if (def.type === 'boolean') {
         out[def.name] = typeof val === 'string' ? ['true', '1'].includes(val.toLowerCase()) : Boolean(val);
       }
       if (def.choices?.length && !def.choices.map(String).includes(String(out[def.name]))) {

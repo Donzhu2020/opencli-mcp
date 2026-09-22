@@ -36,7 +36,7 @@ await call('js', { code: `await t0.network.read({ limit: 3 })` }, { show: 300 })
 await call('js', { code: `await recon.discover(t0, { maxScripts: 5 })` }, { show: 500 });
 await call('js', { code: `await b0.tabs.list()` });
 const users = await call('js', { code: `const ut = (await b0.user.openTabs()).find((t) => (t.url ?? '').includes('example.org')); ut ?? null` }, { show: 600 });
-const ut = users.json && typeof users.json === 'object' ? users.json : null;
+const ut = users.json?.value ?? null;
 if (ut) {
   await call('tab_claim', { tabId: ut.tabId, title: 'WRONG TITLE', url: ut.url }, { expectError: true, show: 300 });
   const claimed = await call('tab_claim', { tabId: ut.tabId, title: ut.title, url: ut.url }, { show: 400 });
@@ -44,7 +44,7 @@ if (ut) {
 }
 await call('js', { code: `const b = await agent.browsers.getDefault();\nconst t = await b.tabs.new('https://example.com/');\nconst st = await t.observe();\nnodeRepl.write(st.state.slice(0, 160));\nconst shot = await t.screenshot();\n({ url: st.url, title: st.title, tabs: (await b.tabs.list()).length })` }, { show: 600 });
 await call('tools_compile', { site: 'example', name: 'more-info', description: 'click through to IANA', inputs: {} }, { show: 500 });
-{ const tr = await client.readResource({ uri: 'opencli://session/trace' }); console.log(`\n▶ resource opencli://session/trace → ${JSON.parse(tr.contents[0].text).length} events`); }
+await call('js', { code: `session.trace()` }, { show: 300 });
 await call('session_finalize', { keep: [] }, { show: 300 });
 await client.close();
 console.log(`\nbrowser smoke done; unexpected results: ${failures}`);

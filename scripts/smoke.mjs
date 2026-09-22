@@ -23,8 +23,8 @@ try {
   assert.ok(search.results.length > 0);
   await call('js', { code: "await sites.enable('reddit')" });
   assert.ok((await client.listTools()).tools.some((t) => t.name === 'reddit_hot'));
-  await call('tools_define', { site, name: 'echo', description: 'echo args', access: 'read', browser: false, args: [{ name: 'msg', required: true }], func: 'async ({ args }) => ({ msg: args.msg, len: args.msg.length })' });
-  await call('js', { code: `await sites.enable('${site}')` });
+  await call('tools_define', { site, name: 'echo', description: 'echo args', access: 'write', browser: false, args: [{ name: 'msg', required: true }], func: 'async ({ args }) => ({ msg: args.msg, len: args.msg.length })' });
+  await call('js', { code: `await sites.enable('${site}', { write: true })` });
   assert.ok((await client.listTools()).tools.some((t) => t.name === `${site}_echo`));
   for (const name of ['site_run', `${site}_echo`]) {
     const args = name === 'site_run' ? { site, command: 'echo', args: { msg: 'hello' } } : { msg: 'hello' };

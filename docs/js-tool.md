@@ -9,10 +9,16 @@ const tab = await browser.tabs.new('https://news.ycombinator.com');
 const state = await tab.observe();            // full accessibility snapshot with [ref=eN] refs; { diff: true } only if you still have the previous snapshot
 await tab.act({ target: { text: 'new' }, action: 'click' });
 const titles = await tab.evaluate('[...document.querySelectorAll(".titleline a")].map(a => a.textContent)');
-await sites.enable('hackernews');
-const top = await sites.hackernews.top({ limit: 5 });
 // freeze what you just did into a tool — the same tab API, the function itself is saved
 await tools.define({ site: 'hackernews', name: 'newest-titles', description: 'titles on /newest', access: 'read', func: async ({ tab }) => { await tab.goto('https://news.ycombinator.com/newest'); return await tab.evaluate('[...document.querySelectorAll(".titleline a")].map(a => a.textContent)'); } });
+```
+
+Built-in site commands use the connected browser session:
+
+```js
+await sites.enable('reddit');
+const posts = await sites.reddit.hot({ subreddit: 'programming', limit: 5 });
+posts;
 ```
 
 The full object model is in the generated API reference that follows (`docs_get api-reference`); nothing else exists.

@@ -2,21 +2,19 @@
  * MCP server per session: typed core tools, dynamic site tools, the `js` code-mode tool,
  * resources (docs, sites) and prompts — all backed by the same object model.
  */
-import { McpServer, ResourceTemplate, inputRequired, inputResponse, type RegisteredTool, type InputRequiredResult } from '@modelcontextprotocol/server';
+import { McpServer, ResourceTemplate, type RegisteredTool } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { Runtime } from '../runtime/runtime.js';
 import { createAgentApi, Tab, type AgentApi, type ActAction } from '../api/agent.js';
 import { ActionError, errorEnvelope } from '../api/errors.js';
 import { JsSession, safeStringify } from './js-session.js';
 import { buildInstructions, listDocs, readDoc, type DocContext } from '../docs/manifest.js';
-import { argsToShape, coerceArgs, omitCliArgs, projectArgs } from '../sites/schema.js';
+import { argsToShape, coerceArgs } from '../sites/schema.js';
 import { listDefinedTools } from '../sites/define.js';
 import { checkActInput, checkExpect } from './act-input.js';
 
 type Content = Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>;
 type ToolResult = { content: Content; structuredContent?: Record<string, unknown>; isError?: boolean };
-// A tool handler either produces a normal result or asks the user via multi-round-trip (input_required, served on both eras by the SDK).
-type HandlerResult = ToolResult | InputRequiredResult;
 
 const targetSchema = z.object({
   ref: z.string().optional().describe('eN ref from tab_observe. Do not combine with another locator'),
@@ -77,44 +75,17 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     if (tabs.length === 1) return b.tabs.get(tabs[0].id);
     throw new ActionError('no_tab', 'No tab is open in this session', 'Call tab_open first (or tab_claim a user tab).');
   };
-  const run = async (fn: () => Promise<HandlerResult>): Promise<HandlerResult> => { try { return await fn(); } catch (err) { return fail(err); } };
-  /**
-   * Human-in-the-loop via multi-round-trip (MRTR): the first call returns an `input_required` result asking the user
-   * to approve; the client (or, on a 2025-era connection, the SDK's legacy shim) collects the answer and retries the
-   * same tool call carrying `inputResponses`. One path serves both eras — no bespoke confirm:true round-trip.
-   * Returns an InputRequiredResult when it still needs to ask, or a boolean once the user has answered.
-   */
-  const askApproval = (key: string, message: string, extra: Extra): InputRequiredResult | boolean => {
-    const view = inputResponse(extra.inputResponses, key);
-    if (view.kind === 'missing') {
-      return inputRequired({
-        inputRequests: {
-          [key]: inputRequired.elicit({
-            message,
-            requestedSchema: { type: 'object', properties: { approve: { type: 'boolean', title: 'Approve this action', description: message } }, required: ['approve'] },
-          }),
-        },
-      });
-    }
-    return view.kind === 'elicit' && view.action === 'accept' && Boolean((view.content as { approve?: boolean } | undefined)?.approve);
-  };
-  type Extra = { signal?: AbortSignal; _meta?: { progressToken?: string | number }; inputResponses?: Record<string, unknown>; sendNotification?: (n: { method: 'notifications/progress'; params: { progressToken: string | number; progress: number; total?: number; message?: string } }) => Promise<void> };
-  // v2 ServerContext carries request state under `mcpReq` (signal, _meta, inputResponses, notify) — lift the pieces we use.
+  const run = async (fn: () => Promise<ToolResult>): Promise<ToolResult> => { try { return await fn(); } catch (err) { return fail(err); } };
+  type Extra = { signal?: AbortSignal; _meta?: { progressToken?: string | number }; sendNotification?: (n: { method: 'notifications/progress'; params: { progressToken: string | number; progress: number; total?: number; message?: string } }) => Promise<void> };
+  // v2 ServerContext carries request state under `mcpReq` (signal, _meta, notify) — lift the pieces we use.
   const ctxExtra = (ctx: unknown): Extra => {
-    const m = (ctx as { mcpReq?: { signal?: AbortSignal; _meta?: { progressToken?: string | number }; inputResponses?: Record<string, unknown>; notify?: (n: unknown) => Promise<void> } }).mcpReq ?? {};
-    return { signal: m.signal, _meta: m._meta, inputResponses: m.inputResponses, sendNotification: m.notify ? (n) => m.notify!(n) : undefined };
+    const m = (ctx as { mcpReq?: { signal?: AbortSignal; _meta?: { progressToken?: string | number }; notify?: (n: unknown) => Promise<void> } }).mcpReq ?? {};
+    return { signal: m.signal, _meta: m._meta, sendNotification: m.notify ? (n) => m.notify!(n) : undefined };
   };
   /** Run a long site command with progress heartbeats (when the host passed a progressToken) and cancellation. */
-  const runSiteWithProgress = async (site: string, command: string, args: Record<string, unknown>, extra: Extra): Promise<HandlerResult> => {
+  const runSiteWithProgress = async (site: string, command: string, args: Record<string, unknown>, extra: Extra): Promise<ToolResult> => {
     const cmd = await rt.registry.resolve(site, command);
-    // Drop host-path / batch knobs before validation so a bad call never reaches the approval prompt.
-    const rest = omitCliArgs(args);
-    const coerced = coerceArgs(cmd.args, rest);
-    if (cmd.access === 'write' && rt.policy.confirmWrites) {
-      const decision = askApproval('approve', `Run ${site}/${command} with ${JSON.stringify(coerced).slice(0, 300)}? This changes the user's account or sends data.`, extra);
-      if (typeof decision !== 'boolean') return decision; // still asking: hand the input_required result back to the client/shim
-      if (!decision) throw new ActionError('user_declined', `The user declined ${site}/${command}`, undefined, { retryable: false });
-    }
+    const coerced = coerceArgs(cmd.args, args);
     const token = extra._meta?.progressToken;
     const started = Date.now();
     let beat: NodeJS.Timeout | undefined;
@@ -180,8 +151,8 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   server.registerTool('tab_expect', { title: 'Expect', description: 'Assert what the page must show now. At least one of text / notText / url / title / selector / ref is required (visible:false requires absence, and needs selector or ref). Polls up to timeout seconds; fails with expectation_failed. Recorded so tools_compile turns it into a checkpoint.', inputSchema: { tab: z.string().optional().describe('required when the session has more than one tab'), text: z.string().optional(), notText: z.string().optional(), url: z.string().optional(), title: z.string().optional(), selector: z.string().optional(), ref: z.string().optional(), visible: z.boolean().optional().describe('with selector or ref; false requires absence'), timeout: z.number().default(5) }, annotations: { readOnlyHint: true } }, async ({ tab, timeout, ...what }) => run(async () => { checkExpect(what); const t = await tabOf(tab); return ok({ tab: t.id, ...(await t.expect(what, { timeoutMs: timeout * 1000 })) }); }));
 
   // ── sites ──
-  server.registerTool('sites_search', { title: 'Search sites & commands', description: 'Find site commands by keyword or domain. Each hit includes args[{name,type,required,help,default,choices}] — copy those into site_run. Do not invent parameters. Host-path args (output-file, all, timeout) are omitted.', inputSchema: { query: z.string(), limit: z.number().int().max(100).default(20) }, annotations: { readOnlyHint: true } }, async ({ query, limit }) => run(async () => ok({ results: await api.sites.search(query, limit) })));
-  server.registerTool('site_run', { title: 'Run a site command', description: 'Run one site command. args must match the args list from sites_search. Invalid args return invalid_args with details.expected and do not ask the user to approve. Write commands ask only when policy.confirmWrites is on (off by default); there is no confirm flag.', inputSchema: { site: z.string(), command: z.string(), args: z.record(z.string(), z.unknown()).default({}) }, annotations: { openWorldHint: true } }, async ({ site, command, args }, extra) => run(() => runSiteWithProgress(site, command, args, ctxExtra(extra))));
+  server.registerTool('sites_search', { title: 'Search sites & commands', description: 'Find site commands by keyword or domain. Each hit includes args[{name,type,required,help,default,choices}] — copy those into site_run. Do not invent parameters.', inputSchema: { query: z.string(), limit: z.number().int().max(100).default(20) }, annotations: { readOnlyHint: true } }, async ({ query, limit }) => run(async () => ok({ results: await api.sites.search(query, limit) })));
+  server.registerTool('site_run', { title: 'Run a site command', description: 'Run one site command. args must match the args list from sites_search. Invalid args return invalid_args with details.expected. Valid commands execute directly, including writes.', inputSchema: { site: z.string(), command: z.string(), args: z.record(z.string(), z.unknown()).default({}) }, annotations: { openWorldHint: true } }, async ({ site, command, args }, extra) => run(() => runSiteWithProgress(site, command, args, ctxExtra(extra))));
 
   // ── capabilities ──
 
@@ -207,7 +178,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     const first = state.js.runs === 0;
     const r = await state.js.run(code, { timeoutMs });
     const content: Content = [];
-    if (first) { const b = rt.backend(); const ref = readDoc('api-reference') ?? ''; const doc = b === 'none' ? `${readDoc('js-tool') ?? ''}\n\n${ref}\n\n(No browser backend connected: browser objects will throw browser_unavailable; sites.* public commands work.)` : `${readDoc('js-tool') ?? ''}\n\n${ref}`; content.push(text(`# API\n${doc}\n\n# Result`)); }
+    if (first) { const b = rt.backend(); const ref = readDoc('api-reference') ?? ''; const doc = b === 'none' ? `${readDoc('js-tool') ?? ''}\n\n${ref}\n\n(No browser backend connected: browser objects will throw browser_unavailable; site commands with browser:false work.)` : `${readDoc('js-tool') ?? ''}\n\n${ref}`; content.push(text(`# API\n${doc}\n\n# Result`)); }
     if (r.writes.length) {
       const joined = r.writes.join('\n');
       content.push(text(joined.length > 24_000 ? `${joined.slice(0, 24_000)}\n…(truncated ${joined.length - 24_000} chars)` : joined));
@@ -265,7 +236,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   // ── resources ──
   server.registerResource('docs', new ResourceTemplate('opencli://docs/{name}', { list: async () => ({ resources: listDocs(docCtx()).filter((d) => d.available).map((d) => ({ uri: `opencli://docs/${d.name}`, name: d.name, description: d.description, mimeType: 'text/markdown' })) }) }), { title: 'Documentation', description: 'Agent-facing docs' }, async (uri, { name }) => ({ contents: [{ uri: uri.href, mimeType: 'text/markdown', text: readDoc(String(name)) ?? `no doc ${String(name)}` }] }));
   server.registerResource('sites', 'opencli://sites', { title: 'Sites', description: 'All sites with command counts', mimeType: 'application/json' }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(api.sites.list(), null, 2) }] }));
-  server.registerResource('site', new ResourceTemplate('opencli://sites/{site}', { list: undefined }), { title: 'Site commands', mimeType: 'application/json' }, async (uri, { site }) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify((await rt.registry.commands(String(site))).map((c) => ({ name: c.name, description: c.description, access: c.access, domain: c.domain, args: projectArgs(c.args) })), null, 2) }] }));
+  server.registerResource('site', new ResourceTemplate('opencli://sites/{site}', { list: undefined }), { title: 'Site commands', mimeType: 'application/json' }, async (uri, { site }) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify((await rt.registry.commands(String(site))).map((c) => ({ name: c.name, description: c.description, access: c.access, domain: c.domain, args: c.args })), null, 2) }] }));
 
   // ── prompts ──
   server.registerPrompt('browse', { title: 'Browse a site for a goal', description: 'Structured plan: prefer site tools, then observe → act → observe, finalize.', argsSchema: { goal: z.string(), url: z.string().optional() } }, ({ goal, url }) => ({ messages: [{ role: 'user', content: { type: 'text', text: `Goal: ${goal}${url ? `\nStart at: ${url}` : ''}\n\n1. sites_search for an existing command that covers the goal; if found, site_run it (or sites.enable(site) in js for typed tools).\n2. Otherwise tab_open with a session name, then loop tab_observe → tab_act → tab_expect, reading error codes.\n3. Finish with session_finalize, keeping only deliverable/handoff tabs.` } }] }));

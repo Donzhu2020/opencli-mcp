@@ -14,7 +14,7 @@ opencli-mcp connects MCP clients to your own Chrome session. Browse websites, ru
 ## What you can do
 
 - **Work with logged-in websites.** Search, read pages, fill forms, and navigate through your existing browser session.
-- **Use ready-made site commands.** Discover OpenCLI adapters for sites such as Bilibili, Zhihu, Reddit, Hacker News, and GitHub. Load the commands you need on demand.
+- **Use ready-made site commands.** Discover built-in adapters for Twitter/X, Bilibili, and Reddit. Load the commands you need on demand.
 - **Build reusable tools.** Explore a workflow, inspect its network requests, and save it as a new MCP tool. Captured JSON APIs are preferred when available.
 - **Keep browser work organized.** Agent-created tabs live in named groups and are cleaned up after use. Tabs borrowed from the user are never closed by session cleanup.
 
@@ -74,9 +74,9 @@ The browser workflow is **observe → act → verify → finalize**. Observation
 Inside the `js` tool, you can also call site commands directly:
 
 ```js
-await sites.enable('hackernews');
-const stories = await sites.hackernews.top({ limit: 5 });
-stories;
+await sites.enable('reddit');
+const posts = await sites.reddit.hot({ subreddit: 'programming', limit: 5 });
+posts;
 ```
 
 See the [JavaScript guide](docs/js-tool.md), [API reference](docs/api-reference.md), and [tool authoring guide](docs/define-tools.md) for complete examples.
@@ -98,7 +98,7 @@ The host also supports Streamable HTTP for remote clients. See [remote access an
 
 The extension requests browser permissions including `debugger`, `cookies`, and access to all URLs so it can operate logged-in sites. Connected agents can act with the access available in your browser session.
 
-Site commands are enabled read-only by default; write commands can be enabled explicitly. Optional origin and write-confirmation policies are available, but are off by default and do not automatically gate arbitrary browser clicks. See [configuration](docs/setup.md#configuration) and the [confirmation policy](docs/confirmations.md).
+Site commands execute directly without additional approval prompts. The read/write classification describes their effects. See [configuration](docs/setup.md#configuration).
 
 ## Documentation
 
@@ -138,4 +138,4 @@ Found a bug or have a feature request? [Open an issue](https://github.com/jackwe
 
 ## License and credits
 
-[Apache-2.0](LICENSE). Built on [OpenCLI](https://github.com/jackwener/OpenCLI) site adapters and [Playwright](https://github.com/microsoft/playwright)'s injected locator engine. Endpoint analysis is inspired by [jsluice](https://github.com/BishopFox/jsluice).
+[Apache-2.0](LICENSE). Some browser helpers and adapters were adapted from [OpenCLI](https://github.com/jackwener/OpenCLI); no OpenCLI dependency or compatibility layer is required. Uses [Playwright](https://github.com/microsoft/playwright)'s injected locator engine. Endpoint analysis is inspired by [jsluice](https://github.com/BishopFox/jsluice).

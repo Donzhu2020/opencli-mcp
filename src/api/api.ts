@@ -5,7 +5,6 @@
 import type { Runtime } from '../runtime/runtime.js';
 import { ActionError } from './errors.js';
 import { argSpec } from '../sites/schema.js';
-import { Policy } from '../runtime/policy.js';
 import { discoverEndpoints, type DiscoverResult } from '../recon/discover.js';
 import { compileFromTrace, listDefinedTools, type ToolDefinition } from '../sites/define.js';
 import { readDoc } from '../docs/manifest.js';
@@ -18,7 +17,7 @@ export interface AgentApi {
   sites: Record<string, unknown> & { search(q: string, limit?: number): Promise<unknown>; list(): unknown; enable(site: string, opts?: { write?: boolean }): Promise<{ site: string; tools: string[] }>; disable(site: string): boolean; run(site: string, name: string, args?: Record<string, unknown>): Promise<unknown> };
   recon: { discover(tab: Tab, opts?: Parameters<typeof discoverEndpoints>[1]): Promise<DiscoverResult> };
   tools: { define(def: ToolDefinition | (Omit<ToolDefinition, 'func'> & { func?: string | ((ctx: Record<string, unknown>) => unknown) })): Promise<{ file: string; site: string; name: string }>; compile(opts: Parameters<typeof compileFromTrace>[2]): ToolDefinition; list(): ReturnType<typeof listDefinedTools>; remove(site: string, name: string): boolean };
-  session: { id: string; /** approve a website host after the user agreed (needs_origin_approval), for this run */ allowOrigin(host: string): { host: string }; trace(): unknown[]; clearTrace(): void; };
+  session: { id: string; trace(): unknown[]; clearTrace(): void; };
 }
 
 export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
@@ -26,7 +25,7 @@ export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
   const ctx: SessionContext = { rt, sessionId, state };
   // One user, one Chrome — there is no browser fleet to route among; getDefault is the single accessor.
   const getDefault = async (): Promise<Browser> => {
-    if (rt.backend() !== 'extension') throw new ActionError('browser_unavailable', 'No browser backend is connected', 'Run doctor. Site commands with strategy `public` still work without a browser.');
+    if (rt.backend() !== 'extension') throw new ActionError('browser_unavailable', 'No browser backend is connected', 'Run doctor. Site commands with `browser: false` still work without a browser.');
     return new Browser('chrome', 'extension', ctx);
   };
 
@@ -43,10 +42,7 @@ export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
     },
     disable: (site: string) => { const ok = state.enabledSites.delete(site); if (ok) rt.emit('tools-changed', { site }); return ok; },
     run: async (site: string, name: string, args: Record<string, unknown> = {}) => {
-      const { confirm, ...rest } = args as { confirm?: boolean } & Record<string, unknown>;
-      const cmd = await rt.registry.resolve(site, name);
-      if (cmd.access === 'write') Policy.throwIfDenied(rt.policy.checkWrite(`${site}/${name}`, Boolean(confirm)));
-      const r = await rt.runSite(sessionId, site, name, rest);
+      const r = await rt.runSite(sessionId, site, name, args);
       if (!r.ok) throw new ActionError(r.error.code, r.error.message, r.error.hint, { site, command: name , ...(r.error.details && { details: r.error.details }) });
       return r.nextCursor ? { rows: r.rows, nextCursor: r.nextCursor } : (r.rows ?? r.value);
     },
@@ -79,7 +75,6 @@ export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
     },
     session: {
       id: sessionId,
-      allowOrigin: (host: string) => { rt.policy.allowHost(host); return { host }; },
       trace: () => state.trace.events,
       clearTrace: () => { state.trace.clear(); state.netEvidence.length = 0; state.netLog.clear(); },
     },

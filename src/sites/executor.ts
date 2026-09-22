@@ -1,10 +1,9 @@
 /**
  * Run an adapter: coerce args, provision the logged-in page (for browser adapters), build the object-model context
- * `{ args, tab, sites, recon, signal }`, call the adapter's `run`, and shape the result. One code path — no pipeline
- * engine, no CDP shadow page, no source branching.
+ * `{ args, tab, sites, recon, signal }`, call the adapter's `run`, and shape the result.
  */
 import { coerceArgs } from './schema.js';
-import { ActionError, normalizeErrorCode } from '../api/errors.js';
+import { ActionError } from '../api/errors.js';
 import type { AdapterCommand } from './loader.js';
 import type { RuntimePage } from '../backends/page-types.js';
 
@@ -74,12 +73,12 @@ export async function runAdapter(
     const elapsedMs = Date.now() - started;
     if (err instanceof ActionError) {
       const { code, message, hint, ...rest } = err.toJSON() as { code: string; message: string; hint?: string };
-      return { ok: false, site: cmd.site, name: cmd.name, elapsedMs, error: { code: normalizeErrorCode(String(code)), message: String(message), ...(hint ? { hint: String(hint) } : {}), ...rest } };
+      return { ok: false, site: cmd.site, name: cmd.name, elapsedMs, error: { code: String(code), message: String(message), ...(hint ? { hint: String(hint) } : {}), ...rest } };
     }
-    const e = err as { code?: string; message?: string; hint?: string; details?: Record<string, unknown> };
+    const e = (err ?? {}) as { code?: string; message?: string; hint?: string; details?: Record<string, unknown> };
     return {
       ok: false, site: cmd.site, name: cmd.name, elapsedMs,
-      error: { code: normalizeErrorCode(e.code ?? 'command_failed'), message: String(e.message ?? err), ...(e.hint && { hint: e.hint }), ...(e.details && { details: e.details }) },
+      error: { code: e.code ?? 'command_failed', message: String(e.message ?? err), ...(e.hint && { hint: e.hint }), ...(e.details && { details: e.details }) },
     };
   }
 }

@@ -1,22 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeErrorCode } from '../src/api/errors.js';
+import { ActionError, errorEnvelope } from '../src/api/errors.js';
+import { errors } from '@opencli-mcp/adapter-sdk';
 
-describe('one error vocabulary (normalizeErrorCode)', () => {
-  it('maps corpus/adapter codes to the object-model families', () => {
-    expect(normalizeErrorCode('TIMEOUT')).toBe('timeout');
-    expect(normalizeErrorCode('COMMAND_EXEC')).toBe('command_failed');
-    expect(normalizeErrorCode('BROWSER_CONNECT')).toBe('browser_unavailable');
-    expect(normalizeErrorCode('TargetError')).toBe('not_found');
+describe('error envelopes', () => {
+  it('preserves native runtime and adapter codes with their recovery details', () => {
+    expect(errorEnvelope(new ActionError('invalid_args', 'Missing query', 'Provide query', { details: { field: 'query' } }))).toEqual({
+      ok: false, error: { code: 'invalid_args', message: 'Missing query', hint: 'Provide query', details: { field: 'query' } },
+    });
+    expect(errorEnvelope(errors.argument('Bad query')).error).toMatchObject({ code: 'invalid_args', message: 'Bad query' });
   });
-  it('leaves object-model codes untouched', () => {
-    for (const c of ['not_found', 'stale_ref', 'expectation_failed', 'needs_confirmation', 'user_declined']) {
-      expect(normalizeErrorCode(c)).toBe(c);
-    }
-  });
-  it('snake-cases any other SCREAMING_SNAKE / CamelCase code so there is one vocabulary', () => {
-    expect(normalizeErrorCode('SOME_NEW_CODE')).toBe('some_new_code');
-    expect(normalizeErrorCode('BrowserCommandError')).toBe('browser_command_error');
-    expect(normalizeErrorCode('')).toBe('error');
-    expect(normalizeErrorCode(undefined)).toBe('error');
+  it('reports unstructured thrown values', () => {
+    expect(errorEnvelope(null)).toEqual({ ok: false, error: { code: 'error', message: 'null' } });
+    expect(errorEnvelope('failed')).toEqual({ ok: false, error: { code: 'error', message: 'failed' } });
   });
 });

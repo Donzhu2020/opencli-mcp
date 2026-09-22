@@ -20,7 +20,6 @@ export const DOCS_MANIFEST: DocEntry[] = [
   { name: 'instructions', mode: 'included' },
   { name: 'api-use', mode: 'included' },
   { name: 'safety', mode: 'included' },
-  { name: 'confirmations', mode: 'included' },
   { name: 'tab-lifecycle', mode: 'included', when: { backends: ['extension'] } },
   { name: 'sites', mode: 'lookup', description: 'the site-command corpus: search, enable as tools, and freeze flows into tools' },
   { name: 'js-tool', mode: 'model' },
@@ -29,6 +28,7 @@ export const DOCS_MANIFEST: DocEntry[] = [
   { name: 'recon', mode: 'lookup', description: 'read before discovering a site’s API endpoints' },
   { name: 'define-tools', mode: 'lookup', description: 'read before freezing a flow into a tool' },
   { name: 'capabilities/cdp', mode: 'model', when: { capabilities: ['cdp'] } },
+  { name: 'capabilities/webmcp', mode: 'model', when: { capabilities: ['webmcp'] } },
   { name: 'capabilities/visibility', mode: 'model', when: { capabilities: ['visibility'] } },
   { name: 'troubleshooting', mode: 'lookup', description: 'read when the browser bridge fails' },
 ];

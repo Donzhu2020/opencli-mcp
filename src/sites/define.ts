@@ -10,7 +10,8 @@ import { createRequire } from 'node:module';
 import { USER_ADAPTERS_DIR } from '../lib/sources.js';
 import type { TraceEvent, NetworkEvidence } from '../runtime/trace.js';
 
-export interface ArgDef { name: string; type?: 'string' | 'int' | 'number' | 'boolean'; default?: unknown; required?: boolean; help?: string; choices?: string[] }
+import type { Arg } from '@opencli-mcp/adapter-sdk';
+export type { Arg } from '@opencli-mcp/adapter-sdk';
 
 export interface ToolDefinition {
   site: string;
@@ -20,7 +21,7 @@ export interface ToolDefinition {
   /** needs a logged-in page (default: inferred from whether the body uses tab/sites/recon). */
   browser?: boolean;
   domain?: string;
-  args?: ArgDef[];
+  args?: Arg[];
   /** JS source of the adapter body: `async ({ tab, args, sites, recon }) => …` */
   func: string;
 }
@@ -115,8 +116,8 @@ export type CompileInput = string | { sample: string; description?: string; type
 /**
  * Compile a recorded session trace into a tool draft.
  * Network-first: if the trace captured a JSON endpoint on the site, the tool fetches it through the page (cookies
- * included). Otherwise the UI steps become an explicit function on the same engine the agent used: `page.act` with the
- * replay selector recorded at act time, `page.expect` checkpoints where the agent asserted the page, and a structured
+ * included). Otherwise the UI steps become an explicit function on the same engine the agent used: `tab.act` with the
+ * replay selector recorded at act time, `tab.expect` checkpoints where the agent asserted the page, and a structured
  * failure (`step`, `label`, `state`) when a step fails. Inputs are explicit: only exact occurrences of a declared
  * sample value become `args.<name>`.
  */
@@ -189,7 +190,7 @@ function bodyLit(post: string, contentType: string | undefined, emit: (v: string
 }
 export function compileFromTrace(trace: TraceEvent[], net: NetworkEvidence[], opts: { site: string; name: string; description: string; access?: 'read' | 'write'; inputs?: Record<string, CompileInput>; domain?: string }): ToolDefinition & { warnings?: string[] } {
   const inputs = Object.entries(opts.inputs ?? {}).map(([name, v]) => (typeof v === 'string' ? { name, sample: v, type: 'string' as const, required: true, mode: 'exact' as const } : { name, sample: v.sample, type: v.type ?? 'string', required: v.required ?? true, help: v.description, mode: v.mode ?? 'exact' as const }));
-  const argDefs: ArgDef[] = inputs.map((i) => ({ name: i.name, type: i.type, required: i.required, help: i.help ?? `example: ${i.sample}` }));
+  const argDefs: Arg[] = inputs.map((i) => ({ name: i.name, type: i.type, required: i.required, help: i.help ?? `example: ${i.sample}` }));
   for (const i of inputs) if (!/^[A-Za-z_$][\w$]*$/.test(i.name)) throw Object.assign(new Error(`input name ${JSON.stringify(i.name)} must be a JavaScript identifier`), { code: 'invalid_definition' });
   // exact by default: a literal becomes an argument only when it IS the sample; 'within' inputs are the agent's explicit
   // permission to also parameterize longer literals that contain the sample (values typed, checkpoint texts and urls)
@@ -271,8 +272,8 @@ export function compileFromTrace(trace: TraceEvent[], net: NetworkEvidence[], op
           warnings.push(`step ${n + 1}: acted on ${why}; frozen as the engine's replay selector ${JSON.stringify(e.targetSelector ?? null)} — replace with a stable locator (testid, role+name, label, or a selector scoped by within)`);
           body.push(`  // REVIEW: acted on ${why} — the replay selector below is what the engine resolved at exploration time, not an intent`);
         } else if (structural(loc.selector)) warnings.push(`step ${n + 1}: selector ${JSON.stringify(loc.selector)} is structural css; it breaks on a redesign — prefer testid, role+name or label`);
-        const valued = ['fill', 'type', 'press', 'select'].includes(e.action);
-        push(`${e.action} ${e.target}`.slice(0, 80), `tab.act({ action: ${JSON.stringify(e.action)}, target: ${JSON.stringify(target)}${valued ? `, value: ${lit(String(e.value ?? (e.action === 'press' ? 'Enter' : '')))}` : ''} })`);
+        const valued = ['fill', 'type', 'press', 'select'].includes(e.action) && e.value !== undefined;
+        push(`${e.action} ${e.target}`.slice(0, 80), `tab.act({ action: ${JSON.stringify(e.action)}, target: ${JSON.stringify(target)}${valued ? `, value: ${lit(String(e.value))}` : ''} })`);
       } else if (e.kind === 'expect') {
         if (!e.ok) continue;
         const what = Object.fromEntries(Object.entries(e.what).map(([k, v]) => [k, typeof v === 'string' ? sub(v) : v]));

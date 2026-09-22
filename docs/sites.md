@@ -1,10 +1,13 @@
 ## Sites as capabilities
 
-The runtime carries OpenCLI's adapter corpus (160+ sites, ~1200 commands: Bilibili, Zhihu, Xiaohongshu, Twitter/X, Reddit, HackerNews, LinkedIn, YouTube, Amazon, GitHub, Notion, ChatGPT/Gemini/Claude web…; Electron desktop-app adapters are excluded because this runtime drives Chrome only). They are not all loaded as tools.
+Built-in adapters cover Twitter/X (`twitter`), Bilibili (`bilibili`), and Reddit (`reddit`). The source directories are the command catalog; use search to discover the current commands and their parameters.
 
-- `sites_search` — find sites/commands by keyword or domain.
-- `sites.enable(site, {write?})` in `js` — load a site's commands as typed tools `<site>_<command>` (read-only by default; `write:true` adds write commands). Emits tools/list_changed. `sites.disable(site)` in `js` removes them.
-- Every site command is also callable from `js` as `await sites.<site>.<command>({...args})` after enabling.
-- Strategies: `public` needs no browser; `cookie`/`intercept`/`ui` reuse your logged-in Chrome session in a background adapter tab; `local` talks to a local service.
-- Results carry `columns` + `rows` when tabular. Errors carry stable codes (`AUTH_REQUIRED`, `EMPTY_RESULT`, `TIMEOUT`, `LOGIN_WALL`…).
-- `tools_define` registers a new command (JS function or pipeline) that persists across restarts; `tools_compile` drafts one from the current session's recorded steps.
+- `sites_search` finds commands by keyword or domain and returns their argument schemas.
+- `site_run` executes a command directly without enabling it first.
+- `sites.enable(site, {write?})` in `js` exposes typed tools named `<site>_<command>` and emits `tools/list_changed`. By default it exposes read commands; `write:true` also exposes write commands. `sites.disable(site)` removes those tools.
+- Commands are also callable in `js` as `await sites.<site>.<command>({...args})`.
+- Adapters use the same `tab` object API as interactive exploration. They use a background tab in the connected Chrome profile by default. An adapter with `browser:false` can run without Chrome.
+- Results contain `rows` (optionally `nextCursor`) or a `value`. Failures contain `error.code`, `error.message`, and optional `error.hint` / details; inspect the returned error to recover.
+- `tools_define` saves a JavaScript function as an adapter under `~/.opencli-mcp/adapters/<site>/<command>.js`. `tools_compile` drafts one from the session trace. User adapters override built-ins with the same site and command.
+
+For authoring, call `docs_get` with `name: "define-tools"`.

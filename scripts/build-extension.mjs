@@ -1,11 +1,12 @@
 // Bundle the extension with esbuild: background service worker + content script; copy static assets.
 import { build } from 'esbuild';
-import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
 const ext = resolve(root, 'extension');
 const out = resolve(ext, 'dist');
+rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
 
 await build({

@@ -110,13 +110,8 @@ Settings live in `~/.opencli-mcp/config.json`. For example:
 {
   "port": 19991,
   "cursor": true,
-  "sites": ["hackernews", "reddit"],
-  "sitesWrite": [],
-  "policy": {
-    "askNewOrigins": false,
-    "confirmWrites": false,
-    "allowedHosts": []
-  }
+  "sites": ["twitter", "reddit"],
+  "sitesWrite": []
 }
 ```
 
@@ -126,11 +121,8 @@ Settings live in `~/.opencli-mcp/config.json`. For example:
 | `cursor` | Show the agent cursor overlay |
 | `sites` | Site commands to enable at startup, read-only |
 | `sitesWrite` | Sites whose write commands should also be enabled |
-| `policy.askNewOrigins` | Require `session.allowOrigin(host)` before navigating to a new host |
-| `policy.confirmWrites` | Request client approval for write site commands; does not automatically gate arbitrary UI actions |
-| `policy.allowedHosts` | Hosts pre-approved for the origin policy |
 
-The same state directory contains the HTTP token, `run/host.json`, and agent-defined tools under `tools/<site>/<name>.js`. See [confirmations](confirmations.md) for the agent-facing action policy.
+The same state directory contains the HTTP token, `run/host.json`, and agent-defined tools under `tools/<site>/<name>.js`.
 
 ## Troubleshooting
 

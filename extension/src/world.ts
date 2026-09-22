@@ -133,7 +133,7 @@ export async function evaluateInWorld(tabId: number, frameId: string | null, exp
 /** Evaluate in a frame's MAIN world (read-only page access): root session for the main frame and in-process frames (by context id), the frame's own session otherwise. */
 export async function evaluateMain(tabId: number, frameId: string | null, expression: string, aggressive: boolean, timeoutMs?: number): Promise<unknown> {
   await executor.ensureAttached(tabId, aggressive);
-  if (frameId === null) return executor.evaluateAsync(tabId, expression, aggressive, timeoutMs);
+  if (frameId === null) return executor.evaluate(tabId, expression, aggressive, timeoutMs);
   const k = key(tabId, frameId);
   let host = frameHosts.get(k);
   // only a positive answer is cached: an OOPIF may auto-attach a moment after its frame appears, so 'root' is re-checked each time

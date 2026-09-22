@@ -14,14 +14,12 @@ import { createExtensionPage, type ExtensionRuntimePage } from '../backends/exte
 import type { RuntimePage } from '../backends/page-types.js';
 import { TraceRecorder, type NetworkEvidence } from './trace.js';
 import { JsSession } from '../mcp/js-session.js';
-import { Policy } from './policy.js';
 import { Tab, createAgentApi, type AgentApi } from '../api/agent.js';
 
 export type Backend = 'extension' | 'none';
 
 export interface RuntimeOptions {
   bridge?: ExtensionBridge | null;
-  policy?: import('./policy.js').PolicyConfig;
   sites?: string[];
   sitesWrite?: string[];
   cursor?: boolean;
@@ -76,7 +74,6 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
   private readonly siteApis = new Map<string, AgentApi>();
   bridge: ExtensionBridge | null;
   readonly cursorEnabled: boolean;
-  readonly policy: Policy;
   readonly configSites: string[];
   readonly configSitesWrite: string[];
   readonly startedAt = Date.now();
@@ -85,7 +82,6 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
     super();
     this.bridge = opts.bridge ?? null;
     this.cursorEnabled = opts.cursor ?? true;
-    this.policy = new Policy(opts.policy);
     this.configSites = opts.sites ?? [];
     this.configSitesWrite = opts.sitesWrite ?? [];
     if (opts.log) this.on('log', opts.log);
@@ -134,7 +130,7 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
   }
   forgetPage(sessionId: string, pageId: string): void { const s = this.sessions.get(sessionId); s?.pages.delete(pageId); s?.tabLocks.delete(pageId); if (s?.selected === pageId) s.selected = undefined; }
 
-  /** Background adapter page per site (shared by all MCP sessions), like OpenCLI's site sessions. */
+  /** Background adapter page per site (shared by all MCP sessions). */
   async getAdapterPage(site: string, opts: { siteSession: 'ephemeral' | 'persistent'; windowMode: 'foreground' | 'background'; navigateTo?: string }): Promise<RuntimePage> {
     const key = `site:${site}`;
     let p = this.adapterPages.get(key);
@@ -152,7 +148,7 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
     throw Object.assign(new Error('No browser backend is connected'), { code: 'browser_unavailable', hint: 'Run `opencli-mcp doctor`. Chrome with the opencli-mcp extension must be running.' });
   }
 
-  /** Frozen tools run on the exploration object model: a Tab bound to the adapter page, plus sites/recon/page. */
+  /** Frozen tools run on the exploration object model: a Tab bound to the adapter page, plus sites/recon. */
   async toolContext(page: RuntimePage, site: string): Promise<Record<string, unknown>> {
     const sessionId = `site:${site}`;
     let api = this.siteApis.get(sessionId);

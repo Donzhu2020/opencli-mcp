@@ -5,7 +5,6 @@
 import type { RuntimePage } from '../backends/page-types.js';
 import type { ExtensionRuntimePage, UserTabInfo } from '../backends/extension-page.js';
 import { ActionError } from './errors.js';
-import { Policy } from '../runtime/policy.js';
 import { buildInstructions, readDoc, type DocContext } from '../docs/manifest.js';
 import { Tab } from './tab.js';
 import type { SessionContext } from './context.js';
@@ -22,7 +21,6 @@ export class Browser {
     new: async (url?: string): Promise<Tab> => {
       const page = await this.page();
       if (url && !/^(https?:\/\/|data:text\/html)/i.test(url)) throw new ActionError('invalid_url', 'Only http(s) (or data:text/html) URLs can be opened', 'Pass an absolute http:// or https:// URL.');
-      if (url && !url.startsWith('data:')) Policy.throwIfDenied(this.ctx.rt.policy.checkOrigin(url));
       const id = await page.newTab(url); // the extension creates the tab and waits for its first load
       if (!id) throw new ActionError('tab_create_failed', 'Could not create a tab', 'Retry; if it persists run doctor to check the browser bridge.');
       this.ctx.state.finalized = false; // new tabs after a finalize are the session's again
@@ -58,7 +56,6 @@ export class Browser {
     openTabs: async (): Promise<UserTabInfo[]> => this.ext(await this.page()).userTabs(),
     /** Claim a user tab by id, or by url/title (unique match) when the id is omitted; url/title with an id act as guards. */
     claimTab: async (tab: { tabId?: number; title?: string; url?: string }): Promise<Tab> => {
-      if (tab.url) Policy.throwIfDenied(this.ctx.rt.policy.checkOrigin(tab.url));
       const page = this.ext(await this.page());
       const r = await page.claim(tab);
       this.ctx.state.finalized = false;

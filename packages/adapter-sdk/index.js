@@ -24,6 +24,6 @@ export class AdapterError extends Error {
 export const errors = {
   auth: (message = 'Not logged in', hint = 'Open the site and sign in, then retry.') => new AdapterError('auth_required', message, hint),
   empty: (message = 'No results') => new AdapterError('empty_result', message),
-  argument: (message, hint) => new AdapterError('invalid_argument', message, hint),
+  argument: (message, hint) => new AdapterError('invalid_args', message, hint),
   upstream: (message, hint) => new AdapterError('upstream_error', message, hint),
 };

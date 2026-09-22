@@ -1,17 +1,10 @@
-/**
- * ExtensionPage — the one page object over the extension bridge, standalone (no OpenCLI CDPBasePage base).
- * Every locator/interaction goes through the act engine (our Playwright injected script in the isolated world);
- * the OpenCLI adapter contract (goto, evaluate, fetchJson, wait, autoScroll, click/fillText/typeText/…) is served
- * here on that one engine. Utility JS (wait/autoScroll/interceptor/network) is reused as pure helper strings — not a
- * second locator/AX engine. Plus the session/tab-lifecycle and human-visibility commands our extension adds.
- */
+/** The page transport over the extension bridge; interactions use the shared act engine. */
 import type { ExtensionBridge } from '../host/bridge.js';
 import { BrowserCommandError } from '../host/bridge.js';
-import { importDist } from '../lib/opencli.js';
-import { buildEvaluateExpression } from '@jackwener/opencli/browser/utils';
+import { wrapForEval, waitForDomStableJs, networkRequestsJs } from './browser-helpers.js';
 import type { RuntimePage } from './page-types.js';
 import type { Command, ActSpec, ActResult, DialogInfo, ConsoleEntry } from '../protocol.js';
-import { pageCallJs, refToTarget, parseKey, ActError } from '../shared/engine.js';
+import { pageCallJs, ActError } from '../shared/engine.js';
 import type { Expectation, CheckResult } from '../shared/page-contract.js';
 
 export interface ExtensionPageOptions {
@@ -39,32 +32,13 @@ export interface ExtensionPageExtras {
 
 export type ExtensionRuntimePage = RuntimePage & ExtensionPageExtras;
 
-// Pure helper-JS generators + small utilities from OpenCLI's dist — these are plain page-script strings, not a locator/AX engine.
-interface Lib {
-  waitForDomStableJs: (maxMs: number, quietMs: number) => string;
-  waitForSelectorJs: (selector: string, timeoutMs: number) => string;
-  waitForTextJs: (text: string, timeoutMs: number) => string;
-  autoScrollJs: (times: number, delayMs: number) => string;
-  networkRequestsJs: (includeStatic: boolean) => string;
-  waitForCaptureJs: (maxMs: number) => string;
-  generateInterceptorJs: (pattern: string, opts: { arrayName: string; patchGuard: string }) => string;
-  generateReadInterceptedJs: (arrayName: string) => string;
-  classifyBrowserError: (err: unknown) => { kind: string; delayMs: number };
-  saveBase64ToFile: (b64: string, path: string) => Promise<void>;
-}
-
-let libPromise: Promise<Lib> | null = null;
-function loadLib(): Promise<Lib> {
-  if (!libPromise) {
-    libPromise = Promise.all([importDist('browser/dom-helpers.js'), importDist('interceptor.js'), importDist('browser/errors.js'), importDist('utils.js')])
-      .then(([dh, ic, er, ut]) => ({
-        waitForDomStableJs: dh.waitForDomStableJs, waitForSelectorJs: dh.waitForSelectorJs, waitForTextJs: dh.waitForTextJs,
-        autoScrollJs: dh.autoScrollJs, networkRequestsJs: dh.networkRequestsJs, waitForCaptureJs: dh.waitForCaptureJs,
-        generateInterceptorJs: ic.generateInterceptorJs, generateReadInterceptedJs: ic.generateReadInterceptedJs,
-        classifyBrowserError: er.classifyBrowserError, saveBase64ToFile: ut.saveBase64ToFile,
-      }));
-  }
-  return libPromise;
+/** Only retry errors indicating the execution target changed during navigation. */
+function isNavigationError(err: unknown): boolean {
+  const code = err instanceof BrowserCommandError ? err.code : undefined;
+  if (code === 'target_navigated') return true;
+  if (code && ['attach_failed', 'tab_gone', 'detached_mid_command', 'cdp_timeout'].includes(code)) return false;
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes('Inspected target navigated or closed') || (message.includes('-32000') && /target|context/i.test(message));
 }
 
 function isStalePageIdentityError(err: unknown): boolean {
@@ -72,22 +46,20 @@ function isStalePageIdentityError(err: unknown): boolean {
   return message.includes('stale page identity') || /^Page not found:\s*\S+\s*$/.test(message);
 }
 
-class ExtensionPage {
+class ExtensionPage implements ExtensionRuntimePage {
   readonly session: string;
   readonly surface: 'browser' | 'adapter';
   private readonly bridge: ExtensionBridge;
   private readonly opts: ExtensionPageOptions;
-  private readonly lib: Lib;
   private _page: string | undefined;
   private _lastUrl: string | null = null;
   /** A page created for one tab keeps that identity for life: it never adopts another tab, and once its tab is closed or released every command fails with stale_page. */
   private readonly bound: boolean;
   private closed = false;
 
-  constructor(bridge: ExtensionBridge, opts: ExtensionPageOptions, lib: Lib) {
+  constructor(bridge: ExtensionBridge, opts: ExtensionPageOptions) {
     this.bridge = bridge;
     this.opts = opts;
-    this.lib = lib;
     this.session = opts.session;
     this.surface = opts.surface;
     this._page = opts.page;
@@ -124,27 +96,25 @@ class ExtensionPage {
     if (options?.waitUntil !== 'none') {
       // We drive the user's real Chrome via the extension — no anti-detection stealth needed; just wait for the DOM to settle.
       const maxMs = options?.settleMs ?? 1000;
-      const code = this.lib.waitForDomStableJs(maxMs, Math.min(500, maxMs));
+      const code = waitForDomStableJs(maxMs, Math.min(500, maxMs));
       try { await this.send('exec', { code }); } catch (err) {
-        const advice = this.lib.classifyBrowserError(err);
-        if (advice.kind !== 'target-navigation') throw err;
-        await new Promise((r) => setTimeout(r, advice.delayMs));
-        try { await this.send('exec', { code }); } catch (retryErr) { if (this.lib.classifyBrowserError(retryErr).kind !== 'target-navigation') throw retryErr; }
+        if (!isNavigationError(err)) throw err;
+        await new Promise((r) => setTimeout(r, 200));
+        try { await this.send('exec', { code }); } catch (retryErr) { if (!isNavigationError(retryErr)) throw retryErr; }
       }
     }
   }
   getActivePage(): string | undefined { return this._page; }
 
-  async evaluate(input: unknown, ...args: unknown[]): Promise<unknown> {
-    const code = buildEvaluateExpression(input as string, args);
-    try { return (await this.send('exec', { code })).data; } catch (err) {
-      const advice = this.lib.classifyBrowserError(err);
-      if (advice.kind !== 'target-navigation') throw err;
-      await new Promise((r) => setTimeout(r, advice.delayMs));
-      return (await this.send('exec', { code })).data;
+  async evaluate<T = unknown>(input: string): Promise<T> {
+    const code = wrapForEval(input);
+    try { return (await this.send('exec', { code })).data as T; } catch (err) {
+      if (!isNavigationError(err)) throw err;
+      await new Promise((r) => setTimeout(r, 200));
+      return (await this.send('exec', { code })).data as T;
     }
   }
-  /** Evaluate `js` with named args injected as `const` declarations (OpenCLI adapter contract). */
+  /** Evaluate `js` with named args injected as `const` declarations. */
   async evaluateWithArgs(js: string, args: Record<string, unknown>): Promise<unknown> {
     const declarations = Object.entries(args).map(([key, value]) => {
       if (!/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(key)) throw new Error(`evaluateWithArgs: invalid key "${key}"`);
@@ -199,57 +169,26 @@ class ExtensionPage {
     this._lastUrl = null;
     return r.page;
   }
-  async closeTab(target?: number | string): Promise<void> {
+  async closeTab(target?: string): Promise<void> {
     const params: Partial<Command> = { op: 'close', ...this.sessionOpts() };
-    if (typeof target === 'number') params.index = target; else if (typeof target === 'string') params.page = target; else if (this._page !== undefined) params.page = this._page;
+    if (typeof target === 'string') params.page = target; else if (this._page !== undefined) params.page = this._page;
     const r = await this.bridge.send('tabs', params);
     const closed = (r.data as { closed?: string } | undefined)?.closed;
     if ((closed && closed === this._page) || (!closed && (target === undefined || target === this._page))) { if (this.bound) this.closed = true; else this._page = undefined; this._lastUrl = null; }
   }
-  async selectTab(target: number | string): Promise<void> {
-    const r = await this.bridge.send('tabs', { op: 'select', ...(typeof target === 'number' ? { index: target } : { page: target }), ...this.sessionOpts() });
-    if (r.page) this._page = r.page;
-    this._lastUrl = null;
-  }
-  async screenshot(options: { format?: 'png' | 'jpeg'; quality?: number; fullPage?: boolean; width?: number; height?: number; path?: string } = {}): Promise<string> {
+  async screenshot(options: { format?: 'png' | 'jpeg'; quality?: number; fullPage?: boolean; width?: number; height?: number } = {}): Promise<string> {
     const r = await this.send('screenshot', { format: options.format, quality: options.quality, fullPage: options.fullPage, width: options.width, height: options.height });
     const b64 = r.data as string;
-    if (options.path) await this.lib.saveBase64ToFile(b64, options.path);
     return b64;
-  }
-  /** Screenshot with eN ref labels overlaid, using our own annotate overlay (one engine). */
-  async annotatedScreenshot(options: { format?: 'png' | 'jpeg'; quality?: number; fullPage?: boolean; width?: number; height?: number; path?: string } = {}): Promise<string> {
-    try { await this.pageCall('annotate'); return await this.screenshot(options); }
-    finally { await this.pageCall('unannotate').catch(() => {}); }
   }
   async startNetworkCapture(pattern = ''): Promise<boolean> { await this.send('network-capture-start', { pattern }); return true; }
   async readNetworkCapture(): Promise<unknown[]> { const r = await this.send('network-capture-read'); return Array.isArray(r.data) ? r.data : []; }
   /** Page-side performance entries (fallback when CDP capture is unavailable) — a pure helper script, not a locator. */
-  async networkRequests(includeStatic = false): Promise<unknown[]> { const r = await this.evaluate(this.lib.networkRequestsJs(includeStatic)); return Array.isArray(r) ? r : []; }
+  async networkRequests(includeStatic = false): Promise<unknown[]> { const r = await this.evaluate(networkRequestsJs(includeStatic)); return Array.isArray(r) ? r : []; }
   async waitForDownload(pattern = '', timeoutMs = 30_000): Promise<unknown> { return (await this.send('wait-download', { pattern, timeoutMs })).data; }
-  async setFileInput(files: string[], selector?: string): Promise<void> { await this.send('set-file-input', { files, selector }); }
-  async insertText(text: string): Promise<void> { await this.send('insert-text', { text }); }
   async frames(): Promise<Array<{ index: number; frameId: string; url: string; name: string }>> { const r = await this.send('frames'); return Array.isArray(r.data) ? r.data as Array<{ index: number; frameId: string; url: string; name: string }> : []; }
-  async evaluateInFrame(js: string, frameIndex: number): Promise<unknown> { return (await this.send('exec', { code: buildEvaluateExpression(js), frameIndex })).data; }
+  async evaluateInFrame(js: string, frameIndex: number): Promise<unknown> { return (await this.send('exec', { code: wrapForEval(js), frameIndex })).data; }
   async cdp(method: string, params?: Record<string, unknown>): Promise<unknown> { return (await this.send('cdp', { cdpMethod: method, cdpParams: params })).data; }
-
-  // ── OpenCLI adapter utility contract, served on our engine (pure helper JS, no shadow locator) ──
-  async sleep(seconds: number): Promise<void> { await new Promise((r) => setTimeout(r, seconds * 1000)); }
-  async wait(options: number | { time?: number; selector?: string; text?: string; timeout?: number }): Promise<void> {
-    if (typeof options === 'number') {
-      if (options >= 1) { try { const maxMs = options * 1000; await this.evaluate(this.lib.waitForDomStableJs(maxMs, Math.min(500, maxMs))); return; } catch { /* fall through to sleep */ } }
-      await new Promise((r) => setTimeout(r, options * 1000)); return;
-    }
-    if (typeof options.time === 'number') { await new Promise((r) => setTimeout(r, options.time! * 1000)); return; }
-    if (options.selector) { await this.evaluate(this.lib.waitForSelectorJs(options.selector, (options.timeout ?? 10) * 1000)); return; }
-    if (options.text) { await this.evaluate(this.lib.waitForTextJs(options.text, (options.timeout ?? 30) * 1000)); }
-  }
-  async autoScroll(options?: { times?: number; delayMs?: number }): Promise<void> { await this.evaluate(this.lib.autoScrollJs(options?.times ?? 3, options?.delayMs ?? 2000)); }
-  /** Accessibility snapshot for adapters — our aria snapshot (one AX/ref space, no shadow _axRefs). */
-  async snapshot(_opts: Record<string, unknown> = {}): Promise<string> { return this.aria({ viewport: false }); }
-  async installInterceptor(pattern: unknown): Promise<void> { await this.evaluate(this.lib.generateInterceptorJs(JSON.stringify(pattern), { arrayName: '__opencli_xhr', patchGuard: '__opencli_interceptor_patched' })); }
-  async getInterceptedRequests(): Promise<unknown[]> { const r = await this.evaluate(this.lib.generateReadInterceptedJs('__opencli_xhr')); return Array.isArray(r) ? r : []; }
-  async waitForCapture(timeout = 10): Promise<void> { await this.evaluate(this.lib.waitForCaptureJs(timeout * 1000)); }
 
   // ── opencli-mcp extras ──
   async nameSession(name: string): Promise<void> { await this.bridge.send('session-name', { ...this.sessionOpts(), name }); }
@@ -289,7 +228,7 @@ class ExtensionPage {
   }
   async setVisibility(visible: boolean): Promise<void> { await this.bridge.send('visibility', { ...this.sessionOpts(), visible }); }
 
-  // ── OpenCLI adapter interaction contract, served by the act engine (no second locator engine) ──
+  // ── Interactions and observations ──
   /** Accessibility snapshot text (the agent's observation) for adapters and compiled tools. */
   async aria(opts: { viewport?: boolean } = {}): Promise<string> { return String(await this.pageCall('aria', { viewport: Boolean(opts.viewport) })); }
   async expect(what: Expectation, opts: { timeoutMs?: number } = {}): Promise<CheckResult> {
@@ -303,47 +242,9 @@ class ExtensionPage {
     const state = await this.aria({ viewport: true }).catch(() => '');
     throw new ActError('expectation_failed', last ? last.failed.join('; ') : 'page not reachable', 'Observe the page; the flow may need a different step or a wait.', { expect: what as Record<string, unknown>, failed: last?.failed ?? [], url: last?.url, title: last?.title, state: state.slice(0, 4000) });
   }
-  async click(ref: string, opts: { nth?: number; firstOnMulti?: boolean } = {}): Promise<{ ref: string; matches_n: number; match_level: 'exact'; click_method: string; hit: string }> {
-    const r = await this.act({ kind: 'click', target: refToTarget(ref, opts) });
-    return { ref, matches_n: r.matches_n, match_level: 'exact', click_method: r.method, hit: r.hit };
-  }
-  async dblClick(ref: string, opts: { nth?: number; firstOnMulti?: boolean } = {}): Promise<{ matches_n: number; match_level: 'exact' }> { const r = await this.act({ kind: 'dblclick', target: refToTarget(ref, opts) }); return { matches_n: r.matches_n, match_level: 'exact' }; }
-  async hover(ref: string, opts: { nth?: number; firstOnMulti?: boolean } = {}): Promise<{ matches_n: number; match_level: 'exact' }> { const r = await this.act({ kind: 'hover', target: refToTarget(ref, opts) }); return { matches_n: r.matches_n, match_level: 'exact' }; }
-  async focus(ref: string, opts: { nth?: number; firstOnMulti?: boolean } = {}): Promise<{ focused: boolean; matches_n: number; match_level: 'exact' }> { const r = await this.act({ kind: 'focus', target: refToTarget(ref, opts) }); return { focused: true, matches_n: r.matches_n, match_level: 'exact' }; }
-  async typeText(ref: string, text: string, opts: { nth?: number; firstOnMulti?: boolean } = {}): Promise<{ matches_n: number; match_level: 'exact' }> { const r = await this.act({ kind: 'type', target: refToTarget(ref, opts), value: text }); return { matches_n: r.matches_n, match_level: 'exact' }; }
-  async fillText(ref: string, text: string, opts: { nth?: number; firstOnMulti?: boolean } = {}): Promise<{ filled: boolean; verified: boolean; expected: string; actual: string; length: number; matches_n: number; match_level: 'exact' }> {
-    const r = await this.act({ kind: 'fill', target: refToTarget(ref, opts), value: text });
-    return { filled: Boolean(r.filled), verified: Boolean(r.verified), expected: text, actual: r.actual ?? '', length: text.length, matches_n: r.matches_n, match_level: 'exact' };
-  }
-  async setChecked(ref: string, checked: boolean, opts: { nth?: number; firstOnMulti?: boolean } = {}): Promise<{ checked: boolean; changed: boolean; matches_n: number; match_level: 'exact' }> {
-    const r = await this.act({ kind: checked ? 'check' : 'uncheck', target: refToTarget(ref, opts) });
-    return { checked: Boolean(r.checked), changed: Boolean(r.changed), matches_n: r.matches_n, match_level: 'exact' };
-  }
-  async uploadFiles(ref: string, files: string[], opts: { nth?: number; firstOnMulti?: boolean } = {}): Promise<{ uploaded: boolean; files: number; file_names: string[]; target: string; matches_n: number; match_level: 'exact' }> {
-    const r = await this.act({ kind: 'upload', target: refToTarget(ref, opts), files });
-    return { uploaded: true, files: files.length, file_names: files.map((f) => f.split('/').pop() ?? f), target: ref, matches_n: r.matches_n, match_level: 'exact' };
-  }
-  async drag(source: string, target: string, opts: { from?: { nth?: number; firstOnMulti?: boolean }; to?: { nth?: number; firstOnMulti?: boolean } } = {}): Promise<{ dragged: boolean; source: string; target: string; source_matches_n: number; target_matches_n: number; source_match_level: 'exact'; target_match_level: 'exact' }> {
-    const r = await this.act({ kind: 'drag', target: refToTarget(source, opts.from), to: refToTarget(target, opts.to) });
-    return { dragged: true, source, target, source_matches_n: r.matches_n, target_matches_n: 1, source_match_level: 'exact', target_match_level: 'exact' };
-  }
-  async scrollTo(ref: string, opts: { nth?: number; firstOnMulti?: boolean } = {}): Promise<{ matches_n: number }> { const r = await this.act({ kind: 'hover', target: refToTarget(ref, opts) }); return { matches_n: r.matches_n }; }
-  async pressKey(key: string): Promise<void> {
-    const { def, modifiers } = parseKey(key);
-    await this.cdp('Input.dispatchKeyEvent', { type: def.text ? 'keyDown' : 'rawKeyDown', key: def.key, code: def.code, windowsVirtualKeyCode: def.keyCode, nativeVirtualKeyCode: def.keyCode, modifiers, ...(def.text && { text: def.text, unmodifiedText: def.text }) });
-    await this.cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: def.key, code: def.code, windowsVirtualKeyCode: def.keyCode, nativeVirtualKeyCode: def.keyCode, modifiers });
-  }
-  async scroll(direction = 'down', amount = 600): Promise<void> {
-    const vp = await this.evaluate('({ x: innerWidth / 2, y: innerHeight / 2 })') as { x: number; y: number };
-    await this.act({ kind: 'scroll', target: { x: vp.x, y: vp.y }, direction: direction as 'up' | 'down' | 'left' | 'right', amount });
-  }
-  async nativeClick(x: number, y: number): Promise<void> { await this.act({ kind: 'click', target: { x, y } }); }
-  async nativeType(text: string): Promise<void> { await this.insertText(text); }
-  async nativeKeyPress(key: string, modifiers: string[] = []): Promise<void> { await this.pressKey([...modifiers, key].join('+')); }
   async getVisibility(): Promise<boolean> { const r = await this.bridge.send('visibility', { ...this.sessionOpts() }); return Boolean((r.data as { visible?: boolean } | undefined)?.visible); }
 }
 
 export async function createExtensionPage(bridge: ExtensionBridge, opts: ExtensionPageOptions): Promise<ExtensionRuntimePage> {
-  const lib = await loadLib();
-  return new ExtensionPage(bridge, opts, lib) as unknown as ExtensionRuntimePage;
+  return new ExtensionPage(bridge, opts);
 }

@@ -132,6 +132,9 @@ export interface ActResult {
   navigated?: boolean;
   url?: string;
   filled?: boolean; verified?: boolean; actual?: string; checked?: boolean; changed?: boolean; key?: string;
+  /** options actually selected; upload count */
+  selected?: string[];
+  files?: number;
 }
 
 export interface Result {

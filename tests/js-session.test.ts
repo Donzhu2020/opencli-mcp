@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { transformCode, JsSession } from '../src/mcp/js-session.js';
+import { transformCode, JsSession, safeStringify } from '../src/mcp/js-session.js';
 
 describe('js session', () => {
   it('rewrites top-level declarations and returns the last expression', () => {
@@ -25,6 +25,16 @@ describe('js session', () => {
     const s = new JsSession({ shot: () => ({ __image: true, mimeType: 'image/png', base64: 'QUJD' }) });
     const r = await s.run('shot()');
     expect(r.images).toHaveLength(1); expect(r.value).toMatchObject({ image: expect.stringContaining('image/png') });
+  });
+});
+
+describe('safeStringify', () => {
+  it('stays valid JSON when the text is over the limit', () => {
+    const raw = safeStringify({ ok: true, state: 'x'.repeat(500) }, 200);
+    const parsed = JSON.parse(raw) as { truncated: boolean; chars: number; preview: string };
+    expect(parsed.truncated).toBe(true);
+    expect(parsed.chars).toBeGreaterThan(200);
+    expect(parsed.preview.length).toBeGreaterThan(0);
   });
 });
 

@@ -4,6 +4,7 @@
  */
 import type { Runtime } from '../runtime/runtime.js';
 import { ActionError } from './errors.js';
+import { argSpec } from '../sites/schema.js';
 import { Policy } from '../runtime/policy.js';
 import { discoverEndpoints, type DiscoverResult } from '../recon/discover.js';
 import { compileFromTrace, listDefinedTools, type ToolDefinition } from '../sites/define.js';
@@ -38,7 +39,7 @@ export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
       rt.emit('tools-changed', { site });
       const cmds = (await rt.registry.commands(site)).filter((c) => opts.write || c.access === 'read');
       const tools = cmds.map((c) => `${site}_${c.name}`.replace(/[^A-Za-z0-9_-]/g, '_'));
-      return { site, tools, commands: cmds.map((c) => ({ tool: `${site}_${c.name}`.replace(/[^A-Za-z0-9_-]/g, '_'), description: c.description, access: c.access, args: c.args.map((a) => `${a.name}${a.required ? '*' : ''}${a.type ? `:${a.type}` : ''}`) })), note: cmds.some((c) => c.browser) ? 'Browser-backed commands reuse your logged-in Chrome session in a background adapter tab.' : undefined };
+      return { site, tools, commands: cmds.map((c) => ({ tool: `${site}_${c.name}`.replace(/[^A-Za-z0-9_-]/g, '_'), description: c.description, access: c.access, args: argSpec(c.args) })), note: cmds.some((c) => c.browser) ? 'Browser-backed commands reuse your logged-in Chrome session in a background adapter tab.' : undefined };
     },
     disable: (site: string) => { const ok = state.enabledSites.delete(site); if (ok) rt.emit('tools-changed', { site }); return ok; },
     run: async (site: string, name: string, args: Record<string, unknown> = {}) => {

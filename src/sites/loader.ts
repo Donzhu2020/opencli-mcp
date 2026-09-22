@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { Arg } from './schema.js';
+import { argSpec, type Arg, type ArgView } from './schema.js';
 
 export type SourceKind = 'builtin' | 'user';
 
@@ -151,10 +151,10 @@ export class SiteRegistry {
   async commands(site: string): Promise<Array<Omit<AdapterCommand, 'run'>>> { return (await this.all()).filter((c) => c.site === site).sort((a, b) => a.name.localeCompare(b.name)); }
 
   /** Rank commands for a free-text query, using the in-memory index. */
-  async search(query: string, limit = 20): Promise<Array<{ site: string; name: string; description: string; score: number; access: string; domain?: string; args: string[] }>> {
+  async search(query: string, limit = 20): Promise<Array<{ site: string; name: string; description: string; score: number; access: string; domain?: string; args: ArgView[] }>> {
     const terms = query.toLowerCase().split(/[\s,]+/).filter(Boolean);
     if (!terms.length) return [];
-    const hits: Array<{ site: string; name: string; description: string; score: number; access: string; domain?: string; args: string[] }> = [];
+    const hits: Array<{ site: string; name: string; description: string; score: number; access: string; domain?: string; args: ArgView[] }> = [];
     for (const c of await this.all()) {
       const hay = { site: c.site.toLowerCase(), name: c.name.toLowerCase(), desc: c.description.toLowerCase(), domain: (c.domain ?? '').toLowerCase(), aliases: (c.aliases ?? []).join(' ').toLowerCase() };
       let score = 0;
@@ -165,7 +165,7 @@ export class SiteRegistry {
         if (hay.aliases.includes(t)) score += 3;
         if (hay.desc.includes(t)) score += 2;
       }
-      if (score > 0) hits.push({ site: c.site, name: c.name, description: c.description, score, access: c.access, domain: c.domain, args: c.args.map((a) => `${a.name}${a.required ? '*' : ''}${a.type ? `:${a.type}` : ''}`) });
+      if (score > 0) hits.push({ site: c.site, name: c.name, description: c.description, score, access: c.access, domain: c.domain, args: argSpec(c.args) });
     }
     return hits.sort((a, b) => b.score - a.score).slice(0, limit);
   }

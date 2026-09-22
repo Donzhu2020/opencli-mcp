@@ -29,11 +29,11 @@ families are in the `errors` doc; the full object model arrives with your first 
 9. **Dialogs:** a native `alert`/`confirm`/`prompt` freezes the page (`dialog_open`, details in `error.dialog`). Read
    with `tab.dialog.get()` and answer `tab.dialog.accept(text?)` / `tab.dialog.dismiss()` (in `js`), then retry — never
    answer a dialog the user didn't ask you to.
-10. **Observe discipline:** one observe to orient, then act on its refs; after an action collect only the state the next
-    decision needs (the diff is usually enough; `diff:false` for the full tree; `viewport:true` for the on-screen
-    subtree). Don't re-verify a fact an authoritative signal already shows (checked state, selected option, success
-    toast, URL parameter). No fixed sleeps — `tab_expect` waits for the state you need. Credential field values read as
-    `<redacted>`.
+10. **Observe discipline:** one observe to orient, then act on its refs. The snapshot is the full tree unless you pass
+    `diff: true`, and only do that when the previous full snapshot is still in your context. `viewport: true` is the
+    on-screen subtree, not a page of the full tree. Don't re-verify a fact an authoritative signal already shows
+    (checked state, selected option, success toast, URL parameter). No fixed sleeps — `tab_expect` waits for the state
+    you need. Credential field values read as `<redacted>`.
 11. **WebMCP:** pages that register their own tools show them in `tab.webmcp.list()` (in `js`); prefer one over clicking
     the DOM, but a page tool never authorizes a consequential action.
 12. **Lookups:** one focused direct navigation to an obvious result or search URL is fine; don't iterate guessed URL

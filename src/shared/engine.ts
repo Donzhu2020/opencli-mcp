@@ -184,17 +184,19 @@ export async function performAct(io: ActIO, spec: ActSpec): Promise<ActResult> {
     }
     case 'fill': {
       if (!r.editable) throw new ActError('not_editable', 'target is not an editable field', 'Click the control that opens the editor, or target the input itself.');
-      const value = spec.value ?? '';
+      if (spec.value === undefined) throw new ActError('invalid_args', 'action "fill" needs value. Pass "" to clear; omitting it is not a clear.');
+      const value = spec.value;
       // Playwright's fill: sets the value for date/color/range inputs ('done'), or focuses + selects text and asks for input ('needsinput')
       const outcome = await io.call('fill', { value }) as string;
       if (outcome === 'needsinput') {
         if (value === '') await key(io, 'Backspace'); else await io.cdp('Input.insertText', { text: value });
       } else if (outcome !== 'done') throw new ActError('not_editable', outcome.replace(/^error:/, ''));
-      const actual = await readValue();
+      let actual = await readValue();
       let verified = actual === value;
       if (!verified) {
         await io.call('nativeSet', { value }); // controlled inputs that swallow insertText
-        verified = (await readValue()) === value;
+        actual = await readValue();
+        verified = actual === value;
         Object.assign(base, { method: 'dom' });
       }
       Object.assign(base, { filled: true, verified, actual: actual ?? undefined });
@@ -202,17 +204,25 @@ export async function performAct(io: ActIO, spec: ActSpec): Promise<ActResult> {
     }
     case 'type': {
       if (!r.editable) throw new ActError('not_editable', 'target is not an editable field');
+      if (!spec.value) throw new ActError('invalid_args', 'action "type" needs a non-empty value.');
       const f = await focus(); if (f !== 'done') throw new ActError('action_failed', `focus: ${f}`);
       await io.call('caretToEnd');
-      if (spec.value) await io.cdp('Input.insertText', { text: spec.value });
+      await io.cdp('Input.insertText', { text: spec.value });
       const actual = await readValue();
-      Object.assign(base, { filled: true, verified: Boolean(actual && actual.endsWith(spec.value ?? '')), actual: actual ?? undefined });
+      Object.assign(base, { filled: true, verified: Boolean(actual && actual.endsWith(spec.value)), actual: actual ?? undefined });
       break;
     }
-    case 'press': { await focus().catch(() => 'error:notconnected'); /* non-focusable targets still receive page-level keys */ await key(io, spec.value ?? 'Enter'); Object.assign(base, { key: spec.value ?? 'Enter' }); break; }
+    case 'press': {
+      if (!spec.value) throw new ActError('invalid_args', 'action "press" needs a non-empty key. There is no default.');
+      await focus().catch(() => 'error:notconnected'); // non-focusable targets still receive page-level keys
+      await key(io, spec.value);
+      Object.assign(base, { key: spec.value });
+      break;
+    }
     case 'select': {
       if (!r.isSelect) throw new ActError('not_a_select', 'target is not a <select>; click it and choose the option like a user');
-      const res = await io.call('select', { value: spec.value ?? '' }) as SelectResult;
+      if (!spec.value) throw new ActError('invalid_args', 'action "select" needs a non-empty option label or value.');
+      const res = await io.call('select', { value: spec.value }) as SelectResult;
       if (res.error) throw new ActError(res.error === 'optionsnotfound' ? 'option_not_found' : res.error, res.error === 'optionsnotfound' ? `no option matches "${spec.value}"` : res.error, undefined, res.available ? { available: res.available } : undefined);
       Object.assign(base, { method: 'dom', selected: res.selected });
       break;

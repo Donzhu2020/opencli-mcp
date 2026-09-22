@@ -6,7 +6,7 @@ Pre-bound session globals (no import/bootstrap): `browser` (the default Chrome),
 
 ```js
 const tab = await browser.tabs.new('https://news.ycombinator.com');
-const state = await tab.observe();            // accessibility snapshot with [ref=eN] refs
+const state = await tab.observe();            // full accessibility snapshot with [ref=eN] refs; { diff: true } only if you still have the previous snapshot
 await tab.act({ target: { text: 'new' }, action: 'click' });
 const titles = await tab.evaluate('[...document.querySelectorAll(".titleline a")].map(a => a.textContent)');
 await sites.enable('hackernews');

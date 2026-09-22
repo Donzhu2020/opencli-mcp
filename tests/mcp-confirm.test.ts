@@ -55,6 +55,19 @@ describe('MRTR confirmations (D1)', () => {
     } finally { await h.cleanup(); }
   });
 
+  it('rejects a missing required arg before asking the user', async () => {
+    const h = await harness({ confirmWrites: true }, () => ({ action: 'accept', content: { approve: true } }));
+    try {
+      await h.client.callTool({ name: 'tools_define', arguments: { site: h.site, name: 'need', description: 'needs text', access: 'write', args: [{ name: 'text', required: true }], func: 'async () => ({ done: true })' } });
+      const r = await h.client.callTool({ name: 'site_run', arguments: { site: h.site, command: 'need', args: {} } });
+      expect(h.elicits()).toBe(0);
+      expect(r.isError).toBe(true);
+      const parsed = body(r) as { error?: { code?: string; details?: { expected?: Array<{ name: string }> } } };
+      expect(parsed.error?.code).toBe('invalid_args');
+      expect(parsed.error?.details?.expected?.map((a) => a.name)).toContain('text');
+    } finally { await h.cleanup(); }
+  });
+
   it('does not prompt when confirmWrites is off', async () => {
     const h = await harness({ confirmWrites: false }, () => ({ action: 'accept', content: { approve: true } }));
     try {

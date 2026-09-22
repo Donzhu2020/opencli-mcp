@@ -4,7 +4,7 @@
  * engine, no CDP shadow page, no source branching.
  */
 import { coerceArgs } from './schema.js';
-import { ActionError } from '../api/errors.js';
+import { ActionError, normalizeErrorCode } from '../api/errors.js';
 import type { AdapterCommand } from './loader.js';
 import type { RuntimePage } from '../backends/page-types.js';
 
@@ -22,11 +22,20 @@ export const DEFAULT_TIMEOUT_MS = 120_000;
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string, signal?: AbortSignal): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(Object.assign(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`), { code: 'timeout' })), ms);
-    const onAbort = (): void => { clearTimeout(timer); reject(new ActionError('cancelled', `${label} cancelled by the client`)); };
-    if (signal) { if (signal.aborted) return onAbort(); signal.addEventListener('abort', onAbort, { once: true }); }
-    p.then((v) => { clearTimeout(timer); if (signal) signal.removeEventListener('abort', onAbort); resolve(v); },
-           (e) => { clearTimeout(timer); if (signal) signal.removeEventListener('abort', onAbort); reject(e); });
+    let settled = false;
+    const timer = setTimeout(() => finish(() => reject(Object.assign(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`), { code: 'timeout' }))), ms);
+    const finish = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onAbort);
+      fn();
+    };
+    const onAbort = (): void => finish(() => reject(new ActionError('cancelled', `${label} cancelled by the client`)));
+    // Attach before checking aborted, so a rejection from work already started cannot escape.
+    p.then((v) => finish(() => resolve(v)), (e) => finish(() => reject(e)));
+    if (signal?.aborted) onAbort();
+    else if (signal) signal.addEventListener('abort', onAbort, { once: true });
   });
 }
 
@@ -51,6 +60,7 @@ export async function runAdapter(
     } else {
       ctx = { args, tab: undefined, sites: undefined, recon: undefined, signal: opts.signal };
     }
+    if (opts.signal?.aborted) throw new ActionError('cancelled', `${key} cancelled by the client`);
     const result = await withTimeout(Promise.resolve(cmd.run(ctx)), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, key, opts.signal);
     const elapsedMs = Date.now() - started;
     if (Array.isArray(result)) return { ok: true, site: cmd.site, name: cmd.name, rows: result, elapsedMs };
@@ -61,10 +71,15 @@ export async function runAdapter(
     }
     return { ok: true, site: cmd.site, name: cmd.name, value: result, elapsedMs };
   } catch (err) {
+    const elapsedMs = Date.now() - started;
+    if (err instanceof ActionError) {
+      const { code, message, hint, ...rest } = err.toJSON() as { code: string; message: string; hint?: string };
+      return { ok: false, site: cmd.site, name: cmd.name, elapsedMs, error: { code: normalizeErrorCode(String(code)), message: String(message), ...(hint ? { hint: String(hint) } : {}), ...rest } };
+    }
     const e = err as { code?: string; message?: string; hint?: string; details?: Record<string, unknown> };
     return {
-      ok: false, site: cmd.site, name: cmd.name, elapsedMs: Date.now() - started,
-      error: { code: e.code ?? 'command_failed', message: String(e.message ?? err), ...(e.hint && { hint: e.hint }), ...(e.details && { details: e.details }) },
+      ok: false, site: cmd.site, name: cmd.name, elapsedMs,
+      error: { code: normalizeErrorCode(e.code ?? 'command_failed'), message: String(e.message ?? err), ...(e.hint && { hint: e.hint }), ...(e.details && { details: e.details }) },
     };
   }
 }

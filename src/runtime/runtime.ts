@@ -164,7 +164,7 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
 
   isExtensionPage(page: RuntimePage): page is ExtensionRuntimePage { return typeof (page as ExtensionRuntimePage).claim === 'function'; }
 
-  async runSite(sessionId: string | null, site: string, name: string, args: Record<string, unknown>, opts: { timeoutMs?: number } = {}): Promise<CommandRunResult | CommandRunError> {
+  async runSite(sessionId: string | null, site: string, name: string, args: Record<string, unknown>, opts: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<CommandRunResult | CommandRunError> {
     const cmd = await this.registry.resolve(site, name);
     const r = await runAdapter(this, cmd, args, opts);
     if (sessionId) this.session(sessionId).trace.record({ kind: 'site', site, name, ok: r.ok, elapsedMs: r.elapsedMs });

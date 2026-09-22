@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { argsToShape, coerceArgs, type Arg } from '../src/sites/schema.js';
+import { argsToShape, argSpec, coerceArgs, omitCliArgs, type Arg } from '../src/sites/schema.js';
+import { ActionError } from '../src/api/errors.js';
 import { SiteRegistry } from '../src/sites/loader.js';
 import { defaultSources } from '../src/lib/sources.js';
 import { z } from 'zod';
@@ -12,7 +13,20 @@ describe('schema', () => {
     expect(() => shape.parse({ limit: 3 })).toThrow();
     expect(coerceArgs(args, { q: 'x', limit: '5', sort: 'hot' })).toEqual({ q: 'x', limit: 5, sort: 'hot' });
     expect(() => coerceArgs(args, { q: 'x', sort: 'weird' })).toThrow(/one of/);
-    expect(() => coerceArgs(args, {})).toThrow(/required/);
+    expect(() => coerceArgs(args, {})).toThrow(ActionError);
+  });
+
+  it('hides CLI-only args from the agent schema but still coerces them when passed', () => {
+    const args: Arg[] = [{ name: 'q', required: true }, { name: 'output-file', help: 'write jsonl' }, { name: 'limit', type: 'int', default: 5 }];
+    expect(Object.keys(z.object(argsToShape(args)).shape)).toEqual(['q', 'limit']);
+    expect(argSpec(args).map((a) => a.name)).toEqual(['q', 'limit']);
+    expect(omitCliArgs({ q: 'x', 'output-file': '/tmp/a' })).toEqual({ q: 'x' });
+    expect(coerceArgs(args, { q: 'x', 'output-file': '/tmp/a' })['output-file']).toBeUndefined();
+    let missing: ActionError | undefined;
+    try { coerceArgs(args, {}); } catch (e) { missing = e as ActionError; }
+    expect(missing).toBeInstanceOf(ActionError);
+    expect(missing?.code).toBe('invalid_args');
+    expect(missing?.data).toMatchObject({ details: { expected: [{ name: 'q', required: true }, { name: 'limit', type: 'int', default: 5 }] } });
   });
 });
 
@@ -38,6 +52,7 @@ describe('SourceLoader', () => {
     await r.load();
     const hits = await r.search('twitter bookmarks');
     expect(hits[0]?.site).toBe('twitter');
+    expect(hits[0]?.args).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'limit', type: 'int', default: 20 })]));
     await expect(r.resolve('twitter', 'nope')).rejects.toMatchObject({ code: 'unknown_command' });
   });
 });

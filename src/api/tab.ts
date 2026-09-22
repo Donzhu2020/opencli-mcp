@@ -22,7 +22,7 @@ export type ActAction = 'click' | 'dblclick' | 'hover' | 'focus' | 'fill' | 'typ
 
 export interface ActOptions { target?: Target; action: ActAction; value?: string; files?: string[]; to?: Target; direction?: 'up' | 'down' | 'left' | 'right'; amount?: number; timeoutMs?: number; settleMs?: number }
 
-export interface ObserveOptions { mode?: 'state' | 'screenshot' | 'both'; /** return only the change since the previous observe when the page moved a little (default true) */ diff?: boolean; /** only the subtree on screen right now (what a screenshot shows) */ viewport?: boolean; /** overlay eN labels on the screenshot */ annotate?: boolean; fullPage?: boolean }
+export interface ObserveOptions { mode?: 'state' | 'screenshot' | 'both'; /** diff against the previous observe. Off unless explicitly true — a diff is useless when the caller no longer has the base snapshot. */ diff?: boolean; /** only the subtree on screen right now (what a screenshot shows) */ viewport?: boolean; /** overlay eN labels on the screenshot */ annotate?: boolean; fullPage?: boolean }
 
 export interface ImageValue { __image: true; mimeType: string; base64: string }
 
@@ -139,7 +139,7 @@ export class Tab {
         const key = `${this.id}:${opts.viewport ? 'vp' : 'all'}`;
         const prev = this.ctx.state.lastObserve.get(key);
         this.ctx.state.lastObserve.set(key, text);
-        const diffOn = opts.diff !== false;
+        const diffOn = opts.diff === true;
         // the tail line ("Focused: …") is state, not structure: diff the tree, then re-append the current focus
         const split = (t: string) => { const i = t.lastIndexOf('\nFocused: '); return i >= 0 ? [t.slice(0, i), t.slice(i + 1)] : [t, '']; };
         const [tree, focus] = split(text); const [prevTree] = prev ? split(prev) : [''];
@@ -204,6 +204,8 @@ export class Tab {
           ...(r.ref ? { ref: r.ref } : {}),
           ...(r.filled !== undefined ? { filled: r.filled, verified: r.verified, actual: r.actual } : {}),
           ...(r.checked !== undefined ? { checked: r.checked, changed: r.changed } : {}),
+          ...(r.selected !== undefined ? { selected: r.selected } : {}),
+          ...(r.files !== undefined ? { files: r.files } : {}),
         };
       } catch (err) {
         record(false);

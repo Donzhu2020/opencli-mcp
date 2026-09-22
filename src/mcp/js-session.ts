@@ -174,5 +174,14 @@ export function safeStringify(v: unknown, limit = 200_000): string {
       return val;
     }) ?? String(v);
   } catch { s = String(v); }
-  return s.length > limit ? `${s.slice(0, limit)}\n…(truncated ${s.length - limit} chars)` : s;
+  if (s.length <= limit) return s;
+  // A cut JSON string is not JSON. Return a valid envelope; preview is the start of the original text.
+  const previewBudget = Math.max(0, limit - 80);
+  const body = { truncated: true, chars: s.length, limit, preview: s.slice(0, previewBudget) };
+  let out = JSON.stringify(body);
+  if (out.length > limit && previewBudget > 0) {
+    body.preview = s.slice(0, Math.max(0, previewBudget - (out.length - limit)));
+    out = JSON.stringify(body);
+  }
+  return out;
 }

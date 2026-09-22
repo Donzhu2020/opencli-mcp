@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-- Make `setup` the single connection-configuration command: register the browser host and detected MCP client CLIs, guide Chrome Web Store installation only when disconnected, and verify the live connection. Existing MCP client settings are preserved; failed registrations are reported as incomplete.
+- Let users select which MCP clients `setup` configures. Interactive setup defaults to manual configuration; scripts use `--clients claude,codex`, `manual`, or `none`. Unselected clients are left untouched and cancelling the prompt makes no changes.
+
+- Make `setup` the single connection-configuration command: register the browser host and selected MCP client CLIs, guide Chrome Web Store installation only when disconnected, and verify the live connection. Existing MCP client settings are preserved; failed registrations are reported as incomplete.
 - Remove the separate `install` command. Native Messaging registration is internal to `setup`, with no extension ID or unpacked assets required for normal use.
 - Make `doctor` a read-only, human-readable connection check (`--json` for structured output). Diagnose missing or invalid registrations instead of checking local extension build artifacts.
 - Keep unpacked extension loading in the developer guide. Add isolated setup E2E coverage for registration, reruns, repair, Native Messaging, and MCP connectivity.

@@ -7,7 +7,7 @@ For the recommended npm + Chrome Web Store installation, follow the [README quic
 `npm install -g opencli-mcp` installs the software. `opencli-mcp setup` configures the two connections it needs:
 
 1. **Chrome → local program:** writes the Native Messaging registration so Chrome can start the program when the extension connects.
-2. **MCP client → local program:** registers Claude Code and Codex when their CLIs are on your PATH. Existing registrations are kept. Other clients receive a ready-to-copy configuration using absolute paths.
+2. **MCP client → local program:** asks you to select `claude`, `codex`, or both when their CLIs are on your PATH. Only selected clients are configured, and existing registrations are kept. Choose `manual` (the default) for a ready-to-copy configuration using absolute paths, or `none` to configure only the browser connection.
 
 It then checks the live browser connection. If disconnected, it opens the Chrome Web Store and waits for the extension to connect. The extension retries automatically, so you can install it before or after running setup. Already connected? No store page is opened.
 
@@ -15,13 +15,21 @@ It then checks the live browser connection. If disconnected, it opens the Chrome
 
 ### Setup options
 
+In a terminal, enter client IDs separated by commas at the prompt. Press Enter to show manual configuration without modifying any client.
+
+For scripts, select clients explicitly. Without `--clients`, non-interactive setup prints manual configuration and leaves all MCP client settings unchanged:
+
 ```bash
+opencli-mcp setup --clients codex
+opencli-mcp setup --clients claude,codex
+opencli-mcp setup --clients manual  # show configuration for any MCP client
+opencli-mcp setup --clients none    # configure only the browser connection
 opencli-mcp setup --no-open       # print the store link without opening it
 opencli-mcp setup --wait 60       # wait up to 60 seconds (default: 180)
 opencli-mcp setup --no-open --wait 0  # configure and check once without waiting
 ```
 
-A timeout leaves the configuration in place: enable the extension and rerun setup. A detected client registration failure is reported as incomplete even if the browser is connected. If no supported client CLI is found, setup tells you to apply the printed configuration manually.
+A timeout leaves the configuration in place: enable the extension and rerun setup. A detected client registration failure is reported as incomplete even if the browser is connected. If a selected CLI is unavailable, setup reports it before writing any configuration. In an interactive terminal, invalid input can be corrected and Ctrl+C cancels without making changes.
 
 `opencli-mcp doctor` checks registration and the live connection without changing settings. It is for troubleshooting; it is not a required setup step.
 

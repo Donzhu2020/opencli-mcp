@@ -35,9 +35,9 @@ npm install -g opencli-mcp
 opencli-mcp setup
 ```
 
-Keep Chrome open. `setup` connects the extension to the local program, registers Claude Code and Codex when their CLIs are available, and checks the browser connection. If you have not installed the extension yet, it opens the Chrome Web Store for you.
+Keep Chrome open. `setup` connects the extension to the local program, asks which MCP clients to configure, registers only your selection, and checks the browser connection. If you have not installed the extension yet, it opens the Chrome Web Store for you.
 
-For **Cursor, Claude Desktop, and other MCP clients**, copy the configuration printed by `setup` into your client's MCP settings. It uses absolute paths so desktop apps can find the program.
+For **Cursor, Claude Desktop, and other MCP clients**, choose `manual` and copy the configuration printed by `setup` into your client's MCP settings. It uses absolute paths so desktop apps can find the program.
 
 ### 3. Start using it
 
@@ -45,7 +45,7 @@ Restart or reconnect your MCP client, then ask:
 
 > Use opencli-mcp to read the top five Hacker News stories and summarize them with links.
 
-You can rerun `opencli-mcp setup` to repair the browser registration or configure newly installed clients. Existing MCP client settings are preserved. For a read-only connection check, run `opencli-mcp doctor`.
+You can rerun `opencli-mcp setup` to repair the browser registration or select newly installed clients to configure. Existing MCP client settings are preserved. For a read-only connection check, run `opencli-mcp doctor`.
 
 Connection issues? See [troubleshooting](docs/setup.md#troubleshooting).
 

@@ -5,6 +5,7 @@ import { registerHost, projectRoot } from './registration.js';
 import { doctor } from './doctor.js';
 import { EXTENSION_STORE_URL } from './extension.js';
 import path from 'node:path';
+import { createInterface } from 'node:readline/promises';
 
 const say = (line: string): void => { process.stdout.write(`${line}\n`); };
 const exec = promisify(execFile);
@@ -19,11 +20,49 @@ const CLIENTS = [
   { name: 'Claude Code', bin: 'claude', scope: ['-s', 'user'] },
   { name: 'Codex', bin: 'codex', scope: [] },
 ];
-function registerClients(c: StdioCommand): ClientRegistration[] {
+async function selectClients(requested?: string[]): Promise<string[]> {
+  const validate = (values: string[]): string[] => {
+    const ids = [...new Set(values.map((value) => value.trim()))];
+    if (!ids.length || ids.some((id) => !['claude', 'codex', 'manual', 'none'].includes(id))) {
+      throw new Error('Choose claude, codex, manual, or none with --clients (comma-separated).');
+    }
+    if (ids.length > 1 && ids.some((id) => id === 'manual' || id === 'none')) {
+      throw new Error('Choose manual or none on its own.');
+    }
+    for (const id of ids) {
+      if (['claude', 'codex'].includes(id) && !which(id)) throw new Error(`${id} CLI was not found on PATH. Install it first or choose manual.`);
+    }
+    return ids;
+  };
+  if (requested !== undefined) return validate(requested);
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    say('Non-interactive terminal: no MCP client settings will be changed. Use --clients claude,codex to select clients, or --clients none to skip.');
+    return ['manual'];
+  }
+  say('Choose which MCP clients to configure (only selected clients will be changed):');
+  for (const client of CLIENTS) say(`  ${client.bin} — ${client.name}${which(client.bin) ? '' : ' (CLI not found; use manual)'}`);
+  say('  manual — show configuration for Cursor, Claude Desktop, or another client');
+  say('  none   — configure only the browser connection');
+  const prompt = createInterface({ input: process.stdin, output: process.stdout });
+  const controller = new AbortController();
+  const cancel = (): void => controller.abort();
+  prompt.on('SIGINT', cancel);
+  prompt.on('close', cancel);
+  try {
+    while (true) {
+      const answer = await prompt.question('Client IDs, separated by commas [manual]: ', { signal: controller.signal });
+      try { return validate((answer.trim() || 'manual').split(',')); }
+      catch (error) { say((error as Error).message); }
+    }
+  } catch { throw new Error('Setup cancelled; no configuration was changed.'); }
+  finally { prompt.close(); }
+}
+
+function registerClients(c: StdioCommand, selected: string[]): ClientRegistration[] {
   const results: ClientRegistration[] = [];
-  for (const client of CLIENTS) {
+  for (const client of CLIENTS.filter((client) => selected.includes(client.bin))) {
     const bin = which(client.bin);
-    if (!bin) continue;
+    if (!bin) { results.push({ name: client.name, status: 'failed' }); continue; }
     const options = { stdio: 'ignore' as const, timeout: 15_000 };
     try {
       execFileSync(bin, ['mcp', 'get', 'opencli-mcp'], options);
@@ -54,10 +93,11 @@ async function openStorePage(): Promise<boolean> {
   } catch { return false; }
 }
 
-export async function setup(opts: { waitMs?: number; noOpen?: boolean; browsers?: string[]; userDataDirs?: string[] } = {}): Promise<boolean> {
+export async function setup(opts: { waitMs?: number; noOpen?: boolean; browsers?: string[]; userDataDirs?: string[]; clients?: string[] } = {}): Promise<boolean> {
   const waitMs = opts.waitMs ?? 180_000;
   if (!Number.isFinite(waitMs) || waitMs < 0) throw new Error('--wait must be a non-negative number of seconds.');
 
+  const selected = await selectClients(opts.clients);
   const registration = registerHost({ browsers: opts.browsers, userDataDirs: opts.userDataDirs });
   const written = registration.manifests.filter((m) => m.written);
   if (!written.length) {
@@ -68,14 +108,14 @@ export async function setup(opts: { waitMs?: number; noOpen?: boolean; browsers?
 
   // Absolute paths work in desktop clients even when their PATH differs from the terminal's.
   const command = { command: process.execPath, args: [path.join(projectRoot(), 'dist', 'src', 'main.js')] };
-  const clients = registerClients(command);
+  const clients = registerClients(command, selected);
   say('2/3  MCP clients:');
   for (const client of clients) {
     const status = client.status === 'existing' ? 'already configured (existing settings kept)' : client.status === 'registered' ? 'registered' : 'registration failed — use the configuration below';
     say(`     ${client.name}: ${status}.`);
   }
-  if (!clients.length) say('     No supported client CLI found. Add the configuration below to your MCP client.');
-  say(`     Manual configuration (Cursor, Claude Desktop, or other clients):\n${JSON.stringify({ mcpServers: { 'opencli-mcp': command } }, null, 2)}`);
+  if (selected.includes('none')) say('     Skipped; no MCP client settings were changed.');
+  if (selected.includes('manual') || clients.some((client) => client.status === 'failed')) say(`     Manual configuration (Cursor, Claude Desktop, or other clients):\n${JSON.stringify({ mcpServers: { 'opencli-mcp': command } }, null, 2)}`);
 
   say('3/3  Checking the Chrome extension connection…');
   let status = await doctor();
@@ -101,7 +141,8 @@ export async function setup(opts: { waitMs?: number; noOpen?: boolean; browsers?
     say('MCP client setup is incomplete. Apply the configuration above or fix the client CLI and rerun setup.');
     return false;
   }
-  if (!clients.length) say('Next: add the configuration above to your MCP client, then reconnect it.');
+  if (selected.includes('none')) say('Browser setup complete. MCP client settings were not changed.');
+  else if (!clients.length) say('Next: add the configuration above to your MCP client, then reconnect it.');
   else say('Setup complete for the clients listed above. Restart or reconnect your MCP client to load the tools.');
   return true;
 }

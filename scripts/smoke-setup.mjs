@@ -31,6 +31,10 @@ import child from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 const root = process.env.OPENCLI_SETUP_TEST_ROOT;
 os.homedir = () => path.join(root, 'home');
+if (process.env.OPENCLI_SETUP_TEST_TTY) {
+  Object.defineProperty(process.stdin, 'isTTY', { value: true });
+  Object.defineProperty(process.stdout, 'isTTY', { value: true });
+}
 // Model macOS paths without touching the real user's profiles or Windows registry.
 Object.defineProperty(process, 'platform', { value: 'darwin' });
 child.execFileSync = (file, args) => {
@@ -72,6 +76,30 @@ async function cli(args, expectedCode = 0) {
   return result.stdout;
 }
 
+async function interactive(answer) {
+  const child = spawn(process.execPath, ['--import', preload, entry, 'setup', '--no-open', '--wait', '0'], {
+    env: { ...env, OPENCLI_SETUP_TEST_TTY: '1' }, stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let output = '';
+  let errors = '';
+  let answered = false;
+  child.stdout.on('data', (chunk) => {
+    output += chunk;
+    if (!answered && output.includes('Client IDs, separated by commas')) {
+      answered = true;
+      child.stdin.write(answer);
+    }
+  });
+  child.stderr.on('data', (chunk) => { errors += chunk; });
+  const timeout = setTimeout(() => child.kill('SIGKILL'), 10_000);
+  try {
+    const [code] = await once(child, 'exit');
+    assert.equal(code, 1, output + errors);
+    assert(answered, 'CLI never prompted for selection');
+    return output + errors;
+  } finally { clearTimeout(timeout); }
+}
+
 try {
   // doctor must be read-only and must not depend on an unpacked extension.
   const initial = JSON.parse(await cli(['doctor', '--json'], 1));
@@ -96,11 +124,19 @@ try {
   const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
   assert.deepEqual(manifest.allowed_origins, ['chrome-extension://' + storeId + '/']);
   assert(fs.existsSync(manifest.path));
+  assert.equal(fs.readFileSync(clientState, 'utf8'), '{}', 'non-interactive setup must not configure detected clients implicitly');
+  assert(first.includes('--clients'));
+  const cancelled = await interactive('\x03');
+  assert(cancelled.includes('cancelled'));
+  assert.equal(fs.readFileSync(clientState, 'utf8'), '{}');
+  await interactive('codex\n');
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(clientState, 'utf8'))), ['/fake/codex']);
+  await cli(['setup', '--clients', 'claude', '--no-open', '--wait', '0'], 1);
   const clients = fs.readFileSync(clientState, 'utf8');
   const entries = JSON.parse(clients);
   assert.equal(Object.keys(entries).length, 2);
   for (const args of Object.values(entries)) assert.deepEqual(args.slice(args.indexOf('--') + 1), [process.execPath, entry]);
-  console.log('PASS fresh setup: browser registration and both MCP clients, no existing Chrome profile required');
+  console.log('PASS client choice: no implicit registration, interactive selection, cancellation, and explicit client selection');
 
   const stateDir = path.join(home, '.opencli-mcp');
   fs.writeFileSync(path.join(stateDir, 'config.json'), '{"port":0}');
@@ -121,7 +157,7 @@ try {
   assert.equal(connected.host.extensionConnected, true);
   assert.equal(connected.ok, true);
   assert(!('built' in connected.extension));
-  const repeated = await cli(['setup', '--no-open', '--wait', '0']);
+  const repeated = await cli(['setup', '--clients', 'claude,codex', '--no-open', '--wait', '0']);
   assert(repeated.includes('Setup complete'));
   assert(!repeated.includes('chromewebstore.google.com'));
   assert.equal(fs.readFileSync(clientState, 'utf8'), clients);

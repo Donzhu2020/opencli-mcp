@@ -34,6 +34,7 @@ const HELP = `Usage: opencli-mcp <command>
   version               Show the installed version
 
 Setup options:
+  --clients <ids>       Configure claude,codex; manual prints config; none skips
   --no-open             Print the extension link without opening a browser
   --wait <seconds>      Connection timeout (default: 180; 0 checks once)
   --browsers <names>     Target browsers, e.g. chrome,edge
@@ -75,6 +76,7 @@ async function main(): Promise<void> {
     case 'setup': {
       const { values } = parseArgs({ args: argv.slice(1), options: {
         'no-open': { type: 'boolean' },
+        clients: { type: 'string' },
         wait: { type: 'string' },
         browsers: { type: 'string' },
         'user-data-dir': { type: 'string' },
@@ -82,6 +84,7 @@ async function main(): Promise<void> {
       const { setup } = await import('./host/setup.js');
       process.exitCode = (await setup({
         noOpen: values['no-open'],
+        clients: values.clients?.split(','),
         waitMs: values.wait === undefined ? undefined : Number(values.wait) * 1000,
         browsers: values.browsers?.split(','),
         userDataDirs: values['user-data-dir']?.split(','),

@@ -73,7 +73,7 @@ npm install -g opencli-mcp
 opencli-mcp setup
 ```
 
-保持 Chrome 打开。`setup` 配置浏览器连接，自动注册检测到的 Claude Code 和 Codex CLI，然后验证扩展是否连通。尚未安装扩展时，它会打开商店页面；已经连通时，不会重复打开。
+保持 Chrome 打开。`setup` 配置浏览器连接，让你选择要配置的 MCP client，只注册所选的 Claude Code 或 Codex CLI，然后验证扩展是否连通。尚未安装扩展时，它会打开商店页面；已经连通时，不会重复打开。
 
 ### 4.2 开发与其他安装方式
 
@@ -81,9 +81,11 @@ opencli-mcp setup
 
 ## 5. 接入 MCP client
 
-- **Claude Code / Codex**：CLI 在 PATH 中时，`setup` 自动注册；已有配置会保留。
-- **Cursor / Claude Desktop / 其他 MCP client**：把 `setup` 输出的配置复制到客户端 MCP 设置中。配置使用绝对路径，避免桌面应用找不到命令。
+- **Claude Code / Codex**：在 `setup` 中选择 `claude`、`codex` 或两者后注册；未选择的客户端不修改，已有配置会保留。
+- **Cursor / Claude Desktop / 其他 MCP client**：在 `setup` 中选择 `manual`，把输出的配置复制到客户端 MCP 设置中。配置使用绝对路径，避免桌面应用找不到命令。
 - 配置完成后，重启或重新连接 MCP client。
+
+直接回车默认显示手动配置；选择 `none` 只配置浏览器连接。脚本可用 `--clients codex` 或 `--clients claude,codex` 指定客户端；非交互环境不带此参数时，不修改客户端设置。
 
 不需要手动注册浏览器连接，也不需要填写 extension ID。重复运行 `setup` 可以修复浏览器注册、配置新安装的客户端；`doctor` 只检查连接，不修改配置。扩展会自动重连，持续连不上时再尝试停用并重新启用。
 

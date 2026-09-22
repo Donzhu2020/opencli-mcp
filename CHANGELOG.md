@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.0.11 — 2026-09-23
+
+- Reject ambiguous browser actions and missing action values before execution. Return full snapshots by default, with diff available explicitly.
+- Include complete argument metadata in site search and validate site arguments before write approval.
+- Update adapter-definition guidance and Chrome Web Store installation documentation.
 
 - Let users select which MCP clients `setup` configures. Interactive setup defaults to manual configuration; scripts use `--clients claude,codex`, `manual`, or `none`. Unselected clients are left untouched and cancelling the prompt makes no changes.
 

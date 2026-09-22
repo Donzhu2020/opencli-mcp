@@ -1,32 +1,34 @@
-/** Diagnose the bridge: manifests, extension build, host state, health, Chrome presence. */
+/** Diagnose the installed host and live browser connection. */
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { NATIVE_HOST_NAME } from '../protocol.js';
-import { extensionDir, nativeHostDirs, runningProfileDirs, extensionId } from './install.js';
+import { nativeHostDirs, runningProfileDirs } from './registration.js';
+import { EXTENSION_ID, EXTENSION_STORE_URL } from './extension.js';
 import { hostHealth, readHostState, HOST_STATE_FILE } from './state.js';
 
 export interface DoctorResult {
   ok: boolean;
   node: string;
-  extension: { dir: string; built: boolean; id: string | null };
-  manifests: Array<{ browser: string; file: string; present: boolean; launcherExists: boolean }>;
+  extension: { id: string; storeUrl: string };
+  manifests: Array<{ browser: string; file: string; present: boolean; launcherExists: boolean; authorized: boolean }>;
   host: { stateFile: string; running: boolean; port?: number; backend?: string; extensionConnected?: boolean; error?: string };
   chromeRunning: boolean | null;
   advice: string[];
 }
 
 export async function doctor(): Promise<DoctorResult> {
-  const extDir = extensionDir();
-  let id: string | null = null;
-  try { id = extensionId(); } catch { /* not built */ }
-  const built = fs.existsSync(path.join(extDir, 'background.js')) && fs.existsSync(path.join(extDir, 'manifest.json'));
   const running = runningProfileDirs();
   const manifests = [...nativeHostDirs(), ...running.map((d) => ({ browser: `profile:${d}`, dir: path.join(d, 'NativeMessagingHosts') }))].map(({ browser, dir }) => {
     const file = path.join(dir, `${NATIVE_HOST_NAME}.json`);
     let launcherExists = false;
-    try { const m = JSON.parse(fs.readFileSync(file, 'utf8')) as { path: string }; launcherExists = fs.existsSync(m.path); } catch { /* absent */ }
-    return { browser, file, present: fs.existsSync(file), launcherExists };
+    let authorized = false;
+    try {
+      const m = JSON.parse(fs.readFileSync(file, 'utf8')) as { path: string; allowed_origins?: string[] };
+      launcherExists = fs.existsSync(m.path);
+      authorized = Boolean(m.allowed_origins?.includes(`chrome-extension://${EXTENSION_ID}/`));
+    } catch { /* absent or invalid */ }
+    return { browser, file, present: fs.existsSync(file), launcherExists, authorized };
   });
   const state = readHostState();
   const health = await hostHealth(state);
@@ -35,16 +37,16 @@ export async function doctor(): Promise<DoctorResult> {
     try { const out = execFileSync('pgrep', ['-fl', 'Google Chrome|Chromium|Microsoft Edge|Brave Browser'], { encoding: 'utf8', stdio: 'pipe' }); chromeRunning = out.trim().length > 0; } catch { chromeRunning = false; }
   }
   const advice: string[] = [];
-  if (!built) advice.push('Build the extension: npm run build (or npm run build:ext).');
-  if (!manifests.some((m) => m.present)) advice.push('Run `opencli-mcp install` to write the Native Messaging host manifest.');
-  for (const d of running) if (!manifests.find((m) => m.browser === `profile:${d}`)?.present) advice.push(`Chrome is running with --user-data-dir=${d} but that profile has no host manifest: run \`opencli-mcp install\` (it writes to running profiles automatically) and reload the extension there.`);
-  if (!health.ok) advice.push(`Host not reachable (${health.error ?? 'unknown'}): open chrome://extensions, enable Developer mode, Load unpacked → ${extDir}. The extension spawns the host automatically; reload the extension after (re)installing.`);
-  else if (!health.extensionConnected) advice.push('Host is up but the extension has not said hello: reload the extension in chrome://extensions.');
+  const registered = manifests.some((m) => m.present && m.launcherExists && m.authorized);
+  if (!registered) advice.push('Run `opencli-mcp setup` to register or repair the browser connection.');
+  for (const d of running) if (!manifests.find((m) => m.browser === `profile:${d}`)?.present) advice.push(`Chrome is running with --user-data-dir=${d} but that profile has no host manifest: run \`opencli-mcp setup\` (it writes to running profiles automatically) and reload the extension there.`);
+  if (!health.ok) advice.push(`Host not reachable (${health.error ?? 'unknown'}). Open Chrome and install or enable the extension: ${EXTENSION_STORE_URL}. It reconnects automatically; if it stays disconnected, disable and re-enable it in chrome://extensions.`);
+  else if (!health.extensionConnected) advice.push('Host is running but the browser is not connected. Enable the extension in Chrome; if it stays disconnected, disable and re-enable it in chrome://extensions.');
   if (chromeRunning === false) advice.push('No Chromium-based browser process found; start Chrome.');
   return {
-    ok: built && manifests.some((m) => m.present) && health.ok && Boolean(health.extensionConnected),
+    ok: registered && health.ok && Boolean(health.extensionConnected),
     node: process.version,
-    extension: { dir: extDir, built, id },
+    extension: { id: EXTENSION_ID, storeUrl: EXTENSION_STORE_URL },
     manifests,
     host: { stateFile: HOST_STATE_FILE, running: health.ok, port: state?.port, backend: health.backend, extensionConnected: health.extensionConnected, error: health.error },
     chromeRunning,

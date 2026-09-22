@@ -31,7 +31,7 @@ Chrome ──connectNative──► opencli-mcp host   （Native Messaging ⇄ �
 | 部件 | 位置 | 职责 |
 |---|---|---|
 | **扩展**（MV3） | `extension/` | Native 端口；tab 租约（claim/finalize/组/徽章/光标）；`chrome.debugger` CDP（附着生命周期、对话框、console、网络、OOPIF）；页面侧引擎（Playwright injected script + `page.js` 页面模块，运行在隔离世界） |
-| **host** | `src/host/` | 被 Chrome 拉起的 Native Messaging 进程；同时监听回环 HTTP 提供 MCP（Streamable HTTP + bearer token）；`install`/`doctor`/状态文件 |
+| **host** | `src/host/` | 被 Chrome 拉起的 Native Messaging 进程；同时监听回环 HTTP 提供 MCP（Streamable HTTP + bearer token）；`setup`/`doctor`/状态文件 |
 | **launcher** | `src/launcher/stdio.ts` | `opencli-mcp` 命令本身：stdio MCP，把请求代理到 host；host 不在时内嵌一个 runtime（只能跑 `public` 站点命令，不能浏览） |
 | **runtime** | `src/runtime/`、`src/api/`、`src/mcp/`、`src/sites/`、`src/recon/` | 会话状态、对象模型（agent/browser/tab）、MCP server（工具/资源/prompt）、js 会话、站点注册表与执行器、定义/编译工具、API 发现 |
 
@@ -61,47 +61,35 @@ Chrome ──connectNative──► opencli-mcp host   （Native Messaging ⇄ �
 
 ## 4. 安装
 
-### 4.1 推荐：npm + Chrome Web Store
+### 4.1 普通用户
 
-需要 Node.js >= 22。先启动一次 Chrome，再安装本地 host：
+需要 Node.js >= 22、Chrome 和一个 MCP client。
+
+1. 从 [Chrome Web Store 安装 opencli-mcp 扩展](https://chromewebstore.google.com/detail/opencli-mcp/lnaoghmfcdnbhgcihkakfobckmfhllkg)。
+2. 安装 npm 包并配置连接：
 
 ```bash
 npm install -g opencli-mcp
-opencli-mcp install
+opencli-mcp setup
 ```
 
-然后从 [Chrome Web Store 安装 opencli-mcp](https://chromewebstore.google.com/detail/opencli-mcp/lnaoghmfcdnbhgcihkakfobckmfhllkg)。如果扩展已经安装，在 `chrome://extensions` 中停用再启用，让它重新连接 host。
+保持 Chrome 打开。`setup` 配置浏览器连接，自动注册检测到的 Claude Code 和 Codex CLI，然后验证扩展是否连通。尚未安装扩展时，它会打开商店页面；已经连通时，不会重复打开。
 
-`npm install -g` 安装本地程序；`opencli-mcp install` 将程序注册到 Chrome，让扩展能够启动并连接它。本地程序和浏览器扩展都需要安装。
+### 4.2 开发与其他安装方式
 
-连接 MCP client 后运行 `opencli-mcp doctor`，确认 `ok: true` 和 `host.extensionConnected: true`。完整快速上手见 [README](../README.md#quick-start)。
+源码开发、unpacked 扩展、Release tarball、自定义 browser profile 和更新步骤见 [安装与配置](setup.md)。
 
-### 4.2 从源码或 Release 安装
+## 5. 接入 MCP client
 
-源码开发、unpacked 扩展、Release tarball、自定义 browser profile 和连接排障统一见 [安装与配置](setup.md)。
+- **Claude Code / Codex**：CLI 在 PATH 中时，`setup` 自动注册；已有配置会保留。
+- **Cursor / Claude Desktop / 其他 MCP client**：把 `setup` 输出的配置复制到客户端 MCP 设置中。配置使用绝对路径，避免桌面应用找不到命令。
+- 配置完成后，重启或重新连接 MCP client。
 
-## 5. 接入方式
+不需要手动注册浏览器连接，也不需要填写 extension ID。重复运行 `setup` 可以修复浏览器注册、配置新安装的客户端；`doctor` 只检查连接，不修改配置。扩展会自动重连，持续连不上时再尝试停用并重新启用。
 
-**Claude Code**
-```bash
-claude mcp add -s user opencli-mcp -- opencli-mcp
-```
+**云端 agent（Streamable HTTP）**：见 [远程连接](setup.md#remote-clients)。
 
-**Codex**
-```bash
-codex mcp add opencli-mcp -- opencli-mcp
-```
-
-**Cursor / Claude Desktop / 任何 stdio 客户端**
-```json
-{ "mcpServers": { "opencli-mcp": { "command": "opencli-mcp" } } }
-```
-
-**云端 agent（Streamable HTTP）**：host 监听 `http://127.0.0.1:19991/mcp`，请求头 `Authorization: Bearer $(cat ~/.opencli-mcp/token)`。通过带认证的隧道暴露（`ssh -R`、cloudflared、带 auth 的 ngrok），把 agent 的 MCP connector 指过去。不要裸露端口。
-
-**没有 Chrome 时**：stdio launcher 内嵌 runtime，`public` 策略的站点命令可用，浏览类工具返回 `browser_unavailable`。
-
-本机 stdio 与云端 HTTP 是**同一个 MCP server**，同一套工具与文档。
+**没有 Chrome 时**：stdio launcher 内嵌 runtime，`public` 站点命令可用，浏览类工具返回 `browser_unavailable`。
 
 ## 6. 使用方式
 
@@ -204,7 +192,7 @@ OpenCLI 的适配器语料作为库依赖（`@jackwener/opencli`）随包而来�
 ## 13. 仓库结构与开发
 
 ```
-src/host        native-messaging、bridge、http（MCP 传输）、host 入口、install、doctor、state
+src/host        native-messaging、bridge、http（MCP 传输）、host 入口、setup、doctor、state
 src/launcher    stdio launcher
 src/runtime     会话、后端（extension-page）、轨迹、policy
 src/api         对象模型：api.ts（AgentApi）、browser.ts、tab.ts、context.ts、diff.ts、errors.ts

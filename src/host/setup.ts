@@ -1,94 +1,107 @@
-/**
- * `opencli-mcp setup` — the whole first-run in one command, for a human at a terminal:
- *   1. install: the Native Messaging host manifest(s) (trusting the fixed extension ID)
- *   2. register with every MCP client that has a CLI for it (Claude Code, Codex) and print the standard configuration
- *      for the rest (Cursor, Claude Desktop, …) — the runtime itself knows no client, MCP is the contract
- *   3. open chrome://extensions and put the unpacked-extension path on the clipboard
- *   4. wait for the extension to connect (it spawns the host) and report green
- * Everything it does is what `install` / `doctor` do; it only strings them together and talks in sentences instead of
- * JSON. Chrome cannot load an unpacked extension for us: that one click stays with the user until the extension is on
- * the Chrome Web Store.
- */
-import { execFileSync, spawn } from 'node:child_process';
-import { install, projectRoot } from './install.js';
+/** Set up both connections: Chrome → local host, MCP client → local host. */
+import { execFile, execFileSync, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
+import { registerHost, projectRoot } from './registration.js';
 import { doctor } from './doctor.js';
-import { TOKEN_FILE, DEFAULT_PORT, readConfig } from './state.js';
+import { EXTENSION_STORE_URL } from './extension.js';
 import path from 'node:path';
-import fs from 'node:fs';
 
 const say = (line: string): void => { process.stdout.write(`${line}\n`); };
+const exec = promisify(execFile);
+type StdioCommand = { command: string; args: string[] };
+type ClientRegistration = { name: string; status: 'existing' | 'registered' | 'failed' };
 
 function which(cmd: string): string | null {
-  try { return execFileSync(process.platform === 'win32' ? 'where' : 'which', [cmd], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).split(/\r?\n/)[0].trim() || null; } catch { return null; }
+  try { return execFileSync(process.platform === 'win32' ? 'where' : 'which', [cmd], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 }).split(/\r?\n/)[0].trim() || null; } catch { return null; }
 }
 
-/** The stdio command a client should run: the package binary when installed globally, else node + this build. */
-function stdioCommand(main: string): { command: string; args: string[] } {
-  const bin = which('opencli-mcp');
-  return bin ? { command: 'opencli-mcp', args: [] } : { command: 'node', args: [main] };
-}
-
-/** MCP clients that can be registered from the command line; everyone else gets the printed configuration. */
-const CLIENTS: Array<{ name: string; bin: string; get: string[]; add: (c: { command: string; args: string[] }) => string[] }> = [
-  { name: 'Claude Code', bin: 'claude', get: ['mcp', 'get', 'opencli-mcp'], add: (c) => ['mcp', 'add', '-s', 'user', 'opencli-mcp', '--', c.command, ...c.args] },
-  { name: 'Codex', bin: 'codex', get: ['mcp', 'get', 'opencli-mcp'], add: (c) => ['mcp', 'add', 'opencli-mcp', '--', c.command, ...c.args] },
+const CLIENTS = [
+  { name: 'Claude Code', bin: 'claude', scope: ['-s', 'user'] },
+  { name: 'Codex', bin: 'codex', scope: [] },
 ];
-function registerClients(c: { command: string; args: string[] }): string[] {
-  const out: string[] = [];
-  for (const cl of CLIENTS) {
-    if (!which(cl.bin)) continue;
-    try { execFileSync(cl.bin, cl.get, { stdio: 'ignore' }); out.push(`${cl.name}: already registered`); continue; } catch { /* not yet */ }
-    try { execFileSync(cl.bin, cl.add(c), { stdio: 'ignore' }); out.push(`${cl.name}: registered (restart it to see the tools)`); }
-    catch { out.push(`${cl.name}: registration failed — run: ${cl.bin} ${cl.add(c).join(' ')}`); }
+function registerClients(c: StdioCommand): ClientRegistration[] {
+  const results: ClientRegistration[] = [];
+  for (const client of CLIENTS) {
+    const bin = which(client.bin);
+    if (!bin) continue;
+    const options = { stdio: 'ignore' as const, timeout: 15_000 };
+    try {
+      execFileSync(bin, ['mcp', 'get', 'opencli-mcp'], options);
+      results.push({ name: client.name, status: 'existing' });
+      continue;
+    } catch { /* No existing registration; try to add it. */ }
+    try {
+      execFileSync(bin, ['mcp', 'add', ...client.scope, 'opencli-mcp', '--', c.command, ...c.args], options);
+      results.push({ name: client.name, status: 'registered' });
+    } catch { results.push({ name: client.name, status: 'failed' }); }
   }
-  return out;
+  return results;
 }
 
-function copyToClipboard(text: string): boolean {
-  const cmd = process.platform === 'darwin' ? ['pbcopy'] : process.platform === 'win32' ? ['clip'] : which('xclip') ? ['xclip', '-selection', 'clipboard'] : which('wl-copy') ? ['wl-copy'] : null;
-  if (!cmd) return false;
-  try { execFileSync(cmd[0], cmd.slice(1), { input: text, stdio: ['pipe', 'ignore', 'ignore'] }); return true; } catch { return false; }
-}
-
-function openExtensionsPage(): boolean {
-  const url = 'chrome://extensions';
+async function openStorePage(): Promise<boolean> {
   try {
-    if (process.platform === 'darwin') spawn('open', ['-a', 'Google Chrome', url], { stdio: 'ignore', detached: true }).unref();
-    else if (process.platform === 'win32') spawn('cmd', ['/c', 'start', 'chrome', url], { stdio: 'ignore', detached: true }).unref();
-    else spawn(which('google-chrome') ?? which('chromium') ?? 'xdg-open', [url], { stdio: 'ignore', detached: true }).unref();
+    if (process.platform === 'darwin') await exec('open', ['-a', 'Google Chrome', EXTENSION_STORE_URL], { timeout: 10_000 });
+    else if (process.platform === 'win32') await exec('rundll32', ['url.dll,FileProtocolHandler', EXTENSION_STORE_URL], { timeout: 10_000 });
+    else {
+      // Browser processes may stay alive for the whole session; do not time out and kill them.
+      return await new Promise<boolean>((resolve) => {
+        const child = spawn(which('google-chrome') ?? which('chromium') ?? 'xdg-open', [EXTENSION_STORE_URL], { detached: true, stdio: 'ignore' });
+        child.once('error', () => resolve(false));
+        child.once('spawn', () => { child.unref(); resolve(true); });
+      });
+    }
     return true;
   } catch { return false; }
 }
 
-export async function setup(opts: { waitMs?: number; noOpen?: boolean } = {}): Promise<boolean> {
-  const main = path.join(projectRoot(), 'dist', 'src', 'main.js');
-  if (!fs.existsSync(main)) { say('dist/src/main.js not found — run `npm run build` first.'); return false; }
+export async function setup(opts: { waitMs?: number; noOpen?: boolean; browsers?: string[]; userDataDirs?: string[] } = {}): Promise<boolean> {
+  const waitMs = opts.waitMs ?? 180_000;
+  if (!Number.isFinite(waitMs) || waitMs < 0) throw new Error('--wait must be a non-negative number of seconds.');
 
-  const r = install();
-  const written = r.manifests.filter((m) => m.written).map((m) => m.browser);
-  say(`1/4  Host manifest written for: ${written.join(', ') || 'no browser profile found (start Chrome once, or pass --user-data-dir to install)'}. Extension ID ${r.extensionId}.`);
-
-  const c = stdioCommand(main);
-  const port = readConfig().port ?? DEFAULT_PORT;
-  const registered = registerClients(c);
-  say(`2/4  MCP clients: ${registered.length ? registered.join('; ') : 'no CLI-registrable client found'}.`);
-  say(`       Any other client (Cursor, Claude Desktop, …): ${JSON.stringify({ mcpServers: { 'opencli-mcp': { command: c.command, args: c.args } } })}`);
-  say(`       http   → http://127.0.0.1:${port}/mcp  with header  Authorization: Bearer <contents of ${TOKEN_FILE}>  (remote agents: put it behind an authenticated tunnel)`);
-
-  const copied = copyToClipboard(r.extensionDir);
-  const opened = opts.noOpen ? false : openExtensionsPage();
-  say(`3/4  ${opened ? 'Opened chrome://extensions.' : 'Open chrome://extensions.'} Turn on Developer mode → Load unpacked → ${copied ? 'paste the path (it is on your clipboard)' : 'choose'}: ${r.extensionDir}`);
-
-  const until = Date.now() + (opts.waitMs ?? 180_000);
-  say('4/4  Waiting for the extension to connect…');
-  let last = '';
-  while (Date.now() < until) {
-    const d = await doctor();
-    if (d.ok) { say(`     Connected: host on port ${d.host.port}, extension ${d.extension.id}. Done — opencli-mcp is ready.`); return true; }
-    const now = d.host.running ? 'host is up, extension not connected yet (reload it in chrome://extensions if it was already loaded)' : 'extension not loaded yet';
-    if (now !== last) { say(`     ${now}`); last = now; }
-    await new Promise((res) => setTimeout(res, 2000));
+  const registration = registerHost({ browsers: opts.browsers, userDataDirs: opts.userDataDirs });
+  const written = registration.manifests.filter((m) => m.written);
+  if (!written.length) {
+    say('No browser connection was registered. Check --browsers or --user-data-dir and run setup again.');
+    return false;
   }
-  say('     Still not connected. Run `opencli-mcp doctor` for details once the extension is loaded.');
-  return false;
+  say(`1/3  Browser connection registered: ${written.map((m) => m.browser).join(', ')}.`);
+
+  // Absolute paths work in desktop clients even when their PATH differs from the terminal's.
+  const command = { command: process.execPath, args: [path.join(projectRoot(), 'dist', 'src', 'main.js')] };
+  const clients = registerClients(command);
+  say('2/3  MCP clients:');
+  for (const client of clients) {
+    const status = client.status === 'existing' ? 'already configured (existing settings kept)' : client.status === 'registered' ? 'registered' : 'registration failed — use the configuration below';
+    say(`     ${client.name}: ${status}.`);
+  }
+  if (!clients.length) say('     No supported client CLI found. Add the configuration below to your MCP client.');
+  say(`     Manual configuration (Cursor, Claude Desktop, or other clients):\n${JSON.stringify({ mcpServers: { 'opencli-mcp': command } }, null, 2)}`);
+
+  say('3/3  Checking the Chrome extension connection…');
+  let status = await doctor();
+  if (!status.ok) {
+    const opened = !opts.noOpen && await openStorePage();
+    say(`     ${opened ? 'Opened the Chrome Web Store. Install or enable opencli-mcp in Chrome:' : 'Install or enable opencli-mcp in Chrome:'} ${EXTENSION_STORE_URL}`);
+    say('     Already installed? Keep Chrome open; the extension reconnects automatically.');
+    if (waitMs > 0) say(`     Waiting up to ${waitMs / 1000} seconds for the browser connection…`);
+    const until = Date.now() + waitMs;
+    while (!status.ok && Date.now() < until) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(2000, Math.max(0, until - Date.now()))));
+      status = await doctor();
+    }
+  }
+  if (!status.ok) {
+    say('Browser is not connected yet. Your registration has been saved.');
+    for (const advice of status.advice) say(`     ${advice}`);
+    say('If the extension is already enabled, disable and re-enable it in chrome://extensions. Then run `opencli-mcp setup` again.');
+    return false;
+  }
+  say('Browser connected.');
+  if (clients.some((client) => client.status === 'failed')) {
+    say('MCP client setup is incomplete. Apply the configuration above or fix the client CLI and rerun setup.');
+    return false;
+  }
+  if (!clients.length) say('Next: add the configuration above to your MCP client, then reconnect it.');
+  else say('Setup complete for the clients listed above. Restart or reconnect your MCP client to load the tools.');
+  return true;
 }

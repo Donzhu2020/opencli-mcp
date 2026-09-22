@@ -17,6 +17,7 @@
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.tests.json && tsc -p extension/tsconfig.json",
     "smoke": "node scripts/smoke.mjs --dist",
+    "smoke:setup": "node scripts/smoke-setup.mjs",
     "smoke:browser": "node scripts/smoke-browser.mjs",
     "prepare": "npm run build",
     "check": "npm run typecheck && npm run build && npm test",

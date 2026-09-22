@@ -2,23 +2,46 @@
 
 For the recommended npm + Chrome Web Store installation, follow the [README quick start](../README.md#quick-start).
 
+## What setup does
+
+`npm install -g opencli-mcp` installs the software. `opencli-mcp setup` configures the two connections it needs:
+
+1. **Chrome → local program:** writes the Native Messaging registration so Chrome can start the program when the extension connects.
+2. **MCP client → local program:** registers Claude Code and Codex when their CLIs are on your PATH. Existing registrations are kept. Other clients receive a ready-to-copy configuration using absolute paths.
+
+It then checks the live browser connection. If disconnected, it opens the Chrome Web Store and waits for the extension to connect. The extension retries automatically, so you can install it before or after running setup. Already connected? No store page is opened.
+
+`setup` never installs an extension silently. Add it through the Chrome Web Store. It also does not overwrite existing MCP client settings. If an existing entry points at an old location, replace that entry with the configuration printed by setup.
+
+### Setup options
+
+```bash
+opencli-mcp setup --no-open       # print the store link without opening it
+opencli-mcp setup --wait 60       # wait up to 60 seconds (default: 180)
+opencli-mcp setup --no-open --wait 0  # configure and check once without waiting
+```
+
+A timeout leaves the configuration in place: enable the extension and rerun setup. A detected client registration failure is reported as incomplete even if the browser is connected. If no supported client CLI is found, setup tells you to apply the printed configuration manually.
+
+`opencli-mcp doctor` checks registration and the live connection without changing settings. It is for troubleshooting; it is not a required setup step.
+
 ## Other Chromium browsers
 
-The installer recognizes Chrome, Chromium, Edge, and Brave on macOS and Linux, plus Chrome Beta, Canary, Chrome for Testing, and Arc on macOS. On Windows it registers the Chrome Native Messaging host. Extension availability and installation steps depend on the browser.
+Setup recognizes Chrome, Chromium, Edge, and Brave on macOS and Linux, plus Chrome Beta, Canary, Chrome for Testing, and Arc on macOS. On Windows it registers the Chrome Native Messaging host. Extension availability depends on the browser.
 
-Start your browser at least once before installing the host. To target a specific supported browser, use, for example:
-
-```bash
-opencli-mcp install --browsers edge
-```
-
-For a browser launched with a custom user data directory:
+Chrome is registered even before its first launch. Other browsers are detected from their existing profile directories, or can be selected explicitly:
 
 ```bash
-opencli-mcp install --user-data-dir /absolute/path/to/profile
+opencli-mcp setup --browsers edge --no-open
 ```
 
-The installer also detects running custom profiles on macOS and Linux.
+Install the extension in that browser. For a browser launched with a custom user data directory:
+
+```bash
+opencli-mcp setup --user-data-dir /absolute/path/to/profile
+```
+
+Setup also detects running custom profiles on macOS and Linux.
 
 ## From source
 
@@ -29,24 +52,37 @@ npm install
 node dist/src/main.js setup
 ```
 
-`npm install` runs the build through `prepare`. `setup` registers the development Native Messaging host, registers Claude Code and Codex when their CLIs are available, and opens the extensions page with the unpacked-extension path copied to your clipboard.
+`npm install` runs the build through `prepare`. The same setup flow works with the Web Store extension. For manual MCP client configuration, use the absolute paths printed by setup.
 
-In Chrome, enable **Developer mode**, choose **Load unpacked**, and select that directory. `setup` waits for the extension to connect. Use `setup --no-open` to skip opening the extensions page, or `setup --wait 60` to change the wait time in seconds.
+### Developing the extension
 
-For other MCP clients, use the configuration printed by `setup`, or configure `node` with the absolute path to `dist/src/main.js` as its argument. Optionally run `npm link` to make `opencli-mcp` available on your PATH.
+Only extension developers need an unpacked build:
 
-After changing extension code, run `npm run build:ext` and click **Reload** in `chrome://extensions`.
+1. Run `node dist/src/main.js extension-path` to find the built extension directory.
+2. In `chrome://extensions`, enable **Developer mode**, disable the store extension if installed, and **Load unpacked** from that directory.
+3. Run `node dist/src/main.js setup --no-open` to configure and verify the connection.
+
+The development manifest uses the published extension's key, so it has the same ID. Use one build at a time. After changing extension code, run `npm run build:ext` and click **Reload** in Chrome.
 
 ## From a release tarball
 
-Download a package from [GitHub Releases](https://github.com/jackwener/opencli-mcp/releases), then install it:
+Download a package from [GitHub Releases](https://github.com/jackwener/opencli-mcp/releases), then run:
 
 ```bash
 npm install -g ./opencli-mcp-<version>.tgz
-opencli-mcp install
+opencli-mcp setup
 ```
 
-Continue with the Web Store extension and client configuration in the [quick start](../README.md#quick-start). For an unpacked extension from a release zip, use the development workflow above instead.
+Use the same Chrome Web Store extension as the npm installation.
+
+## Updating
+
+```bash
+npm install -g opencli-mcp@latest
+opencli-mcp setup
+```
+
+Setup refreshes the browser registration, including the Node.js path. Chrome updates the store extension independently. If the old host is still running, disable and re-enable the extension to start the updated program. If your MCP client uses a path that has changed, replace its entry with the configuration printed by setup, then reconnect it.
 
 ## Remote clients
 
@@ -90,16 +126,14 @@ The same state directory contains the HTTP token, `run/host.json`, and agent-def
 
 ## Troubleshooting
 
-Run `opencli-mcp doctor` first. A working connection reports `ok: true` and `host.extensionConnected: true`.
+Run `opencli-mcp doctor` first. It reports whether the browser registration, local host, and extension are connected, with recovery steps for failures. Use `doctor --json` for machine-readable diagnostics.
 
 | Symptom | What to check |
 |---|---|
 | `browser_unavailable` or host unreachable | Keep Chrome running, enable the extension, and verify the host registration |
-| Web Store extension cannot connect | Run `opencli-mcp install`, then disable and re-enable the extension |
-| No host manifest was written | Start the browser once, then repeat the install command; for custom profiles, pass `--user-data-dir` |
+| Web Store extension cannot connect | Run `opencli-mcp setup`; if it stays disconnected, disable and re-enable the extension |
+| No host manifest was written | Rerun `setup`; for custom profiles, pass `--user-data-dir` |
 | MCP client cannot find `opencli-mcp` | Use the absolute executable path in the client configuration |
 | Development changes do not appear | Rebuild the extension and click **Reload** on the extensions page |
-
-If `doctor` suggests loading an unpacked extension but you installed from the Web Store, repeat `opencli-mcp install`, then disable and re-enable the installed extension.
 
 For runtime errors such as `dialog_open` or stale tabs, see [browser troubleshooting](troubleshooting.md) and [error codes](errors.md).

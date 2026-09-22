@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Make `setup` the single connection-configuration command: register the browser host and detected MCP client CLIs, guide Chrome Web Store installation only when disconnected, and verify the live connection. Existing MCP client settings are preserved; failed registrations are reported as incomplete.
+- Remove the separate `install` command. Native Messaging registration is internal to `setup`, with no extension ID or unpacked assets required for normal use.
+- Make `doctor` a read-only, human-readable connection check (`--json` for structured output). Diagnose missing or invalid registrations instead of checking local extension build artifacts.
+- Keep unpacked extension loading in the developer guide. Add isolated setup E2E coverage for registration, reruns, repair, Native Messaging, and MCP connectivity.
+
 ## 0.0.10 — 2026-09-20
 
 - **Fix: `SyntaxError: Illegal return statement` on any fetchJson-based adapter** (e.g. `sites.twitter.bookmarks()`).

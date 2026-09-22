@@ -1,16 +1,12 @@
-/**
- * Installer: Native Messaging host manifests for Chromium browsers and the launcher script Chrome executes.
- * The extension ID is fixed by the project: the public key in extension/manifest.json determines it, on every machine
- * and later on the Chrome Web Store alike — so a zip of extension/dist loaded anywhere connects.
- */
+/** Register the local Native Messaging host Chrome uses to start the runtime. */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { NATIVE_HOST_NAME } from '../protocol.js';
 import { OPENCLI_MCP_DIR } from './state.js';
+import { EXTENSION_ID } from './extension.js';
 
 export function projectRoot(): string {
   // walk up from this file to the nearest package.json that is ours (works from src/ under tsx and from dist/src/)
@@ -26,17 +22,6 @@ export function extensionDir(): string {
   const root = projectRoot();
   const dist = path.join(root, 'extension', 'dist');
   return fs.existsSync(path.join(dist, 'manifest.json')) ? dist : path.join(root, 'extension');
-}
-
-/** The extension ID Chrome derives from the `key` in the manifest (the same everywhere). */
-export function extensionId(): string {
-  const m = JSON.parse(fs.readFileSync(path.join(extensionDir(), 'manifest.json'), 'utf8')) as { key?: string };
-  if (!m.key) throw new Error('extension manifest has no key — the build is incomplete');
-  return extensionIdFromKey(m.key);
-}
-function extensionIdFromKey(keyBase64: string): string {
-  const hex = createHash('sha256').update(Buffer.from(keyBase64, 'base64')).digest('hex').slice(0, 32);
-  return [...hex].map((c) => String.fromCharCode('a'.charCodeAt(0) + parseInt(c, 16))).join('');
 }
 
 export function nativeHostDirs(): Array<{ browser: string; dir: string }> {
@@ -69,7 +54,7 @@ export function nativeHostDirs(): Array<{ browser: string; dir: string }> {
 /**
  * Profiles of Chromium browsers running right now with a custom --user-data-dir (Chrome for Testing, dev profiles,
  * test harnesses). Chrome resolves user-level Native Messaging hosts under that directory, so the manifest must be
- * written there too — the single most common reason a first install "did nothing".
+ * written there too — the single most common reason initial setup "did nothing".
  */
 export function runningProfileDirs(): string[] {
   if (process.platform === 'win32') return [];
@@ -90,7 +75,7 @@ export function writeLauncher(): string {
   const bin = path.join(OPENCLI_MCP_DIR, 'bin');
   fs.mkdirSync(bin, { recursive: true });
   const main = path.join(projectRoot(), 'dist', 'src', 'main.js');
-  if (!fs.existsSync(main)) throw new Error('dist/src/main.js not found — run `npm run build` before `opencli-mcp install`');
+  if (!fs.existsSync(main)) throw new Error('dist/src/main.js not found — run `npm run build` before `opencli-mcp setup`');
   const entry = main;
   if (process.platform === 'win32') {
     const file = path.join(bin, 'opencli-mcp-host.cmd');
@@ -103,37 +88,33 @@ export function writeLauncher(): string {
   return file;
 }
 
-export function install(opts: { browsers?: string[]; extensionId?: string; userDataDirs?: string[] } = {}): { extensionId: string; extensionDir: string; launcher: string; manifests: Array<{ browser: string; file: string; written: boolean }> } {
-  const extDir = extensionDir();
-  // Allow-list every extension build that may talk to this host: the key-derived dev ID (unpacked from extension/) plus
-  // any store IDs passed via --extension-id (comma-separated) — the key-stripped store build gets a different ID.
-  const derived = (() => { try { return extensionId(); } catch { return null; } })();
-  const provided = (opts.extensionId ?? '').split(',').map((s) => s.trim()).filter(Boolean);
-  const ids = [...new Set([...(derived ? [derived] : []), ...provided])];
-  const id = provided[0] ?? derived ?? '';
+export function registerHost(opts: { browsers?: string[]; userDataDirs?: string[] } = {}): { launcher: string; manifests: Array<{ browser: string; file: string; written: boolean }> } {
+  const supported = nativeHostDirs();
+  const unknown = opts.browsers?.filter((browser) => !supported.some((target) => target.browser === browser));
+  if (unknown?.length) throw new Error(`Unknown browser(s): ${unknown.join(', ')}. Supported: ${supported.map((target) => target.browser).join(', ')}.`);
   const launcher = writeLauncher();
-  const manifest = { name: NATIVE_HOST_NAME, description: 'opencli-mcp browser runtime host', path: launcher, type: 'stdio', allowed_origins: ids.map((x) => `chrome-extension://${x}/`) };
+  const manifest = { name: NATIVE_HOST_NAME, description: 'opencli-mcp browser runtime host', path: launcher, type: 'stdio', allowed_origins: [`chrome-extension://${EXTENSION_ID}/`] };
   const manifests: Array<{ browser: string; file: string; written: boolean }> = [];
   // Chrome resolves user-level hosts relative to its user data dir: custom --user-data-dir profiles get their own copy
   const profiles = new Set([...(opts.userDataDirs ?? []), ...runningProfileDirs()]);
-  const targets = [...nativeHostDirs(), ...[...profiles].map((d) => ({ browser: `profile:${d}`, dir: path.join(d, 'NativeMessagingHosts') }))];
+  const targets = [...supported, ...[...profiles].map((d) => ({ browser: `profile:${d}`, dir: path.join(d, 'NativeMessagingHosts') }))];
   for (const { browser, dir } of targets) {
-    if (opts.browsers && !opts.browsers.includes(browser)) continue;
+    if (opts.browsers && !browser.startsWith('profile:') && !opts.browsers.includes(browser)) continue;
     const parent = path.dirname(dir);
-    // only write where the browser profile dir exists (or for explicitly requested browsers)
-    if (!opts.browsers && !browser.startsWith('profile:') && !fs.existsSync(parent)) { manifests.push({ browser, file: path.join(dir, `${NATIVE_HOST_NAME}.json`), written: false }); continue; }
+    // Always register Chrome, even before its first launch; register other detected or requested browsers too.
+    if (!opts.browsers && browser !== 'chrome' && !browser.startsWith('profile:') && !fs.existsSync(parent)) { manifests.push({ browser, file: path.join(dir, `${NATIVE_HOST_NAME}.json`), written: false }); continue; }
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, `${NATIVE_HOST_NAME}.json`);
     fs.writeFileSync(file, JSON.stringify(manifest, null, 2));
     manifests.push({ browser, file, written: true });
     if (process.platform === 'win32') {
-      try { execFileSync('reg', ['add', `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${NATIVE_HOST_NAME}`, '/ve', '/t', 'REG_SZ', '/d', file, '/f'], { stdio: 'ignore' }); } catch { /* best effort */ }
+      execFileSync('reg', ['add', `HKCU\\Software\\Google\\Chrome\\NativeMessagingHosts\\${NATIVE_HOST_NAME}`, '/ve', '/t', 'REG_SZ', '/d', file, '/f'], { stdio: 'pipe' });
     }
   }
-  return { extensionId: id, extensionDir: extDir, launcher, manifests };
+  return { launcher, manifests };
 }
 
-export function uninstall(): string[] {
+export function unregisterHost(): string[] {
   const removed: string[] = [];
   for (const { dir } of [...nativeHostDirs(), ...runningProfileDirs().map((d) => ({ dir: path.join(d, 'NativeMessagingHosts') }))]) {
     const file = path.join(dir, `${NATIVE_HOST_NAME}.json`);

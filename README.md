@@ -24,60 +24,28 @@ Works with MCP clients including Claude Code, Codex, Cursor, and Claude Desktop.
 
 You need **Node.js 22 or newer**, **Google Chrome**, and an **MCP client**. The local host also supports Chromium-based browsers such as Edge and Brave; see [installation details](docs/setup.md).
 
-### 1. Install the local host
-
-Start Chrome at least once so its profile directory exists, then run:
-
-```bash
-npm install -g opencli-mcp
-opencli-mcp install
-```
-
-`npm install -g` installs the local program. `opencli-mcp install` registers it with Chrome so the extension can start and connect to it. Both the local program and the extension are required.
-
-### 2. Install the Chrome extension
+### 1. Install the Chrome extension
 
 [**Install opencli-mcp from the Chrome Web Store →**](https://chromewebstore.google.com/detail/opencli-mcp/lnaoghmfcdnbhgcihkakfobckmfhllkg)
 
-If you already installed the extension, disable and re-enable it in `chrome://extensions` after registering the host. Keep Chrome running.
-
-### 3. Connect your MCP client
-
-**Claude Code**
+### 2. Install the npm package and set up the connection
 
 ```bash
-claude mcp add -s user opencli-mcp -- opencli-mcp
+npm install -g opencli-mcp
+opencli-mcp setup
 ```
 
-**Codex**
+Keep Chrome open. `setup` connects the extension to the local program, registers Claude Code and Codex when their CLIs are available, and checks the browser connection. If you have not installed the extension yet, it opens the Chrome Web Store for you.
 
-```bash
-codex mcp add opencli-mcp -- opencli-mcp
-```
+For **Cursor, Claude Desktop, and other MCP clients**, copy the configuration printed by `setup` into your client's MCP settings. It uses absolute paths so desktop apps can find the program.
 
-**Cursor / Claude Desktop** — add this entry to your client's MCP configuration:
+### 3. Start using it
 
-```json
-{
-  "mcpServers": {
-    "opencli-mcp": {
-      "command": "opencli-mcp"
-    }
-  }
-}
-```
-
-If your client cannot find the command, use the absolute path to the installed `opencli-mcp` executable. Restart or reconnect your MCP client after configuring it.
-
-### 4. Check the connection
-
-```bash
-opencli-mcp doctor
-```
-
-Look for `"ok": true` and `"extensionConnected": true`. Then try asking your agent:
+Restart or reconnect your MCP client, then ask:
 
 > Use opencli-mcp to read the top five Hacker News stories and summarize them with links.
+
+You can rerun `opencli-mcp setup` to repair the browser registration or configure newly installed clients. Existing MCP client settings are preserved. For a read-only connection check, run `opencli-mcp doctor`.
 
 Connection issues? See [troubleshooting](docs/setup.md#troubleshooting).
 
@@ -160,6 +128,7 @@ npm run check
 npm run build:ext        # rebuild the extension
 npm test                 # unit tests
 npm run smoke            # stdio MCP end-to-end check
+npm run smoke:setup      # isolated setup and Native Messaging end-to-end check
 npm run smoke:browser    # end-to-end check with a connected Chrome extension
 ```
 

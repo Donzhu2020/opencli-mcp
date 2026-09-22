@@ -30,18 +30,16 @@ Start Chrome at least once so its profile directory exists, then run:
 
 ```bash
 npm install -g opencli-mcp
-opencli-mcp install --extension-id lnaoghmfcdnbhgcihkakfobckmfhllkg
+opencli-mcp install
 ```
 
-This registers the Native Messaging host that connects the extension to the local runtime. Both the npm package and the extension are required.
+`npm install -g` installs the local program. `opencli-mcp install` registers it with Chrome so the extension can start and connect to it. Both the local program and the extension are required.
 
 ### 2. Install the Chrome extension
 
 [**Install opencli-mcp from the Chrome Web Store →**](https://chromewebstore.google.com/detail/opencli-mcp/lnaoghmfcdnbhgcihkakfobckmfhllkg)
 
 If you already installed the extension, disable and re-enable it in `chrome://extensions` after registering the host. Keep Chrome running.
-
-> The current `opencli-mcp setup` command still guides you through loading an unpacked extension. For the Web Store version, follow the steps above; Developer mode is not required.
 
 ### 3. Connect your MCP client
 

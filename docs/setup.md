@@ -9,13 +9,13 @@ The installer recognizes Chrome, Chromium, Edge, and Brave on macOS and Linux, p
 Start your browser at least once before installing the host. To target a specific supported browser, use, for example:
 
 ```bash
-opencli-mcp install --browsers edge --extension-id lnaoghmfcdnbhgcihkakfobckmfhllkg
+opencli-mcp install --browsers edge
 ```
 
 For a browser launched with a custom user data directory:
 
 ```bash
-opencli-mcp install --user-data-dir /absolute/path/to/profile --extension-id lnaoghmfcdnbhgcihkakfobckmfhllkg
+opencli-mcp install --user-data-dir /absolute/path/to/profile
 ```
 
 The installer also detects running custom profiles on macOS and Linux.
@@ -37,19 +37,13 @@ For other MCP clients, use the configuration printed by `setup`, or configure `n
 
 After changing extension code, run `npm run build:ext` and click **Reload** in `chrome://extensions`.
 
-### Extension IDs
-
-The Chrome Web Store extension ID is **`lnaoghmfcdnbhgcihkakfobckmfhllkg`**. The current source manifest and npm 0.0.10 use the same key-derived ID; older builds used a different key.
-
-`install --extension-id lnaoghmfcdnbhgcihkakfobckmfhllkg` explicitly adds the store ID alongside the bundled extension ID. This avoids depending on which development key your installed package contains. The current `setup` command still prompts you to load an unpacked extension, so use the README workflow for store installations.
-
 ## From a release tarball
 
 Download a package from [GitHub Releases](https://github.com/jackwener/opencli-mcp/releases), then install it:
 
 ```bash
 npm install -g ./opencli-mcp-<version>.tgz
-opencli-mcp install --extension-id lnaoghmfcdnbhgcihkakfobckmfhllkg
+opencli-mcp install
 ```
 
 Continue with the Web Store extension and client configuration in the [quick start](../README.md#quick-start). For an unpacked extension from a release zip, use the development workflow above instead.
@@ -101,11 +95,11 @@ Run `opencli-mcp doctor` first. A working connection reports `ok: true` and `hos
 | Symptom | What to check |
 |---|---|
 | `browser_unavailable` or host unreachable | Keep Chrome running, enable the extension, and verify the host registration |
-| Web Store extension cannot connect | Run `opencli-mcp install --extension-id lnaoghmfcdnbhgcihkakfobckmfhllkg`, then disable and re-enable the extension |
+| Web Store extension cannot connect | Run `opencli-mcp install`, then disable and re-enable the extension |
 | No host manifest was written | Start the browser once, then repeat the install command; for custom profiles, pass `--user-data-dir` |
 | MCP client cannot find `opencli-mcp` | Use the absolute executable path in the client configuration |
 | Development changes do not appear | Rebuild the extension and click **Reload** on the extensions page |
 
-The current `doctor` output shows the bundled extension ID and may suggest loading an unpacked extension. For a Web Store installation, use the store registration command above and check the connection fields instead.
+If `doctor` suggests loading an unpacked extension but you installed from the Web Store, repeat `opencli-mcp install`, then disable and re-enable the installed extension.
 
 For runtime errors such as `dialog_open` or stale tabs, see [browser troubleshooting](troubleshooting.md) and [error codes](errors.md).

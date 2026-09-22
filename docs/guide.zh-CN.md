@@ -67,12 +67,12 @@ Chrome ──connectNative──► opencli-mcp host   （Native Messaging ⇄ �
 
 ```bash
 npm install -g opencli-mcp
-opencli-mcp install --extension-id lnaoghmfcdnbhgcihkakfobckmfhllkg
+opencli-mcp install
 ```
 
 然后从 [Chrome Web Store 安装 opencli-mcp](https://chromewebstore.google.com/detail/opencli-mcp/lnaoghmfcdnbhgcihkakfobckmfhllkg)。如果扩展已经安装，在 `chrome://extensions` 中停用再启用，让它重新连接 host。
 
-商店版 extension ID 是 `lnaoghmfcdnbhgcihkakfobckmfhllkg`，当前源码与 npm 0.0.10 使用相同 ID。当前 `setup` 仍引导加载 unpacked 扩展，因此商店版请按以上步骤安装，无需开启 Developer mode。
+`npm install -g` 安装本地程序；`opencli-mcp install` 将程序注册到 Chrome，让扩展能够启动并连接它。本地程序和浏览器扩展都需要安装。
 
 连接 MCP client 后运行 `opencli-mcp doctor`，确认 `ok: true` 和 `host.extensionConnected: true`。完整快速上手见 [README](../README.md#quick-start)。
 

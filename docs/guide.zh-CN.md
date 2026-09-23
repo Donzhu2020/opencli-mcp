@@ -12,7 +12,7 @@ opencli-mcp 是一个连接到真实 Chrome 的 MCP browser service。Chrome ext
 
 `setup` 注册 Chrome Native Messaging host，按你的选择配置 MCP client，并等待 extension 连接。它不会自动安装 extension，也不会覆盖已有的 MCP client 条目。详细选项与排障步骤见 [安装说明](setup.md)。
 
-使用 DeepSeek Harness (`dsh`) 时，先运行 `opencli-mcp setup --clients none`，再运行 `dsh plugin --profile web add dsh-plugin-opencli-mcp`。这个 bundle 通过 dsh 自带的 MCP client 接入 browser service；具体说明见 [dsh 安装步骤](setup.md#deepseek-harness-dsh)。
+使用 DeepSeek Harness (`dsh`) 时，先运行 `opencli-mcp setup --clients none`，再运行 `dsh plugin --profile web add opencli-mcp`。主包内的 bundle 通过 dsh 自带的 MCP client 接入 browser service；具体说明见 [dsh 安装步骤](setup.md#deepseek-harness-dsh)。
 
 ## Browser 工作流
 

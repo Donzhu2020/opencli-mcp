@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.14 — 2026-09-24
+
+- Let DeepSeek Harness install `opencli-mcp` directly as a bundle. Bundle the local adapter SDK in the npm tarball so pnpm can install the main package without resolving a source-tree `file:` dependency.
+- Retire the separate `dsh-plugin-opencli-mcp` package and document one-package setup.
+
 ## 0.0.13 — 2026-09-24
 
 - Center the product on one Chrome-backed browser service: remove the embedded stdio runtime, standalone `serve` path, and browser-free adapter mode. The launcher requires a connected Chrome host, and adapters use that same browser connection.

@@ -39,7 +39,13 @@ Keep Chrome open. `setup` connects the extension to the local program, asks whic
 
 For **Cursor, Claude Desktop, and other MCP clients**, choose `manual` and copy the configuration printed by `setup` into your client's MCP settings. It uses absolute paths so desktop apps can find the program.
 
-For **DeepSeek Harness (`dsh`)**, install the [dsh bundle](packages/dsh-plugin/README.md) after `setup`. It uses dsh's own MCP client plugin and does not change your other dsh plugins.
+For **DeepSeek Harness (`dsh`)**, run `opencli-mcp setup --clients none`, then add the same npm package to your dsh profile:
+
+```bash
+dsh plugin --profile web add opencli-mcp
+```
+
+Restart `dsh web`. The package's dsh bundle uses dsh's MCP client to connect to the browser service. See the [dsh setup details](docs/setup.md#deepseek-harness-dsh).
 
 ### 3. Start using it
 

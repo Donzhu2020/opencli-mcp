@@ -1,6 +1,6 @@
 {
   "name": "opencli-mcp",
-  "version": "0.0.13",
+  "version": "0.0.14",
   "description": "Chrome-backed MCP browser service with optional site adapters.",
   "type": "module",
   "license": "Apache-2.0",
@@ -25,6 +25,7 @@
   "files": [
     "dist/",
     "extension/dist/",
+    "cordis.patch.yml",
     "docs/",
     "README.md",
     "CHANGELOG.md",
@@ -32,6 +33,14 @@
     "packages/",
     "adapters/"
   ],
+  "bundledDependencies": [
+    "@opencli-mcp/adapter-sdk"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",
     "@modelcontextprotocol/core": "^2.0.0",

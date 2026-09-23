@@ -39,10 +39,10 @@ After installing the Chrome extension and `opencli-mcp` globally, connect the br
 
 ```bash
 opencli-mcp setup --clients none
-dsh plugin --profile web add dsh-plugin-opencli-mcp
+dsh plugin --profile web add opencli-mcp
 ```
 
-Restart `dsh web`. The bundle inserts one `@deepseek-ai/dsh-mcp-client` entry, so dsh discovers the same MCP tools as other clients. The global `opencli-mcp` executable must be on dsh's `PATH`; set `OPENCLI_MCP_BIN` to its absolute path if dsh is launched from an app with a different `PATH`. See the [bundle README](../packages/dsh-plugin/README.md) for removal and troubleshooting.
+Restart `dsh web`. The main package's bundle inserts one `@deepseek-ai/dsh-mcp-client` entry, so dsh discovers the same MCP tools as other clients. The global `opencli-mcp` executable must be on dsh's `PATH`; set `OPENCLI_MCP_BIN` to its absolute path if dsh is launched from an app with a different `PATH`. To remove the dsh registration, run `dsh plugin --profile web remove opencli-mcp`. Replace `web` with your active dsh profile when needed.
 
 ## Other Chromium browsers
 

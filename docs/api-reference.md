@@ -27,13 +27,13 @@ class Browser {
   type: "extension";
   tabs: {
     new(url?: string): Promise<Tab>;
-    list(): Promise<Array<{ id: string; url?: string; title?: string; active?: boolean; }>>;
+    list(): Promise<Array<{ id: string; url?: string; title?: string; active: boolean; selected: boolean; origin: "agent" | "user"; state: "active" | "handoff"; }>>;
     get(id: string): Tab;
     selected(): Promise<Tab | undefined>;
-    finalize(opts?: { keep?: Array<{ tab: string | Tab; status: "deliverable" | "handoff"; }>; }): Promise<{ closed: Array<string>; kept: Array<string>; }>;
+    finalize(opts?: { keep?: Array<{ tab: string | Tab; status: "handoff" | "deliverable"; }>; }): Promise<{ closed: Array<string>; kept: Array<string>; failed: Array<{ page: string; reason: string; }>; }>;
   };
   user: {
-    openTabs(): Promise<Array<UserTabInfo>>;
+    openTabs(options?: { query?: string; limit?: number; }): Promise<Array<UserTabInfo>>;
     claimTab(tab: { tabId?: number; title?: string; url?: string; }): Promise<Tab>; // Claim a user tab by id, or by url/title (unique match) when the id is omitted; url/title with an id act as guards.
   };
   nameSession(name: string): Promise<void>;
@@ -52,7 +52,8 @@ class Tab {
   back(): Promise<void>;
   forward(): Promise<void>;
   reload(): Promise<void>;
-  close(): Promise<void>;
+  close(): Promise<void>; // Close this tab, whether it was opened or claimed by this session.
+  release(): Promise<void>; // Keep this tab open and give up this session's control of it.
   observe(opts?: ObserveOptions): Promise<{ url: string | null; title: string | null; state?: string; diff?: boolean; changed?: { added: number; removed: number; changed?: number; }; image?: ImageValue; }>;
   screenshot(opts?: { fullPage?: boolean; annotate?: boolean; format?: "png" | "jpeg"; quality?: number; }): Promise<ImageValue>;
   find(target: Target & { limit?: number; }): Promise<FindResult | ElementAtResult>;
@@ -95,5 +96,5 @@ interface ActOptions { target?: Target; action: ActAction; value?: string; files
 
 interface ObserveOptions { mode?: 'state' | 'screenshot' | 'both'; diff?: boolean; viewport?: boolean; ref?: string; annotate?: boolean; fullPage?: boolean }
 
-interface ReadOptions { maxChars?: number }
+interface ReadOptions { maxChars?: number; start?: number }
 ```

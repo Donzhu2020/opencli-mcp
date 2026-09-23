@@ -193,6 +193,18 @@ describe('frames', () => {
 });
 
 describe('readText', () => {
+  it('continues a bounded read using nextStart without repeating the head', async () => {
+    document.body.innerHTML = '<article><p>Alpha</p><p>Bravo</p><p>Charlie</p></article>';
+    installScroll(100, 100);
+    const p = await page();
+    const first = await p.readText({ waitMs: 0, maxChars: 7 });
+    expect(first).toMatchObject({ text: 'Alpha\nB', complete: false, reason: 'budget', start: 0, nextStart: 7 });
+    const second = await p.readText({ waitMs: 0, maxChars: 7, start: first.nextStart });
+    expect(second).toMatchObject({ text: 'ravo\nCh', complete: false, start: 7, nextStart: 14 });
+    const last = await p.readText({ waitMs: 0, maxChars: 7, start: second.nextStart });
+    expect(last).toMatchObject({ text: 'arlie', complete: true, start: 14 });
+    expect(first.text + second.text + last.text).toBe('Alpha\nBravo\nCharlie');
+  });
   function installScroll(height: number, scrollHeight0: number, onScroll?: (y: number) => void) {
     let y = 0;
     let scrollHeight = scrollHeight0;

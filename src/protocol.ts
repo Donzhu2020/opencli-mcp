@@ -43,12 +43,14 @@ export interface Command {
   /** exec: evaluate in the page's main world (default) or in the engine's isolated world */
   world?: 'main' | 'engine';
   url?: string;
-  op?: 'list' | 'new' | 'close';
+  op?: 'list' | 'new' | 'close' | 'release';
   dialogOp?: 'get' | 'accept' | 'dismiss';
   historyOp?: 'reload' | 'back' | 'forward';
   /** console read: cursor paging */
   afterSequence?: number;
   limit?: number;
+  /** user-tabs: case-insensitive title or URL search */
+  query?: string;
   levels?: string[];
   filter?: string;
   domain?: string;
@@ -151,7 +153,7 @@ export interface Result {
 }
 
 export type BrowserEvent =
-  | { kind: 'tab_created' | 'tab_acquired' | 'tab_closed'; session: string; page?: string; tabId: number; url?: string; title?: string; origin?: 'agent' | 'user' }
+  | { kind: 'tab_created' | 'tab_acquired' | 'tab_closed' | 'tab_released'; session: string; page?: string; tabId: number; url?: string; title?: string; origin?: 'agent' | 'user' }
   | { kind: 'download'; state: string; filename?: string; url?: string }
   | { kind: 'dialog'; page?: string; dialogType: string; message?: string }
   | { kind: 'webmcp_changed'; page?: string }
@@ -163,7 +165,8 @@ export type ExtToHost =
   | { type: 'result'; result: Result }
   | { type: 'event'; event: BrowserEvent };
 
-export const PROTOCOL_VERSION = 1;
+// Bump when a host and extension cannot safely use each other's command semantics.
+export const PROTOCOL_VERSION = 2;
 export const NATIVE_HOST_NAME = 'com.opencli.mcp';
 /** Chrome caps host → extension frames at 1 MiB. */
 export const MAX_FRAME_BYTES = 1024 * 1024;

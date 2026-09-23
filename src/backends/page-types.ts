@@ -15,6 +15,7 @@ export interface RuntimePage {
   cdp(method: string, params?: Record<string, unknown>): Promise<unknown>;
   newTab(url?: string): Promise<string | undefined>;
   closeTab(target?: string): Promise<void>;
+  releaseTab(target?: string): Promise<void>;
   closeWindow(): Promise<void>;
   screenshot(options?: ScreenshotOptions): Promise<string>;
   startNetworkCapture(pattern?: string): Promise<boolean>;

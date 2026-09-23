@@ -61,9 +61,9 @@ export interface AriaArgs {
   budget?: number;
 }
 
-export interface ReadTextArgs { maxChars?: number; maxSteps?: number; waitMs?: number }
-/** Linear document text. `complete` means the page had a bottom. `unbounded` means the page grew on every pass (a feed) and the head already collected is the answer. */
-export interface ReadTextResult { text: string; complete: boolean; reason?: 'budget' | 'unbounded'; chars: number }
+export interface ReadTextArgs { maxChars?: number; start?: number; maxSteps?: number; waitMs?: number }
+/** Linear document text. `nextStart` continues a bounded read on an unchanged page. `unbounded` means a feed grew on every pass. */
+export interface ReadTextResult { text: string; complete: boolean; reason?: 'budget' | 'unbounded'; chars: number; start: number; nextStart?: number }
 
 export interface DomClickArgs { selector: string; fallback: string | null }
 export interface DomClickOk { ok: true; ref: string | null; tag: string; selector: string | null; x: number; y: number }

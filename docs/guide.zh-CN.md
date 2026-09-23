@@ -99,7 +99,7 @@ opencli-mcp setup
 
 | 表面 | 内容 | 适合 |
 |---|---|---|
-| **入口工具** | `doctor`、`tab_open`（可命名会话）、`tab_claim`、`tab_observe`、`tab_read`、`tab_act`、`tab_expect`、`session_finalize`、`sites_search`、`site_run`、`tools_compile`、`tools_define`、`docs_list`、`docs_get`、`js`、`js_reset`；启用站点后动态出现 `<site>_<command>` | 一次结构化调用就够的核心循环 |
+| **入口工具** | `doctor`、`tab_list`、`tab_open`（可命名会话）、`tab_claim`、`tab_release`、`tab_close`、`tab_observe`、`tab_read`、`tab_act`、`tab_expect`、`session_finalize`、`sites_search`、`site_run`、`tools_compile`、`tools_define`、`docs_list`、`docs_get`、`js`、`js_reset`；启用站点后动态出现 `<site>_<command>` | 一次结构化调用就够的核心循环 |
 | **`js`** | 持久 JavaScript 会话，顶层 `const/let` 跨调用保留，最后一个表达式的值作为返回；全局有 `agent/sites/recon/tools/session/nodeRepl/Tab` | 批量多步、循环、条件、入口工具没有的能力（find、对话框、网络/console、cookies、frames、WebMCP、recon、关 tab 等） |
 
 ### 6.2 核心循环
@@ -135,9 +135,10 @@ locator 从最新 observe 构造，不猜；act 自身严格，不先 count、�
 ## 7. Tab 是用户的财产
 
 - 第一个 tab 时命名会话（`tab_open {session}` / `browser.nameSession`）。agent 开的 tab 进入同名 Chrome tab 组，后台打开、静音，直到用户看它。
-- **claim**：`tab_claim` 按 `tabId`（`browser.user.openTabs()` 列出），或按 `url` 前缀 / `title` 子串唯一匹配；与 tabId 同时给时作为守卫，不匹配就失败，绝不悄悄换一个 tab。claim 来的 tab 不入组、不会被 finalize 关闭。
-- **finalize**：`keep:[{tab, status:'deliverable'|'handoff'}]`。deliverable：离开组、留着、绿徽章；handoff：留在组里等下一回合、黄徽章，后续任何会话可从 `openTabs()` 再 claim 回来。其余 agent 开的 tab 关闭。MCP 连接断开、session 关闭、空闲 1 小时，runtime 会替模型做同样的收尾。
-- **光标与徽章**：光标覆盖层由 runtime 拥有，只在用户正看的 tab 显示，跨导航保持，离开会话即消失；未被观看的 tab 里动作不等光标动画。
+- **发现与 claim**：`tab_list {user:true, query:"…"}` 列出会话内 tab 和匹配的用户 tab；默认最多返回最近 20 个，可用 `limit` 调至 100。会话 tab 带 `origin`、`state`。`tab_claim` 按 `tabId`，或按 `url` 前缀 / `title` 子串唯一匹配；与 tabId 同时给时作为守卫，不匹配就失败，绝不悄悄换一个 tab。claim 来的 tab 不入组、不会被 finalize 关闭。
+- **单独结束 tab**：`tab_release` 保留页面、释放控制权；agent 创建的 tab 还会离开分组并取消静音。`tab_close` 真正关闭页面，包括 claim 来的用户 tab。JavaScript API 对应 `tab.release()` / `tab.close()`。没有先 `tab_open` 或 `tab_claim`，浏览器操作不会暗中创建或接管 tab。
+- **finalize**：`keep:[{tab, status:'deliverable'|'handoff'}]`。deliverable：离开组、留着；handoff：留在组里等下一回合，后续任何会话可从 `tab_list {user:true}` 再 claim 回来。其余 agent 开的 tab 关闭；返回的 `failed` 列出未成功清理、可重试的 tab。MCP 连接断开、session 关闭、空闲 1 小时，runtime 会替模型做同样的收尾。
+- **光标**：光标覆盖层由 runtime 拥有，只在用户正看的 tab 显示，跨导航保持，离开会话即消失；未被观看的 tab 里动作不等光标动画。
 - **debugger 附着**：整个会话保持，finalize 释放；用户在 Chrome 调试条取消后，下一次动作自动重附一次。
 - 后台 tab 的输入延迟已通过焦点仿真解决；对话框（alert/confirm/prompt）会让命令返回 `dialog_open`，用 `tab.dialog.get/accept/dismiss` 处理。
 

@@ -26,7 +26,7 @@ export async function startHttpServer(rt: Runtime, opts: { port: number; host?: 
   // Under the stateless per-request model a server instance has no lasting connection, so change notifications go through
   // the handler's subscription bus (subscriptions/listen) instead of a per-server sendToolListChanged.
   const onToolsChanged = (): void => handler.notify.toolsChanged();
-  const onBrowserEvent = (e: { kind: string }): void => { if (['tab_created', 'tab_acquired', 'tab_closed', 'session_released'].includes(e.kind)) handler.notify.resourcesChanged(); };
+  const onBrowserEvent = (e: { kind: string }): void => { if (['tab_created', 'tab_acquired', 'tab_closed', 'tab_released', 'session_released'].includes(e.kind)) handler.notify.resourcesChanged(); };
   rt.on('tools-changed', onToolsChanged);
   rt.on('browser-event', onBrowserEvent);
 

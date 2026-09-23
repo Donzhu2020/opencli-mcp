@@ -34,26 +34,26 @@ export class Browser {
       }
       return tab;
     },
-    list: async (): Promise<Array<{ id: string; url?: string; title?: string; active?: boolean }>> => {
+    list: async (): Promise<Array<{ id: string; url?: string; title?: string; active: boolean; selected: boolean; origin: 'agent' | 'user'; state: 'active' | 'handoff' }>> => {
       const page = await this.page();
-      const tabs = await page.tabs() as Array<{ page?: string; url?: string; title?: string; active?: boolean }>;
-      return tabs.filter((t) => t.page).map((t) => ({ id: t.page!, url: t.url, title: t.title, active: t.active }));
+      const tabs = await page.tabs() as Array<{ page?: string; url?: string; title?: string; active: boolean; selected: boolean; origin: 'agent' | 'user'; state: 'active' | 'handoff' }>;
+      return tabs.filter((t) => t.page).map((t) => ({ id: t.page!, url: t.url, title: t.title, active: t.active, selected: t.selected, origin: t.origin, state: t.state }));
     },
     get: (id: string): Tab => new Tab(id, this.ctx),
     selected: async (): Promise<Tab | undefined> => { const id = this.ctx.state.selected; return id ? new Tab(id, this.ctx) : undefined; },
-    finalize: async (opts: { keep?: Array<{ tab: string | Tab; status: 'deliverable' | 'handoff' }> } = {}): Promise<{ closed: string[]; kept: string[] }> => {
+    finalize: async (opts: { keep?: Array<{ tab: string | Tab; status: 'deliverable' | 'handoff' }> } = {}): Promise<{ closed: string[]; kept: string[]; failed: Array<{ page: string; reason: string }> }> => {
       const page = await this.page();
       const keep = (opts.keep ?? []).map((k) => ({ page: typeof k.tab === 'string' ? k.tab : k.tab.id, status: k.status }));
-      this.ctx.state.finalized = true;
-      this.ctx.state.pages.clear(); this.ctx.state.tabLocks.clear(); this.ctx.state.selected = undefined;
-      if (this.ctx.rt.isExtensionPage(page)) return page.finalize(keep);
-      await page.closeWindow();
-      return { closed: [], kept: keep.map((k) => k.page) };
+      const result = this.ctx.rt.isExtensionPage(page) ? await page.finalize(keep) : (await page.closeWindow(), { closed: [], kept: keep.map((k) => k.page), failed: [] });
+      for (const id of [...result.closed, ...result.kept]) this.ctx.rt.forgetPage(this.ctx.sessionId, id);
+      this.ctx.state.finalized = result.failed.length === 0;
+      if (this.ctx.state.finalized) { this.ctx.state.pages.clear(); this.ctx.state.tabLocks.clear(); this.ctx.state.selected = undefined; }
+      return result;
     },
   };
 
   readonly user = {
-    openTabs: async (): Promise<UserTabInfo[]> => this.ext(await this.page()).userTabs(),
+    openTabs: async (options: { query?: string; limit?: number } = {}): Promise<UserTabInfo[]> => this.ext(await this.page()).userTabs(options),
     /** Claim a user tab by id, or by url/title (unique match) when the id is omitted; url/title with an id act as guards. */
     claimTab: async (tab: { tabId?: number; title?: string; url?: string }): Promise<Tab> => {
       const page = this.ext(await this.page());

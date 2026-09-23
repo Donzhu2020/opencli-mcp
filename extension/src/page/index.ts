@@ -345,6 +345,8 @@ function pageLines(): string[] {
  */
 export async function readText(args: ReadTextArgs = {}): Promise<ReadTextResult> {
   const maxChars = args.maxChars && args.maxChars > 0 ? Math.round(args.maxChars) : READ_MAX_CHARS;
+  const start = args.start && args.start > 0 ? Math.round(args.start) : 0;
+  const stop = start + maxChars;
   const maxSteps = args.maxSteps && args.maxSteps > 0 ? Math.round(args.maxSteps) : READ_MAX_STEPS;
   const waitMs = args.waitMs === undefined ? 40 : Math.max(0, args.waitMs);
   const wait = () => new Promise((r) => setTimeout(r, waitMs));
@@ -355,9 +357,13 @@ export async function readText(args: ReadTextArgs = {}): Promise<ReadTextResult>
   const absorb = () => {
     for (const line of pageLines()) if (!seen.has(line)) { seen.add(line); lines.push(line); }
   };
-  const finish = (complete: boolean, reason?: ReadTextResult['reason']): ReadTextResult => {
-    const text = lines.join('\n').slice(0, maxChars);
-    return { text, complete, ...(reason && { reason }), chars: text.length };
+  const finish = (reachedBottom: boolean, reason?: ReadTextResult['reason']): ReadTextResult => {
+    const full = lines.join('\n');
+    const text = full.slice(start, stop);
+    const hasMore = full.length > stop;
+    const complete = reachedBottom && !hasMore;
+    const why = reason === 'unbounded' ? 'unbounded' : complete ? undefined : 'budget';
+    return { text, complete, ...(why && { reason: why }), chars: text.length, start, ...(why === 'budget' && text.length > 0 ? { nextStart: start + text.length } : {}) };
   };
   try {
     port.scrollTo(saved.x, 0);
@@ -367,7 +373,7 @@ export async function readText(args: ReadTextArgs = {}): Promise<ReadTextResult>
     for (let step = 0; step < maxSteps; step++) {
       await wait();
       absorb();
-      if (lines.join('\n').length >= maxChars) return finish(false, 'budget');
+      if (lines.join('\n').length >= stop) return finish(false, 'budget');
       const m = port.read();
       // Only a growth at the previous bottom counts. A taller image mid-page does not make this a feed.
       const reachedPriorBottom = m.y + m.height >= lastHeight - 1;
@@ -382,7 +388,7 @@ export async function readText(args: ReadTextArgs = {}): Promise<ReadTextResult>
         port.scrollTo(saved.x, m.y + 1);
         await wait();
         absorb();
-        if (lines.join('\n').length >= maxChars) return finish(false, 'budget');
+        if (lines.join('\n').length >= stop) return finish(false, 'budget');
         const after = port.read();
         if (after.scrollHeight <= heightBefore + 1) return finish(true);
         grows++;

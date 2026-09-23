@@ -26,6 +26,18 @@ async function harness() {
 }
 
 describe('write commands execute directly', () => {
+  it('exposes explicit tab discovery, release, and close', async () => {
+    const h = await harness();
+    try {
+      const names = (await h.client.listTools()).tools.map((t) => t.name);
+      expect(names).toContain('tab_list');
+      expect(names).toContain('tab_close');
+      expect(names).toContain('tab_release');
+      const unavailable = await h.client.callTool({ name: 'tab_list', arguments: { user: true } });
+      expect(body(unavailable)).toMatchObject({ ok: false, error: { code: 'browser_unavailable' } });
+    } finally { await h.cleanup(); }
+  });
+
   it('runs writes through site_run, typed tools, and js without elicitation', async () => {
     const h = await harness();
     try {

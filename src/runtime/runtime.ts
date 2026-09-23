@@ -5,6 +5,7 @@
  */
 import { EventEmitter } from 'node:events';
 import type { ExtensionBridge } from '../host/bridge.js';
+import { PROTOCOL_VERSION } from '../protocol.js';
 import type { BrowserEvent } from '../protocol.js';
 import { SiteRegistry } from '../sites/loader.js';
 import { runAdapter, type CommandRunResult, type CommandRunError, type PageProvider } from '../sites/executor.js';
@@ -52,7 +53,7 @@ export interface SessionState {
 
 export interface DoctorReport {
   backend: Backend;
-  extension: { connected: boolean; version: string | null; contextId?: string };
+  extension: { connected: boolean; version: string | null; protocolVersion: number | null; expectedProtocolVersion: number; contextId?: string };
   sites: number;
   commands: number;
   definedTools: number;
@@ -200,7 +201,7 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
     const list = this.registry.sites();
     return {
       backend: this.backend(),
-      extension: { connected: Boolean(this.bridge?.connected), version: this.bridge?.extensionVersion ?? null, contextId: this.bridge?.contextId },
+      extension: { connected: Boolean(this.bridge?.connected), version: this.bridge?.extensionVersion ?? null, protocolVersion: this.bridge?.protocolVersion ?? null, expectedProtocolVersion: PROTOCOL_VERSION, contextId: this.bridge?.contextId },
       sites: list.length,
       commands: list.reduce((n, s) => n + s.commands, 0),
       definedTools: listDefinedTools().length,

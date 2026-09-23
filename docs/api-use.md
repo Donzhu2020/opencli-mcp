@@ -30,8 +30,8 @@ families are in the `errors` doc; the full object model arrives with your first 
    with `tab.dialog.get()` and answer `tab.dialog.accept(text?)` / `tab.dialog.dismiss()` (in `js`), then retry — never
    answer a dialog the user didn't ask you to.
 10. **Observe discipline:** one observe to orient, then act on its refs. The snapshot is the action map, not the
-    document — read an article, doc, or chat log with `tab_read` (linear text, no refs; scroll is restored). A feed
-    that returns `reason:"unbounded"` is done; do not call `tab_read` again to finish it. Branches marked `(collapsed)`
+    document — read an article, doc, or chat log with `tab_read` (linear text, no refs; scroll is restored). If it returns
+    `nextStart`, pass that value as `start` to continue on an unchanged page. A feed that returns `reason:"unbounded"` is done; do not call `tab_read` again to finish it. Branches marked `(collapsed)`
     keep their ref; `tab_observe` with `{ref:"eN"}` opens that one branch. The snapshot is the full tree unless you pass
     `diff: true`, and only do that when the previous full snapshot is still in your context. `viewport: true` is the
     on-screen subtree, not a page of the full tree. `click` is a real mouse event and fails with `not_delivered` when

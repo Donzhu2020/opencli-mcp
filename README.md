@@ -62,14 +62,17 @@ For integrations and custom workflows, the main tools are:
 | Task | Tools |
 |---|---|
 | Browse a page | `tab_open`, `tab_observe`, `tab_read`, `tab_act`, `tab_expect` |
-| Use an existing tab | `tab_claim` |
+| Find or use an existing tab | `tab_list`, `tab_claim` |
+| Keep a tab open or close it | `tab_release`, `tab_close` |
 | Finish a browser session | `session_finalize` |
 | Discover and run site commands | `sites_search`, `site_run` |
 | Create reusable tools | `tools_compile`, `tools_define` |
 | Run multi-step JavaScript | `js`, `js_reset` |
 | Read built-in documentation | `docs_list`, `docs_get` |
 
-The browser workflow is **observe → act → verify → finalize**. `tab_observe` is the action map (accessibility snapshot with element references). `tab_read` is the document text. Actions wait for their targets to be ready before dispatching browser input.
+The browser workflow is **observe → act → verify → finalize**. `tab_observe` is the action map (accessibility snapshot with element references). `tab_read` is the document text; pass its `nextStart` back as `start` to continue a long, unchanged page. Actions wait for their targets to be ready before dispatching browser input.
+
+Browser control starts explicitly with `tab_open` or `tab_claim`; `tab_list` shows session tabs and, with `user:true`, up to 20 recent tabs available to claim. Use `query` to find an older tab by title or URL. `tab_release` leaves a tab open and gives up control. `tab_close` closes it, including a claimed user tab. Session cleanup closes agent-created tabs that you do not keep and releases claimed user tabs; any cleanup failures are reported for retry.
 
 Inside the `js` tool, you can also call site commands directly:
 

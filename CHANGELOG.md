@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Make browser tab ownership explicit: operations no longer create a tab or adopt an unknown page implicitly. Add searchable `tab_list` discovery with bounded user-tab results and expose tab origin/state.
+- Separate `tab_release` / `tab.release()` (leave open) from `tab_close` / `tab.close()` (close), for both agent-created and claimed tabs. Session cleanup reports failed tab closures and leaves their leases available for retry.
+- Serialize extension lease persistence to prevent out-of-order state writes. Allow long document reads to continue with `nextStart` and `start`.
+- Fail closed when the Chrome extension and npm host use incompatible browser protocols; `doctor` reports the observed and expected protocol versions.
+
 ## 0.0.12 — 2026-09-23
 
 - Add `tab_read` / `tab.read()` for bounded document text, including lazy content, deduplication, and scroll restoration.

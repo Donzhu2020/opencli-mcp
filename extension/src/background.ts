@@ -91,7 +91,7 @@ async function handleCommand(cmd: Command): Promise<Result> {
       case 'wait-download': return { id: cmd.id, ok: true, data: await executor.waitForDownload(cmd.pattern ?? '', cmd.timeoutMs ?? 30_000) };
       // ── session & tab lifecycle ──
       case 'session-name': { if (!cmd.name) return { id: cmd.id, ok: false, error: 'Missing name' }; await sessions.nameSession(s, cmd.name); return { id: cmd.id, ok: true, data: { name: cmd.name } }; }
-      case 'user-tabs': return { id: cmd.id, ok: true, data: await sessions.listUserTabs() };
+      case 'user-tabs': return { id: cmd.id, ok: true, data: await sessions.listUserTabs({ query: cmd.query, limit: cmd.limit }) };
       case 'claim': { if (!cmd.claim) return { id: cmd.id, ok: false, error: 'Missing claim' }; const r = await sessions.claimUserTab(s, cmd.claim); return { id: cmd.id, ok: true, page: r.page, data: { url: r.tab.url, title: r.tab.title, tabId: r.tabId } }; }
       case 'mark': { if (!cmd.page) return { id: cmd.id, ok: false, error: 'Missing page' }; const tabId = await identity.resolveTabId(cmd.page); sessions.mark(s, tabId, cmd.mark ?? null); return { id: cmd.id, ok: true, data: { mark: cmd.mark ?? null } }; }
       case 'session-finalize': return { id: cmd.id, ok: true, data: await sessions.finalize(s, cmd.keep ?? []) };
@@ -219,13 +219,13 @@ async function handleNavigate(cmd: Command, s: Session): Promise<Result> {
 async function handleTabs(cmd: Command, s: Session): Promise<Result> {
   switch (cmd.op) {
     case 'list': {
-      const out: Array<{ index: number; page?: string; url?: string; title?: string; active: boolean; origin: string; state: string }> = [];
+      const out: Array<{ index: number; page?: string; url?: string; title?: string; active: boolean; selected: boolean; origin: string; state: string }> = [];
       let i = 0;
       for (const lease of s.leases.values()) {
         const t = await chrome.tabs.get(lease.tabId).catch(() => null);
         if (!t) continue;
         const page = await identity.resolveTargetId(lease.tabId).catch(() => undefined);
-        out.push({ index: i++, page, url: t.url, title: t.title, active: lease.tabId === s.preferredTabId, origin: lease.origin, state: lease.state });
+        out.push({ index: i++, page, url: t.url, title: t.title, active: Boolean(t.active), selected: lease.tabId === s.preferredTabId, origin: lease.origin, state: lease.state });
       }
       return { id: cmd.id, ok: true, data: out };
     }
@@ -244,21 +244,13 @@ async function handleTabs(cmd: Command, s: Session): Promise<Result> {
       }
       return { id: cmd.id, ok: true, page: created.page, data: { url: t.url, title: t.title } };
     }
-    case 'close': {
+    case 'close':
+    case 'release': {
       let tabId: number | undefined;
       if (cmd.page) tabId = await identity.resolveTabId(cmd.page).catch(() => undefined);
       else tabId = s.preferredTabId ?? undefined;
       if (tabId === undefined) return { id: cmd.id, ok: false, error: 'Page no longer exists', errorCode: 'stale_page' };
-      const lease = s.leases.get(tabId);
-      if (!lease) return { id: cmd.id, ok: false, error: 'Page is not part of this session; only agent tabs can be closed', errorCode: 'page_not_in_session' };
-      const page = await identity.resolveTargetId(tabId).catch(() => undefined);
-      await executor.detach(tabId).catch(() => {});
-      await sessions.badge(tabId, null);
-      s.leases.delete(tabId);
-      if (s.preferredTabId === tabId) s.preferredTabId = null;
-      if (lease.origin === 'agent') await chrome.tabs.remove(tabId).catch(() => {});
-      identity.evictTab(tabId);
-      return { id: cmd.id, ok: true, data: { closed: page, released: lease.origin === 'user' } };
+      return { id: cmd.id, ok: true, data: await sessions.endTab(s, tabId, cmd.op) };
     }
     default: return { id: cmd.id, ok: false, error: `Unknown tabs op: ${String(cmd.op)}` };
   }

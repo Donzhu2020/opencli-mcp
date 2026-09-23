@@ -21,10 +21,10 @@ export interface UserTabInfo { tabId: number; title?: string; url?: string; wind
 /** Extra methods available on extension-backed pages. */
 export interface ExtensionPageExtras {
   nameSession(name: string): Promise<void>;
-  userTabs(): Promise<UserTabInfo[]>;
+  userTabs(options?: { query?: string; limit?: number }): Promise<UserTabInfo[]>;
   claim(tab: { tabId?: number; title?: string; url?: string }): Promise<{ page: string; url?: string; title?: string }>;
   mark(page: string, mark: 'deliverable' | 'handoff' | null): Promise<void>;
-  finalize(keep: Array<{ page: string; status: 'deliverable' | 'handoff' }>): Promise<{ closed: string[]; kept: string[] }>;
+  finalize(keep: Array<{ page: string; status: 'deliverable' | 'handoff' }>): Promise<{ closed: string[]; kept: string[]; failed: Array<{ page: string; reason: string }> }>;
   cursor(x: number, y: number, opts?: { waitForArrival?: boolean }): Promise<void>;
   setVisibility(visible: boolean): Promise<void>;
   getVisibility(): Promise<boolean>;
@@ -169,13 +169,14 @@ class ExtensionPage implements ExtensionRuntimePage {
     this._lastUrl = null;
     return r.page;
   }
-  async closeTab(target?: string): Promise<void> {
-    const params: Partial<Command> = { op: 'close', ...this.sessionOpts() };
+  private async endTab(op: 'close' | 'release', target?: string): Promise<void> {
+    const params: Partial<Command> = { op, ...this.sessionOpts() };
     if (typeof target === 'string') params.page = target; else if (this._page !== undefined) params.page = this._page;
-    const r = await this.bridge.send('tabs', params);
-    const closed = (r.data as { closed?: string } | undefined)?.closed;
-    if ((closed && closed === this._page) || (!closed && (target === undefined || target === this._page))) { if (this.bound) this.closed = true; else this._page = undefined; this._lastUrl = null; }
+    await this.bridge.send('tabs', params);
+    if (target === undefined || target === this._page) { if (this.bound) this.closed = true; else this._page = undefined; this._lastUrl = null; }
   }
+  async closeTab(target?: string): Promise<void> { await this.endTab('close', target); }
+  async releaseTab(target?: string): Promise<void> { await this.endTab('release', target); }
   async screenshot(options: { format?: 'png' | 'jpeg'; quality?: number; fullPage?: boolean; width?: number; height?: number } = {}): Promise<string> {
     const r = await this.send('screenshot', { format: options.format, quality: options.quality, fullPage: options.fullPage, width: options.width, height: options.height });
     const b64 = r.data as string;
@@ -192,7 +193,7 @@ class ExtensionPage implements ExtensionRuntimePage {
 
   // ── opencli-mcp extras ──
   async nameSession(name: string): Promise<void> { await this.bridge.send('session-name', { ...this.sessionOpts(), name }); }
-  async userTabs(): Promise<UserTabInfo[]> { const r = await this.bridge.send('user-tabs', { ...this.sessionOpts() }); return Array.isArray(r.data) ? r.data as UserTabInfo[] : []; }
+  async userTabs(options: { query?: string; limit?: number } = {}): Promise<UserTabInfo[]> { const r = await this.bridge.send('user-tabs', { ...this.sessionOpts(), ...options }); return Array.isArray(r.data) ? r.data as UserTabInfo[] : []; }
   async claim(tab: { tabId?: number; title?: string; url?: string }): Promise<{ page: string; url?: string; title?: string }> {
     const r = await this.bridge.send('claim', { ...this.sessionOpts(), claim: tab });
     if (r.page && !this.bound) this._page = r.page;
@@ -200,10 +201,10 @@ class ExtensionPage implements ExtensionRuntimePage {
     return { page: r.page ?? '', url: d.url, title: d.title };
   }
   async mark(page: string, mark: 'deliverable' | 'handoff' | null): Promise<void> { await this.bridge.send('mark', { ...this.sessionOpts(), page, mark }); }
-  async finalize(keep: Array<{ page: string; status: 'deliverable' | 'handoff' }>): Promise<{ closed: string[]; kept: string[] }> {
+  async finalize(keep: Array<{ page: string; status: 'deliverable' | 'handoff' }>): Promise<{ closed: string[]; kept: string[]; failed: Array<{ page: string; reason: string }> }> {
     const r = await this.bridge.send('session-finalize', { ...this.sessionOpts(), keep });
     if (this.bound) this.closed = true; else this._page = undefined;
-    return (r.data ?? { closed: [], kept: [] }) as { closed: string[]; kept: string[] };
+    return (r.data ?? { closed: [], kept: [], failed: [] }) as { closed: string[]; kept: string[]; failed: Array<{ page: string; reason: string }> };
   }
   async cursor(x: number, y: number, opts: { waitForArrival?: boolean } = {}): Promise<void> {
     try { await this.send('cursor', { x, y, waitForArrival: opts.waitForArrival ?? true, timeoutMs: 1500 }); } catch (err) {

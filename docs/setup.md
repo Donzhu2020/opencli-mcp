@@ -132,6 +132,7 @@ Run `opencli-mcp doctor` first. It reports whether the browser registration, loc
 |---|---|
 | `browser_unavailable` or host unreachable | Keep Chrome running, enable the extension, and verify the host registration |
 | Web Store extension cannot connect | Run `opencli-mcp setup`; if it stays disconnected, disable and re-enable the extension |
+| `doctor` reports a protocol mismatch | Update both the Chrome Web Store extension and the npm package, then rerun `opencli-mcp setup` and `doctor` |
 | No host manifest was written | Rerun `setup`; for custom profiles, pass `--user-data-dir` |
 | MCP client cannot find `opencli-mcp` | Use the absolute executable path in the client configuration |
 | Development changes do not appear | Rebuild the extension and click **Reload** on the extensions page |

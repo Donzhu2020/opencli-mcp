@@ -6,7 +6,7 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import type { NativeChannel } from './native-messaging.js';
-import type { Action, BrowserEvent, Command, ExtToHost, Result } from '../protocol.js';
+import { PROTOCOL_VERSION, type Action, type BrowserEvent, type Command, type ExtToHost, type Result } from '../protocol.js';
 
 export class BrowserCommandError extends Error {
   constructor(message: string, readonly code: string = 'browser_command_failed', readonly hint?: string, readonly data?: unknown) {
@@ -26,6 +26,7 @@ export interface BridgeEvents {
 export class ExtensionBridge extends EventEmitter<BridgeEvents> {
   private readonly pending = new Map<string, Pending>();
   extensionVersion: string | null = null;
+  protocolVersion: number | null = null;
   contextId: string | undefined;
   connected = false;
 
@@ -51,10 +52,11 @@ export class ExtensionBridge extends EventEmitter<BridgeEvents> {
   private onMessage(msg: ExtToHost): void {
     if (!msg || typeof msg !== 'object') return;
     if (msg.type === 'hello') {
-      this.connected = true;
+      this.protocolVersion = msg.protocolVersion;
+      this.connected = msg.protocolVersion === PROTOCOL_VERSION;
       this.extensionVersion = msg.extensionVersion;
       this.contextId = msg.contextId;
-      if (this.ready) { try { this.channel.send({ type: 'ready', ...this.ready }); } catch { /* ignore */ } }
+      if (this.connected && this.ready) { try { this.channel.send({ type: 'ready', ...this.ready }); } catch { /* ignore */ } }
       this.emit('hello', msg);
       return;
     }
@@ -71,6 +73,11 @@ export class ExtensionBridge extends EventEmitter<BridgeEvents> {
 
   /** Send a command; resolves with `data`, throws BrowserCommandError on `ok:false`. */
   async send(action: Action, params: Omit<Command, 'id' | 'action'> = {}, opts: { timeoutMs?: number } = {}): Promise<{ data: unknown; page?: string }> {
+    if (!this.connected) throw new BrowserCommandError(
+      this.protocolVersion === null ? 'Chrome extension is not connected' : `Chrome extension protocol ${this.protocolVersion} is incompatible with host protocol ${PROTOCOL_VERSION}`,
+      this.protocolVersion === null ? 'extension_disconnected' : 'protocol_mismatch',
+      this.protocolVersion === null ? 'Run opencli-mcp doctor.' : 'Update the Chrome extension and npm package, then run opencli-mcp doctor.',
+    );
     const timeoutMs = opts.timeoutMs ?? (params.timeoutMs ?? 60_000) + 5_000;
     const id = randomUUID();
     const command: Command = { id, action, ...params, deadlineAt: Date.now() + timeoutMs };

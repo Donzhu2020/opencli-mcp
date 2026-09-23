@@ -24,7 +24,7 @@ export interface ActOptions { target?: Target; action: ActAction; value?: string
 
 export interface ObserveOptions { mode?: 'state' | 'screenshot' | 'both'; /** diff against the previous observe. Off unless explicitly true — a diff is useless when the caller no longer has the base snapshot. */ diff?: boolean; /** only the subtree on screen right now (what a screenshot shows). Not a page of the full tree. */ viewport?: boolean; /** open one branch of the action map (`eN` from a collapsed line). Ignores viewport. */ ref?: string; /** overlay eN labels on the screenshot */ annotate?: boolean; fullPage?: boolean }
 
-export interface ReadOptions { /** stop after this many characters. Default 60000. */ maxChars?: number }
+export interface ReadOptions { /** stop after this many characters. Default 60000. */ maxChars?: number; /** character offset from the beginning of the document scan */ start?: number }
 
 export interface ImageValue { __image: true; mimeType: string; base64: string }
 
@@ -127,7 +127,10 @@ export class Tab {
   async back(): Promise<void> { await this.use((p) => p.history('back')); }
   async forward(): Promise<void> { await this.use((p) => p.history('forward')); }
   async reload(): Promise<void> { await this.use((p) => p.history('reload')); }
+  /** Close this tab, whether it was opened or claimed by this session. */
   async close(): Promise<void> { await this.use((p) => p.closeTab(this.id)); this.closed = true; this.ctx.rt.forgetPage(this.ctx.sessionId, this.id); }
+  /** Keep this tab open and give up this session's control of it. */
+  async release(): Promise<void> { await this.use((p) => p.releaseTab(this.id)); this.closed = true; this.ctx.rt.forgetPage(this.ctx.sessionId, this.id); }
 
   async observe(opts: ObserveOptions = {}): Promise<{ url: string | null; title: string | null; state?: string; diff?: boolean; changed?: { added: number; removed: number; changed?: number }; image?: ImageValue }> {
     const mode = opts.mode ?? 'state';
@@ -188,7 +191,7 @@ export class Tab {
    */
   async read(opts: ReadOptions = {}): Promise<ReadTextResult> {
     return this.use(async (page) => {
-      const r = await page.pageCall('readText', opts.maxChars ? { maxChars: opts.maxChars } : {}) as ReadTextResult;
+      const r = await page.pageCall('readText', opts) as ReadTextResult;
       this.ctx.state.trace.record({ kind: 'observe', mode: 'read', page: this.id, summary: r.complete ? 'complete' : r.reason, sample: r.text.slice(0, 1500) });
       return r;
     });

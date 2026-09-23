@@ -10,5 +10,6 @@ Every error has `code`, `message`, optional `hint`, and any structured data spre
 | frames | `frame_not_found` (which level is named), `frame_unreachable` | check the chain outermost-first; the frame may still be loading |
 | dialogs | `dialog_open` (+`dialog`), `no_dialog`, `dialog_answer_timeout` | read with `tab.dialog.get()`, answer with accept/dismiss, then retry |
 | expectations & frozen tools | `expectation_failed` (+`expect`, `failed`, `state`), `step_failed`, `invalid_definition`, `unknown_site`, `unknown_command`, `adapter_load` | fix the one step named in `details.step`/`label`; check the definition |
-| claiming tabs | `claim_not_found`, `claim_ambiguous` (+candidates), `claim_identity_mismatch`, `claim_not_allowed`, `already_claimed` | list `browser.user.openTabs()` and claim by `tabId` |
+| claiming tabs | `claim_not_found`, `claim_ambiguous` (+candidates), `claim_identity_mismatch`, `claim_not_allowed`, `already_claimed` | call `tab_list` with `user:true` and claim by `tabId` |
+| ending tabs | `tab_close_failed` | Chrome refused to remove the tab; its lease remains active, so retry `tab_close` or `session_finalize` |
 | runtime | `browser_unavailable`, `unsupported_backend`, `unknown_browser`, `unknown_capability`, `unknown_doc`, `evaluate_read_only`, `cancelled`, `command_lost`, `command_failed`, `result_evicted` | run `doctor`; use `tab.act` for writes; retry after reconnect |

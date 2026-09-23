@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.15 — 2026-09-24
+
+- Add OpenCode to the client choices in `setup`, preserving existing JSONC config and MCP entries.
+- Add Pi to the client choices in `setup` through `pi-mcp-adapter`, preserving other Pi MCP servers.
+
 ## 0.0.14 — 2026-09-24
 
 - Let DeepSeek Harness install `opencli-mcp` directly as a bundle. Bundle the local adapter SDK in the npm tarball so pnpm can install the main package without resolving a source-tree `file:` dependency.

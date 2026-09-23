@@ -7,7 +7,7 @@ For the recommended npm + Chrome Web Store installation, follow the [README quic
 `npm install -g opencli-mcp` installs the software. `opencli-mcp setup` configures the two connections it needs:
 
 1. **Chrome → local program:** writes the Native Messaging registration so Chrome can start the program when the extension connects.
-2. **MCP client → local program:** asks you to select `claude`, `codex`, or both when their CLIs are on your PATH. Only selected clients are configured, and existing registrations are kept. Choose `manual` (the default) for a ready-to-copy configuration using absolute paths, or `none` to configure only the browser connection.
+2. **MCP client → local program:** asks you to select `claude`, `codex`, `opencode`, `pi`, or a combination when their CLIs are on your PATH. Only selected clients are configured, and existing registrations are kept. Pi requires `pi-mcp-adapter`. Choose `manual` (the default) for a ready-to-copy configuration using absolute paths, or `none` to configure only the browser connection.
 
 It then checks the live browser connection. If disconnected, it opens the Chrome Web Store and waits for the extension to connect. The extension retries automatically, so you can install it before or after running setup. Already connected? No store page is opened.
 
@@ -22,6 +22,8 @@ For scripts, select clients explicitly. Without `--clients`, non-interactive set
 ```bash
 opencli-mcp setup --clients codex
 opencli-mcp setup --clients claude,codex
+opencli-mcp setup --clients opencode
+opencli-mcp setup --clients pi
 opencli-mcp setup --clients manual  # show configuration for any MCP client
 opencli-mcp setup --clients none    # configure only the browser connection
 opencli-mcp setup --no-open       # print the store link without opening it
@@ -33,6 +35,28 @@ A timeout leaves the configuration in place: enable the extension and rerun setu
 
 `opencli-mcp doctor` checks registration and the live connection without changing settings. It is for troubleshooting; it is not a required setup step.
 
+## Embedding the browser host in an app
+
+Chrome starts a Native Messaging host from one executable path in its manifest. It does not pass arguments or a custom environment. `registerHost()` owns the manifest and the launcher. Call it when the app starts or updates, so the manifest follows the current app location:
+
+```js
+import { registerHost } from 'opencli-mcp/host-registration.js';
+
+registerHost();
+```
+
+For the normal npm installation, the default uses Node. When called from Electron, it uses the app binary with `ELECTRON_RUN_AS_NODE=1` set in the *new* process. If the app disables Electron's `runAsNode` fuse or ships a dedicated signed helper, provide its executable path:
+
+```js
+registerHost({ launch: { kind: 'executable', path: '/absolute/path/to/signed-helper' } });
+```
+
+The helper must implement the Native Messaging protocol on stdin/stdout and run the opencli-mcp `host` entrypoint. For another host runtime, pass `{ kind: 'command', command: '/absolute/path/to/runtime', args: ['/absolute/path/to/main.js', 'host'], env: { KEY: 'value' } }`. The library serializes that command into a launcher and writes the manifest for the selected browsers and profiles. An executable path must exist and be absolute.
+
+## OpenCode
+
+Run `opencli-mcp setup --clients opencode`. Setup adds a local MCP server to your global OpenCode config (`~/.config/opencode/opencode.json`, or `opencode.jsonc` if that is your existing file). It preserves comments, other settings, and any existing `opencli-mcp` entry. Restart OpenCode, then use `opencode mcp list` to check the connection. The executable and script paths are absolute, so OpenCode does not need your terminal's npm `PATH`.
+
 ## DeepSeek Harness (dsh)
 
 After installing the Chrome extension and `opencli-mcp` globally, connect the browser without configuring another MCP client, then add the dsh bundle to your active profile:
@@ -43,6 +67,17 @@ dsh plugin --profile web add opencli-mcp
 ```
 
 Restart `dsh web`. The main package's bundle inserts one `@deepseek-ai/dsh-mcp-client` entry, so dsh discovers the same MCP tools as other clients. The global `opencli-mcp` executable must be on dsh's `PATH`; set `OPENCLI_MCP_BIN` to its absolute path if dsh is launched from an app with a different `PATH`. To remove the dsh registration, run `dsh plugin --profile web remove opencli-mcp`. Replace `web` with your active dsh profile when needed.
+
+## Pi
+
+Pi does not include an MCP client. Install the community [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter), then select Pi in setup:
+
+```bash
+pi install npm:pi-mcp-adapter
+opencli-mcp setup --clients pi
+```
+
+Restart Pi. Setup adds one entry to Pi's own global `mcp.json` (normally `~/.pi/agent/mcp.json`) using absolute paths, without changing other servers. Use the adapter's `mcp` tool to discover and call browser tools.
 
 ## Other Chromium browsers
 

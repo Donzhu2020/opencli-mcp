@@ -1,6 +1,6 @@
 {
   "name": "opencli-mcp",
-  "version": "0.0.14",
+  "version": "0.0.15",
   "description": "Chrome-backed MCP browser service with optional site adapters.",
   "type": "module",
   "license": "Apache-2.0",
@@ -50,7 +50,8 @@
     "web-tree-sitter": "^0.27.0",
     "ws": "^8.21.3",
     "zod": "^4.6.5",
-    "@opencli-mcp/adapter-sdk": "file:packages/adapter-sdk"
+    "@opencli-mcp/adapter-sdk": "file:packages/adapter-sdk",
+    "jsonc-parser": "^3.3.1"
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
@@ -64,5 +65,9 @@
     "typescript": "^5.9.3",
     "vitest": "^4.1.11",
     "playwright-core": "^1.63.0"
-  }
+  },
+  "keywords": [
+    "mcp",
+    "browser"
+  ]
 }

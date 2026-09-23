@@ -32,7 +32,7 @@ const HELP = `Usage: opencli-mcp <command>
   version               Show the installed version
 
 Setup options:
-  --clients <ids>       Configure claude,codex; manual prints config; none skips
+  --clients <ids>       Configure claude,codex,opencode,pi; manual prints config; none skips
   --no-open             Print the extension link without opening a browser
   --wait <seconds>      Connection timeout (default: 180; 0 checks once)
   --browsers <names>     Target browsers, e.g. chrome,edge

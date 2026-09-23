@@ -4,6 +4,8 @@ import { promisify } from 'node:util';
 import { registerHost, projectRoot } from './registration.js';
 import { doctor } from './doctor.js';
 import { EXTENSION_STORE_URL } from './extension.js';
+import { registerOpenCode } from './opencode.js';
+import { registerPi } from './pi.js';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 
@@ -19,24 +21,26 @@ function which(cmd: string): string | null {
 const CLIENTS = [
   { name: 'Claude Code', bin: 'claude', scope: ['-s', 'user'] },
   { name: 'Codex', bin: 'codex', scope: [] },
+  { name: 'OpenCode', bin: 'opencode', scope: [] },
+  { name: 'Pi (pi-mcp-adapter required)', bin: 'pi', scope: [] },
 ];
 async function selectClients(requested?: string[]): Promise<string[]> {
   const validate = (values: string[]): string[] => {
     const ids = [...new Set(values.map((value) => value.trim()))];
-    if (!ids.length || ids.some((id) => !['claude', 'codex', 'manual', 'none'].includes(id))) {
-      throw new Error('Choose claude, codex, manual, or none with --clients (comma-separated).');
+    if (!ids.length || ids.some((id) => !['claude', 'codex', 'opencode', 'pi', 'manual', 'none'].includes(id))) {
+      throw new Error('Choose claude, codex, opencode, pi, manual, or none with --clients (comma-separated).');
     }
     if (ids.length > 1 && ids.some((id) => id === 'manual' || id === 'none')) {
       throw new Error('Choose manual or none on its own.');
     }
     for (const id of ids) {
-      if (['claude', 'codex'].includes(id) && !which(id)) throw new Error(`${id} CLI was not found on PATH. Install it first or choose manual.`);
+      if (['claude', 'codex', 'opencode', 'pi'].includes(id) && !which(id)) throw new Error(`${id} CLI was not found on PATH. Install it first or choose manual.`);
     }
     return ids;
   };
   if (requested !== undefined) return validate(requested);
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    say('Non-interactive terminal: no MCP client settings will be changed. Use --clients claude,codex to select clients, or --clients none to skip.');
+    say('Non-interactive terminal: no MCP client settings will be changed. Use --clients claude,codex,opencode,pi to select clients, or --clients none to skip.');
     return ['manual'];
   }
   say('Choose which MCP clients to configure (only selected clients will be changed):');
@@ -60,7 +64,15 @@ async function selectClients(requested?: string[]): Promise<string[]> {
 
 function registerClients(c: StdioCommand, selected: string[]): ClientRegistration[] {
   const results: ClientRegistration[] = [];
-  for (const client of CLIENTS.filter((client) => selected.includes(client.bin))) {
+  if (selected.includes('opencode')) {
+    try { results.push({ name: 'OpenCode', status: registerOpenCode(c) }); }
+    catch { results.push({ name: 'OpenCode', status: 'failed' }); }
+  }
+  if (selected.includes('pi')) {
+    try { results.push({ name: 'Pi', status: registerPi(c) }); }
+    catch { results.push({ name: 'Pi', status: 'failed' }); }
+  }
+  for (const client of CLIENTS.filter((client) => client.bin !== 'opencode' && client.bin !== 'pi' && selected.includes(client.bin))) {
     const bin = which(client.bin);
     if (!bin) { results.push({ name: client.name, status: 'failed' }); continue; }
     const options = { stdio: 'ignore' as const, timeout: 15_000 };

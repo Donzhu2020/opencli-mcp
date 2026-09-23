@@ -18,7 +18,7 @@ opencli-mcp lets MCP clients observe and operate your Chrome tabs through a loca
 - **Add site adapters.** Inspect a site's requests, verify an API, and define an explicit reusable MCP tool.
 - **Keep browser work organized.** Agent-created tabs live in named groups and are cleaned up after use. Tabs borrowed from the user are never closed by session cleanup.
 
-Works with MCP clients including Claude Code, Codex, Cursor, Claude Desktop, and DeepSeek Harness (`dsh`). Clients can use structured tools for individual actions or a persistent JavaScript session for multi-step workflows.
+Works with MCP clients including Claude Code, Codex, OpenCode, Cursor, Claude Desktop, DeepSeek Harness (`dsh`), and Pi (with `pi-mcp-adapter`). Clients can use structured tools for individual actions or a persistent JavaScript session for multi-step workflows.
 
 ## Quick start
 
@@ -39,6 +39,8 @@ Keep Chrome open. `setup` connects the extension to the local program, asks whic
 
 For **Cursor, Claude Desktop, and other MCP clients**, choose `manual` and copy the configuration printed by `setup` into your client's MCP settings. It uses absolute paths so desktop apps can find the program.
 
+For **OpenCode**, run `opencli-mcp setup --clients opencode`. It adds a global MCP entry while preserving your other settings.
+
 For **DeepSeek Harness (`dsh`)**, run `opencli-mcp setup --clients none`, then add the same npm package to your dsh profile:
 
 ```bash
@@ -46,6 +48,8 @@ dsh plugin --profile web add opencli-mcp
 ```
 
 Restart `dsh web`. The package's dsh bundle uses dsh's MCP client to connect to the browser service. See the [dsh setup details](docs/setup.md#deepseek-harness-dsh).
+
+For **Pi**, install `pi-mcp-adapter`, then run `opencli-mcp setup --clients pi`. See the [Pi setup steps](docs/setup.md#pi).
 
 ### 3. Start using it
 

@@ -14,6 +14,8 @@ opencli-mcp 是一个连接到真实 Chrome 的 MCP browser service。Chrome ext
 
 使用 DeepSeek Harness (`dsh`) 时，先运行 `opencli-mcp setup --clients none`，再运行 `dsh plugin --profile web add opencli-mcp`。主包内的 bundle 通过 dsh 自带的 MCP client 接入 browser service；具体说明见 [dsh 安装步骤](setup.md#deepseek-harness-dsh)。
 
+使用 OpenCode 时，运行 `opencli-mcp setup --clients opencode`；使用 Pi 时，先安装 `pi-mcp-adapter`，再运行 `opencli-mcp setup --clients pi`。具体见 [OpenCode 与 Pi 安装步骤](setup.md#opencode)。
+
 ## Browser 工作流
 
 先调用 `tab_open` 打开新 tab，或用 `tab_list {user:true}` 找到现有 tab，再用 `tab_claim` 接管。随后按 **observe → act → verify** 工作：

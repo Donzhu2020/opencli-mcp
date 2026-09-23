@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.17 — 2026-09-24
+
+- Export the adapter SDK directly from the main package as `opencli-mcp/adapter-sdk`. Built-in and user-defined adapters now use the same package path without a separate bundled SDK dependency.
+
 ## 0.0.16 — 2026-09-24
 
 - Keep the stdio MCP connection available when Chrome is not running yet. Core tools, docs, and prompts remain discoverable; tool calls report `host_unavailable` until the Chrome host connects. Notify MCP clients when the host appears or changes so they can refresh site tools.

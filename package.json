@@ -1,7 +1,7 @@
 {
   "name": "opencli-mcp",
-  "version": "0.0.12",
-  "description": "MCP-native browser runtime with a Chrome extension, object API, site adapters, and endpoint discovery.",
+  "version": "0.0.13",
+  "description": "Chrome-backed MCP browser service with optional site adapters.",
   "type": "module",
   "license": "Apache-2.0",
   "engines": {
@@ -25,6 +25,7 @@
   "files": [
     "dist/",
     "extension/dist/",
+    "docs/",
     "README.md",
     "CHANGELOG.md",
     "LICENSE",

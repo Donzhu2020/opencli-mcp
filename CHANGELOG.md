@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.13 — 2026-09-24
 
 - Center the product on one Chrome-backed browser service: remove the embedded stdio runtime, standalone `serve` path, and browser-free adapter mode. The launcher requires a connected Chrome host, and adapters use that same browser connection.
 - Remove trace-based tool compilation and its stored evidence. Adapters are explicit functions that must be verified before use; keep network inspection and endpoint discovery as browser capabilities. Update MCP guidance and remove the obsolete embedded smoke test.

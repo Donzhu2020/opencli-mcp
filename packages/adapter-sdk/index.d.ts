@@ -57,7 +57,7 @@ export interface AdapterContext {
 export interface AdapterDescriptor {
   description: string;
   access: Access;
-  /** favicon + default navigation host, e.g. 'x.com' */
+  /** Site metadata and tool icon host; the adapter navigates explicitly when needed. */
   domain?: string;
   args?: Arg[];
   /** aliases resolve to this command */

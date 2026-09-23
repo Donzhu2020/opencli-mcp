@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.16 — 2026-09-24
+
+- Keep the stdio MCP connection available when Chrome is not running yet. Core tools, docs, and prompts remain discoverable; tool calls report `host_unavailable` until the Chrome host connects. Notify MCP clients when the host appears or changes so they can refresh site tools.
+- Include the Apache-2.0 license in the bundled adapter SDK and align its package metadata with the main package.
+
 ## 0.0.15 — 2026-09-24
 
 - Add OpenCode to the client choices in `setup`, preserving existing JSONC config and MCP entries.

@@ -10,8 +10,6 @@ import type { Expectation, CheckResult } from '../shared/page-contract.js';
 export interface ExtensionPageOptions {
   session: string;
   surface: 'browser' | 'adapter';
-  siteSession?: 'ephemeral' | 'persistent';
-  windowMode?: 'foreground' | 'background';
   /** bind this page object to one tab identity for its whole life (per-Tab pages); omitted = session-scope page with no tab */
   page?: string;
 }
@@ -71,7 +69,7 @@ class ExtensionPage implements ExtensionRuntimePage {
 
   private sessionOpts(): Partial<Command> {
     const o = this.opts;
-    return { session: o.session, surface: o.surface, ...(o.windowMode && { windowMode: o.windowMode }), ...(o.siteSession && { siteSession: o.siteSession }) };
+    return { session: o.session, surface: o.surface };
   }
   private cmdOpts(): Partial<Command> { return { ...this.sessionOpts(), ...(this._page !== undefined && { page: this._page }) }; }
 
@@ -125,7 +123,7 @@ class ExtensionPage implements ExtensionRuntimePage {
     // through unchanged by wrapForEval.
     return this.evaluate(`(async () => {\n${declarations}\n${js}\n})()`);
   }
-  /** Fetch JSON through the page (its cookies, its origin) — the network-first way to freeze a site. */
+  /** Fetch JSON through the page with its cookies and origin. */
   async fetchJson(url: string, opts: { method?: string; headers?: Record<string, string>; body?: unknown; timeoutMs?: number } = {}): Promise<unknown> {
     const request = { url, method: opts.method ?? 'GET', headers: opts.headers ?? {}, body: opts.body, hasBody: opts.body !== undefined, timeoutMs: opts.timeoutMs ?? 15_000 };
     const result = await this.evaluateWithArgs(`
@@ -230,7 +228,7 @@ class ExtensionPage implements ExtensionRuntimePage {
   async setVisibility(visible: boolean): Promise<void> { await this.bridge.send('visibility', { ...this.sessionOpts(), visible }); }
 
   // ── Interactions and observations ──
-  /** Accessibility snapshot text (the agent's observation) for adapters and compiled tools. */
+  /** Accessibility snapshot text for browser sessions and adapters. */
   async aria(opts: { viewport?: boolean } = {}): Promise<string> { return String(await this.pageCall('aria', { viewport: Boolean(opts.viewport) })); }
   async expect(what: Expectation, opts: { timeoutMs?: number } = {}): Promise<CheckResult> {
     const deadline = Date.now() + (opts.timeoutMs ?? 5000);

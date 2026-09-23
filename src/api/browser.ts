@@ -25,7 +25,6 @@ export class Browser {
       if (!id) throw new ActionError('tab_create_failed', 'Could not create a tab', 'Retry; if it persists run doctor to check the browser bridge.');
       this.ctx.state.finalized = false; // new tabs after a finalize are the session's again
       this.ctx.state.selected = id;
-      this.ctx.state.trace.record({ kind: 'goto', url: url ?? 'about:blank', page: id });
       const tab = new Tab(id, this.ctx, await this.ctx.rt.pageFor(this.ctx.sessionId, id));
       if (url) {
         // another extension may have taken the navigation over (interstitial, redirect to its own page): say so, do not hand out a tab the debugger cannot attach to
@@ -60,7 +59,6 @@ export class Browser {
       const r = await page.claim(tab);
       this.ctx.state.finalized = false;
       this.ctx.state.selected = r.page;
-      this.ctx.state.trace.record({ kind: 'note', text: `claimed user tab ${tab.tabId ?? ''} ${r.url ?? ''}` });
       return new Tab(r.page, this.ctx, await this.ctx.rt.pageFor(this.ctx.sessionId, r.page));
     },
   };

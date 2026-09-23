@@ -1,5 +1,5 @@
 /**
- * Run an adapter: coerce args, provision the logged-in page (for browser adapters), build the object-model context
+ * Run an adapter: coerce args, provision the logged-in page, build the object-model context
  * `{ args, tab, sites, recon, signal }`, call the adapter's `run`, and shape the result.
  */
 import { coerceArgs } from './schema.js';
@@ -8,7 +8,7 @@ import type { AdapterCommand } from './loader.js';
 import type { RuntimePage } from '../backends/page-types.js';
 
 export interface PageProvider {
-  getAdapterPage(site: string, opts: { siteSession: 'ephemeral' | 'persistent'; windowMode: 'foreground' | 'background'; navigateTo?: string }): Promise<RuntimePage>;
+  getAdapterPage(site: string): Promise<RuntimePage>;
   browserAvailable(): boolean;
   /** The object model bound to a page: the same `tab`/`sites`/`recon` an agent uses in `js`. */
   toolContext(page: RuntimePage, site: string): Promise<Record<string, unknown>>;
@@ -48,18 +48,14 @@ export async function runAdapter(
   const key = `${cmd.site}/${cmd.name}`;
   try {
     const args = coerceArgs(cmd.args, rawArgs);
-    let ctx: { args: Record<string, unknown>; tab: unknown; sites: unknown; recon: unknown; signal?: AbortSignal };
-    if (cmd.browser) {
-      if (!provider.browserAvailable()) {
-        throw new ActionError('browser_unavailable', `${key} needs a logged-in browser, but the Chrome extension is not connected`, 'Install the opencli-mcp extension and keep Chrome running (run `opencli-mcp doctor`).');
-      }
-      const page = await provider.getAdapterPage(cmd.site, { siteSession: 'persistent', windowMode: 'background', navigateTo: cmd.domain ? `https://${cmd.domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '')}/` : undefined });
-      const model = await provider.toolContext(page, cmd.site);
-      ctx = { args, tab: model.tab, sites: model.sites, recon: model.recon, signal: opts.signal };
-    } else {
-      ctx = { args, tab: undefined, sites: undefined, recon: undefined, signal: opts.signal };
-    }
     if (opts.signal?.aborted) throw new ActionError('cancelled', `${key} cancelled by the client`);
+    if (!provider.browserAvailable()) {
+      throw new ActionError('browser_unavailable', `${key} needs a logged-in browser, but the Chrome extension is not connected`, 'Install the opencli-mcp extension and keep Chrome running (run `opencli-mcp doctor`).');
+    }
+    const page = await provider.getAdapterPage(cmd.site);
+    const model = await provider.toolContext(page, cmd.site);
+    if (opts.signal?.aborted) throw new ActionError('cancelled', `${key} cancelled by the client`);
+    const ctx = { args, tab: model.tab, sites: model.sites, recon: model.recon, signal: opts.signal };
     const result = await withTimeout(Promise.resolve(cmd.run(ctx)), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, key, opts.signal);
     const elapsedMs = Date.now() - started;
     if (Array.isArray(result)) return { ok: true, site: cmd.site, name: cmd.name, rows: result, elapsedMs };

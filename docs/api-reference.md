@@ -11,15 +11,10 @@ interface AgentApi {
   };
   tools: {
     define(def: ToolDefinition | (Omit<ToolDefinition, "func"> & { func?: string | ((ctx: Record<string, unknown>) => unknown); })): Promise<{ file: string; site: string; name: string; }>;
-    compile(opts: { site: string; name: string; description: string; access?: "read" | "write"; inputs?: Record<string, CompileInput>; domain?: string; }): ToolDefinition;
     list(): Array<{ site: string; name: string; file: string; }>;
     remove(site: string, name: string): boolean;
   };
-  session: {
-    id: string;
-    trace(): Array<unknown>;
-    clearTrace(): void;
-  };
+  session: { id: string; };
 }
 
 class Browser {
@@ -63,7 +58,7 @@ class Tab {
     list(): Promise<Array<{ name: string; description?: string; inputSchema?: unknown; }>>;
     call(name: string, input?: Record<string, unknown>): Promise<unknown>;
   };
-  expect(what: Expectation, opts?: { timeoutMs?: number; }): Promise<CheckResult>; // Assert what the page must show now (polled up to timeoutMs). Recorded in the trace so tools_compile emits it as a checkpoint.
+  expect(what: Expectation, opts?: { timeoutMs?: number; }): Promise<CheckResult>; // Assert what the page must show now (polled up to timeoutMs).
   evaluate(js: string, opts?: { allowWrite?: boolean; frame?: number; }): Promise<unknown>; // Read-only page evaluation.
   dialog: { // Native alert/confirm/prompt dialogs block the page; commands fail with `dialog_open` until answered.
     get(): Promise<DialogInfo | null>;
@@ -78,8 +73,8 @@ class Tab {
     read(opts?: { pattern?: string; limit?: number; includeStatic?: boolean; afterSequence?: number; }): Promise<{ cursor: number; entries: Array<unknown>; hasMore: boolean; }>; // Cursor-paged read: pass `afterSequence` from the previous result to get only new requests. Returns network rows only; endpoint candidates come from the explicit `recon.discover(tab)` (not a hidden side effect of reading).
   };
   cookies(domain: string): Promise<Array<unknown>>;
-  cookie(name: string, opts?: { domain?: string; }): Promise<string | undefined>; // Read one cookie's value at run time — the replay hook for per-request tokens a frozen tool needs (csrf/ct0/ csrftoken/XSRF-TOKEN). Defaults to the current page's host. Returns undefined when the cookie is absent.
-  fetchJson(url: string, opts?: Record<string, unknown>): Promise<unknown>; // Fetch JSON through the page (its cookies, its origin) — the network-first way to freeze a site: find the endpoint, call it directly.
+  cookie(name: string, opts?: { domain?: string; }): Promise<string | undefined>; // Read one cookie's value at run time — useful for per-request tokens an adapter needs (csrf/ct0/ csrftoken/XSRF-TOKEN). Defaults to the current page's host. Returns undefined when the cookie is absent.
+  fetchJson(url: string, opts?: Record<string, unknown>): Promise<unknown>; // Fetch JSON through the page (its cookies and origin) after verifying the endpoint.
   frames(): Promise<Array<{ index: number; frameId: string; url: string; name: string; crossOrigin?: boolean; oopif?: boolean; }>>;
   download(pattern?: string, timeoutMs?: number): Promise<unknown>;
 }

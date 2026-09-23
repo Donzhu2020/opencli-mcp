@@ -10,7 +10,6 @@ import { targetToSelector, fallbackSelector } from '../shared/engine.js';
 import type { FindEntry, FindResult, ElementAtResult, Expectation, CheckResult, ReadTextResult } from '../shared/page-contract.js';
 import type { DialogInfo, FrameStep } from '../protocol.js';
 import type { SessionContext } from './context.js';
-import type { TraceInput, NetworkEvidence } from '../runtime/trace.js';
 
 export type Target = ({ frame?: FrameStep | FrameStep[]; /** container (css/selector/eN) to resolve inside */ within?: string }) & (
   | { ref: number | string }
@@ -30,39 +29,10 @@ export interface ImageValue { __image: true; mimeType: string; base64: string }
 
 
 
-export function describeTarget(t: Target | undefined): string {
-  if (!t) return '';
-  if ('ref' in t) return `ref:${t.ref}`;
-  if ('selector' in t) return `selector:${t.selector}${t.nth !== undefined ? `[${t.nth}]` : ''}`;
-  if ('x' in t) return `point:${t.x},${t.y}`;
-  return Object.entries(t).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}=${v}`).join(' ');
-}
-
-
-/** Request headers that are the browser's or the session's, never part of an endpoint's contract. */
-const DROP_HEADER = /^(cookie|authorization|user-agent|referer|origin|host|accept-encoding|accept-language|connection|content-length|pragma|cache-control|priority|te|upgrade-insecure-requests|sec-.*|:.*)$/i;
-const JSONISH = /json|graphql|x-component|text\/plain|javascript/i;
-/** A captured request as the trace records it: enough to freeze the call, nothing that is a credential. */
-function networkEvent(e: Record<string, unknown>, page: string, after?: string): NetworkEvidence {
-  const rh = (e.requestHeaders ?? {}) as Record<string, string>;
-  const headers: Record<string, string> = {};
-  for (const [k, v] of Object.entries(rh)) if (!DROP_HEADER.test(k)) headers[k.toLowerCase()] = v;
-  const contentType = String(e.responseContentType ?? e.contentType ?? e.mimeType ?? '') || undefined;
-  const preview = typeof e.responsePreview === 'string' ? e.responsePreview : undefined;
-  const post = typeof e.requestBodyPreview === 'string' && e.requestBodyPreview ? e.requestBodyPreview.slice(0, 4096) : undefined;
-  return {
-    page, after, url: String(e.url ?? e.name ?? ''), method: (e.method as string | undefined)?.toUpperCase(),
-    status: (e.responseStatus ?? e.status) as number | undefined, contentType,
-    bodyBytes: (e.responseBodyFullSize as number | undefined) ?? preview?.length, resourceType: e.resourceType as string | undefined,
-    ...(Object.keys(headers).length && { requestHeaders: headers }), ...('authorization' in Object.fromEntries(Object.keys(rh).map((k) => [k.toLowerCase(), 1])) && { auth: true }),
-    ...(post && { postData: post }), ...(preview && contentType && JSONISH.test(contentType) && !preview.startsWith('base64:') && { responseSample: preview.slice(0, 8192) }),
-  };
-}
-
 const WRITE_EVAL_RE = /(\.click\s*\(|\.submit\s*\(|\blocation\s*(=|\.href\s*=|\.assign\s*\(|\.replace\s*\()|document\.write|\.remove\s*\(\)|localStorage\.(setItem|removeItem|clear)|\.value\s*=[^=])/;
 
 export class Tab {
-  /** A Tab owns the page object bound to its identity; `bound` lets a caller (frozen tools) pass an existing page. */
+  /** A Tab owns the page object bound to its identity; `bound` lets an adapter pass an existing page. */
   constructor(readonly id: string, private readonly ctx: SessionContext, private readonly bound?: RuntimePage) {}
   private closed = false;
 
@@ -86,21 +56,19 @@ export class Tab {
     if (!/^(https?:\/\/|data:text\/html)/i.test(url)) throw new ActionError('invalid_url', 'Only http(s) (or data:text/html) URLs can be opened', 'Pass an absolute http:// or https:// URL');
     return this.use(async (page) => {
       await page.goto(url, opts);
-      this.ctx.state.trace.record({ kind: 'goto', url, page: this.id });
-      await this.harvest(page, 'goto');
+      await this.harvest(page);
       return this.info(page);
     });
   }
 
   /**
-   * API-first evidence: pull the requests this tab captured since the last pull (capture is on for every session tab)
-   * into the session log and the trace, tagged with the step that triggered them. Best effort — never fails a step.
+   * Pull captured requests into the session's bounded network log. Best effort — never fails a step.
    */
-  private async harvest(page: RuntimePage, after?: string): Promise<Array<Record<string, unknown> & { seq: number }>> {
+  private async harvest(page: RuntimePage): Promise<Array<Record<string, unknown> & { seq: number }>> {
     // best effort: harvesting must never fail the step that just succeeded
-    try { const captured = await page.readNetworkCapture().catch(() => [] as unknown[]) as Array<Record<string, unknown>>; return this.logNetwork(captured, after); } catch { return []; }
+    try { const captured = await page.readNetworkCapture().catch(() => [] as unknown[]) as Array<Record<string, unknown>>; return this.logNetwork(captured); } catch { return []; }
   }
-  private logNetwork(entries: Array<Record<string, unknown>>, after?: string): Array<Record<string, unknown> & { seq: number }> {
+  private logNetwork(entries: Array<Record<string, unknown>>): Array<Record<string, unknown> & { seq: number }> {
     let log = this.ctx.state.netLog.get(this.id);
     if (!log) { log = { seq: 0, entries: [], seen: new Set() }; this.ctx.state.netLog.set(this.id, log); }
     const fresh: Array<Record<string, unknown> & { seq: number }> = [];
@@ -109,9 +77,6 @@ export class Tab {
       if (log.seen.has(key)) continue;
       log.seen.add(key);
       const entry = { ...e, seq: ++log.seq }; log.entries.push(entry); fresh.push(entry);
-      // compile evidence lives in its own capped store, never in the step trace (so it can't evict a goto/act/expect)
-      const ev = this.ctx.state.netEvidence; ev.push(networkEvent(e, this.id, after));
-      if (ev.length > 800) ev.splice(0, ev.length - 800);
     }
     if (log.entries.length > 2000) log.entries.splice(0, log.entries.length - 2000);
     if (log.seen.size > 8000) log.seen.clear(); // bounded: the extension drains captured entries, so re-dup is rare
@@ -154,7 +119,6 @@ export class Tab {
         // Diff compared the whole tree. Collapse only the copy the model sees, so a change inside a folded branch is not "no change".
         const unchanged = out.diff === true && out.changed?.added === 0 && out.changed?.removed === 0 && (out.changed?.changed ?? 0) === 0;
         out.state = unchanged ? text : collapseAria(text, ARIA_BUDGET).text;
-        this.ctx.state.trace.record({ kind: 'observe', mode: 'aria', page: this.id, summary: meta.title ?? undefined, sample: text.slice(0, 1500) });
       }
       if (mode === 'screenshot' || mode === 'both') out.image = await this.screenshotOn(page, { annotate: opts.annotate, fullPage: opts.fullPage });
       return out;
@@ -192,7 +156,6 @@ export class Tab {
   async read(opts: ReadOptions = {}): Promise<ReadTextResult> {
     return this.use(async (page) => {
       const r = await page.pageCall('readText', opts) as ReadTextResult;
-      this.ctx.state.trace.record({ kind: 'observe', mode: 'read', page: this.id, summary: r.complete ? 'complete' : r.reason, sample: r.text.slice(0, 1500) });
       return r;
     });
   }
@@ -201,10 +164,9 @@ export class Tab {
   async act(opts: ActOptions): Promise<Record<string, unknown>> {
     const { action } = opts;
     return this.use(async (page) => {
-      const record = (ok: boolean, extra: Record<string, unknown> = {}) => this.ctx.state.trace.record({ kind: 'act', action, target: describeTarget(opts.target), targetSpec: opts.target as Record<string, unknown> | undefined, targetSelector: typeof extra.selector === 'string' ? extra.selector : undefined, targetRef: typeof extra.ref === 'string' ? extra.ref : undefined, value: opts.value, matchLevel: extra.match_level as string | undefined, ok, page: this.id });
       try {
         // use the page already held by this.use(): calling this.reload()/back()/forward() here would re-enter the session lock and deadlock
-        if (action === 'back' || action === 'forward' || action === 'reload') { const h = await page.history(action); record(true, { url: h.url }); return { action, ...h }; }
+        if (action === 'back' || action === 'forward' || action === 'reload') { const h = await page.history(action); return { action, ...h }; }
         if (action === 'scroll' && !opts.target) {
           // no target: wheel at the viewport centre
           const vp = await page.evaluate<{ x: number; y: number }>('({ x: innerWidth / 2, y: innerHeight / 2 })');
@@ -212,9 +174,8 @@ export class Tab {
         }
         if (!opts.target) throw new ActionError('missing_target', `action "${action}" needs a target`, 'Pass a target: a {ref} from observe, or a selector/role+name/label/text/testid.');
         const r = await page.act({ kind: action, target: opts.target as Record<string, unknown>, value: opts.value, files: opts.files, to: opts.to as Record<string, unknown> | undefined, direction: opts.direction, amount: opts.amount, timeoutMs: opts.timeoutMs, settleMs: opts.settleMs ?? 600, cursor: this.ctx.rt.cursorEnabled, ...(opts.method ? { method: opts.method } : {}) });
-        record(true, { ...r, ref: r.ref ?? undefined });
-        await this.harvest(page, action);
-        // Lean result: only what changes the agent's next move. Full telemetry (point/method/timings/selector/…) is in the trace.
+        await this.harvest(page);
+        // Return the outcome and the fields needed to choose the next action.
         return {
           action,
           ...(r.matches_n > 1 ? { matches_n: r.matches_n } : {}),
@@ -227,7 +188,6 @@ export class Tab {
           ...(action === 'click' && r.method === 'dom' ? { method: 'dom' as const } : {}),
         };
       } catch (err) {
-        record(false);
         if (err instanceof ActionError) throw err;
         const e = err as { code?: string; message?: string; hint?: string; data?: unknown };
         throw new ActionError(e.code ?? 'action_failed', e.message ?? String(err), e.hint, e.data && typeof e.data === 'object' ? e.data as Record<string, unknown> : undefined);
@@ -242,16 +202,15 @@ export class Tab {
       return Array.isArray(r) ? r as Array<{ name: string; description?: string; inputSchema?: unknown }> : [];
     }),
     call: async (name: string, input: Record<string, unknown> = {}): Promise<unknown> => this.use(async (p) => {
-      this.ctx.state.trace.record({ kind: 'note', text: `webmcp ${name}(${JSON.stringify(input).slice(0, 120)})`, page: this.id });
       return p.evaluateWithArgs(`(async () => { const mc = navigator.modelContext || document.modelContext; if (!mc) throw new Error('page exposes no modelContext'); if (typeof mc.executeTool === 'function') return await mc.executeTool(name, input); const tools = await mc.getTools(); const t = (tools || []).find(x => x.name === name); if (!t || typeof t.execute !== 'function') throw new Error('unknown page tool ' + name); return await t.execute(input); })()`, { name, input });
     }),
   };
 
-  /** Assert what the page must show now (polled up to timeoutMs). Recorded in the trace so tools_compile emits it as a checkpoint. */
+  /** Assert what the page must show now (polled up to timeoutMs). */
   async expect(what: Expectation, opts: { timeoutMs?: number } = {}): Promise<CheckResult> {
     return this.use(async (page) => {
-      try { const r = await page.expect(what, opts); this.ctx.state.trace.record({ kind: 'expect', what: what as Record<string, unknown>, ok: true, page: this.id }); return r; }
-      catch (err) { this.ctx.state.trace.record({ kind: 'expect', what: what as Record<string, unknown>, ok: false, page: this.id }); const e = err as { code?: string; message?: string; hint?: string; extra?: Record<string, unknown> }; throw new ActionError(e.code ?? 'expectation_failed', e.message ?? String(err), e.hint, e.extra); }
+      try { return await page.expect(what, opts); }
+      catch (err) { const e = err as { code?: string; message?: string; hint?: string; extra?: Record<string, unknown> }; throw new ActionError(e.code ?? 'expectation_failed', e.message ?? String(err), e.hint, e.extra); }
     });
   }
 
@@ -259,18 +218,15 @@ export class Tab {
   async evaluate(js: string, opts: { allowWrite?: boolean; frame?: number } = {}): Promise<unknown> {
     if (!opts.allowWrite && WRITE_EVAL_RE.test(js)) throw new ActionError('evaluate_read_only', 'evaluate is read-only; use act() for clicks, typing, navigation and form changes', 'Pass allowWrite:true only when the user explicitly wants a scripted page change.');
     return this.use(async (page) => {
-      const result = await (opts.frame !== undefined ? page.evaluateInFrame(js, opts.frame) : page.evaluate(js));
-      let sample: string | undefined; try { sample = JSON.stringify(result)?.slice(0, 2000); } catch { /* unserializable */ }
-      this.ctx.state.trace.record({ kind: 'evaluate', code: js.slice(0, 200), page: this.id, ...(sample && { result: sample }) });
-      return result;
+      return opts.frame !== undefined ? page.evaluateInFrame(js, opts.frame) : page.evaluate(js);
     });
   }
 
   /** Native alert/confirm/prompt dialogs block the page; commands fail with `dialog_open` until answered. */
   readonly dialog = {
     get: async (): Promise<DialogInfo | null> => this.use(async (p) => (await p.dialog('get')).dialog),
-    accept: async (text?: string): Promise<DialogInfo | null> => this.use(async (p) => { this.ctx.state.trace.record({ kind: 'note', text: `dialog accept${text !== undefined ? ' ' + JSON.stringify(text) : ''}`, page: this.id }); return (await p.dialog('accept', text)).dialog; }),
-    dismiss: async (): Promise<DialogInfo | null> => this.use(async (p) => { this.ctx.state.trace.record({ kind: 'note', text: 'dialog dismiss', page: this.id }); return (await p.dialog('dismiss')).dialog; }),
+    accept: async (text?: string): Promise<DialogInfo | null> => this.use(async (p) => (await p.dialog('accept', text)).dialog),
+    dismiss: async (): Promise<DialogInfo | null> => this.use(async (p) => (await p.dialog('dismiss')).dialog),
   };
 
   /** Console messages and uncaught exceptions since the tab was attached (the plugin's tab.dev.logs); cursor-paged like network.read. */
@@ -298,7 +254,7 @@ export class Tab {
   };
   async cookies(domain: string): Promise<unknown[]> { return this.use((p) => p.getCookies({ domain })); }
   /**
-   * Read one cookie's value at run time — the replay hook for per-request tokens a frozen tool needs (csrf/ct0/
+   * Read one cookie's value at run time — useful for per-request tokens an adapter needs (csrf/ct0/
    * csrftoken/XSRF-TOKEN). Defaults to the current page's host. Returns undefined when the cookie is absent.
    */
   async cookie(name: string, opts: { domain?: string } = {}): Promise<string | undefined> {
@@ -307,8 +263,8 @@ export class Tab {
     const list = await this.use((p) => p.getCookies(domain ? { domain } : {})) as Array<{ name?: string; value?: string }>;
     return list.find((c) => c?.name === name)?.value;
   }
-  /** Fetch JSON through the page (its cookies, its origin) — the network-first way to freeze a site: find the endpoint, call it directly. */
-  async fetchJson(url: string, opts: Record<string, unknown> = {}): Promise<unknown> { this.ctx.state.trace.record({ kind: 'note', text: `fetchJson ${url.slice(0, 160)}`, page: this.id }); return this.use((p) => p.fetchJson(url, opts as never)); }
+  /** Fetch JSON through the page (its cookies and origin) after verifying the endpoint. */
+  async fetchJson(url: string, opts: Record<string, unknown> = {}): Promise<unknown> { return this.use((p) => p.fetchJson(url, opts as never)); }
   async frames(): Promise<Array<{ index: number; frameId: string; url: string; name: string; crossOrigin?: boolean; oopif?: boolean }>> { return this.use((p) => p.frames()); }
   async download(pattern = '', timeoutMs = 30_000): Promise<unknown> { return this.use((p) => p.waitForDownload(pattern, timeoutMs)); }
 }

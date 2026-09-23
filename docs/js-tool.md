@@ -11,7 +11,7 @@ const article = await tab.read();              // linear text of a bounded docum
 if (article.nextStart !== undefined) await tab.read({ start: article.nextStart }); // continue on an unchanged page
 await tab.act({ target: { text: 'new' }, action: 'click' });
 const titles = await tab.evaluate('[...document.querySelectorAll(".titleline a")].map(a => a.textContent)');
-// freeze what you just did into a tool — the same tab API, the function itself is saved
+// define an explicit adapter using the same tab API; the function source is saved
 await tools.define({ site: 'hackernews', name: 'newest-titles', description: 'titles on /newest', access: 'read', func: async ({ tab }) => { await tab.goto('https://news.ycombinator.com/newest'); return await tab.evaluate('[...document.querySelectorAll(".titleline a")].map(a => a.textContent)'); } });
 await tab.release();                            // leave the page open; tab.close() would close it
 ```

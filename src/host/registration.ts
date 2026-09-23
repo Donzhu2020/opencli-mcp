@@ -79,11 +79,11 @@ export function writeLauncher(): string {
   const entry = main;
   if (process.platform === 'win32') {
     const file = path.join(bin, 'opencli-mcp-host.cmd');
-    fs.writeFileSync(file, `@echo off\r\n"${process.execPath}" "${entry}" host --native\r\n`);
+    fs.writeFileSync(file, `@echo off\r\n"${process.execPath}" "${entry}" host\r\n`);
     return file;
   }
   const file = path.join(bin, 'opencli-mcp-host');
-  fs.writeFileSync(file, `#!/bin/sh\nexec "${process.execPath}" "${entry}" host --native\n`, { mode: 0o755 });
+  fs.writeFileSync(file, `#!/bin/sh\nexec "${process.execPath}" "${entry}" host\n`, { mode: 0o755 });
   fs.chmodSync(file, 0o755);
   return file;
 }

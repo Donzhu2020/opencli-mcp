@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Center the product on one Chrome-backed browser service: remove the embedded stdio runtime, standalone `serve` path, and browser-free adapter mode. The launcher requires a connected Chrome host, and adapters use that same browser connection.
+- Remove trace-based tool compilation and its stored evidence. Adapters are explicit functions that must be verified before use; keep network inspection and endpoint discovery as browser capabilities. Update MCP guidance and remove the obsolete embedded smoke test.
+- Remove unused favicon-badge hooks, protocol-version and context IDs, ignored adapter options, dead CLI flags, and misleading resource-change notifications for tab events. Restore idle cleanup timers after a service-worker restart, and require bearer tokens in headers rather than URL query strings.
 - Redesign the virtual cursor with a compact rounded pointer, blue glow, curved long moves, and reduced-motion support. Interrupted moves now report that they did not arrive.
 - Give each MCP client its own browser and JavaScript session. Local stdio launchers create a session ID automatically and clean up on disconnect; direct HTTP clients provide `X-OpenCLI-Session-ID`.
 - Clean up tabs when opening fails, and keep tab leases if releasing cannot finish. Closing a tab already removed by Chrome is treated as complete.

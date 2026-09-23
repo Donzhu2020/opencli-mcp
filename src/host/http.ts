@@ -16,7 +16,7 @@ export interface HttpServerHandle { port: number; host: string; close(): Promise
 export const SESSION_HEADER = 'x-opencli-session-id';
 const sessionId = (value: string | null): string | null => value !== null && /^[a-zA-Z0-9_-]{1,128}$/.test(value) ? value : null;
 
-export async function startHttpServer(rt: Runtime, opts: { port: number; host?: string; token: string; version: string; allowNoAuth?: boolean }): Promise<HttpServerHandle> {
+export async function startHttpServer(rt: Runtime, opts: { port: number; host?: string; token: string; version: string }): Promise<HttpServerHandle> {
   const host = opts.host ?? '127.0.0.1';
   const handler = createMcpHandler(
     ({ requestInfo }) => {
@@ -31,14 +31,11 @@ export async function startHttpServer(rt: Runtime, opts: { port: number; host?: 
   // Under the stateless per-request model a server instance has no lasting connection, so change notifications go through
   // the handler's subscription bus (subscriptions/listen) instead of a per-server sendToolListChanged.
   const onToolsChanged = (): void => handler.notify.toolsChanged();
-  const onBrowserEvent = (e: { kind: string }): void => { if (['tab_created', 'tab_acquired', 'tab_closed', 'tab_released', 'session_released'].includes(e.kind)) handler.notify.resourcesChanged(); };
   rt.on('tools-changed', onToolsChanged);
-  rt.on('browser-event', onBrowserEvent);
 
-  const authorized = (req: http.IncomingMessage, url: URL): boolean => {
-    if (opts.allowNoAuth) return true;
+  const authorized = (req: http.IncomingMessage): boolean => {
     const h = req.headers.authorization ?? '';
-    const bearer = h.startsWith('Bearer ') ? h.slice(7) : (url.searchParams.get('token') ?? '');
+    const bearer = h.startsWith('Bearer ') ? h.slice(7) : '';
     const a = Buffer.from(bearer); const b = Buffer.from(opts.token);
     return a.length === b.length && timingSafeEqual(a, b);
   };
@@ -46,7 +43,7 @@ export async function startHttpServer(rt: Runtime, opts: { port: number; host?: 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', `http://${host}`);
     try {
-      if (!authorized(req, url)) { res.writeHead(401, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'unauthorized' })); return; }
+      if (!authorized(req)) { res.writeHead(401, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'unauthorized' })); return; }
       if (url.pathname === '/health') {
         res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, backend: rt.backend(), sessions: rt.sessions.size, extensionConnected: Boolean(rt.bridge?.connected), version: opts.version, uptimeMs: Date.now() - rt.startedAt }));
         return;
@@ -73,6 +70,6 @@ export async function startHttpServer(rt: Runtime, opts: { port: number; host?: 
   });
   return {
     port, host,
-    close: async () => { rt.off('tools-changed', onToolsChanged); rt.off('browser-event', onBrowserEvent); await handler.close().catch(() => {}); await new Promise<void>((r) => server.close(() => r())); },
+    close: async () => { rt.off('tools-changed', onToolsChanged); await handler.close().catch(() => {}); await new Promise<void>((r) => server.close(() => r())); },
   };
 }

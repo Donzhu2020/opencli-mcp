@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 /**
  * opencli-mcp — entry point.
- *   opencli-mcp                 stdio MCP (proxies to the Chrome-spawned host, else embedded runtime)
- *   opencli-mcp host --native   the Native Messaging host (spawned by Chrome; do not run by hand)
- *   opencli-mcp serve [--port]  HTTP MCP with an embedded runtime (dev / CDP-only)
+ *   opencli-mcp                 stdio MCP (proxies to the Chrome-spawned host)
+ *   opencli-mcp host            the Native Messaging host (spawned by Chrome; do not run by hand)
  *   opencli-mcp setup           register browser + MCP clients, guide Web Store installation, verify connection
  *   opencli-mcp uninstall
  *   opencli-mcp doctor
@@ -24,7 +23,6 @@ const VERSION = findVersion();
 
 const argv = process.argv.slice(2);
 const cmd = argv[0] ?? (process.stdin.isTTY ? 'help' : 'stdio');
-const flag = (name: string): string | undefined => { const i = argv.indexOf(name); return i >= 0 ? argv[i + 1] : undefined; };
 const has = (name: string): boolean => argv.includes(name);
 
 const HELP = `Usage: opencli-mcp <command>
@@ -44,33 +42,20 @@ Advanced:
   stdio                 Run the MCP server (default when launched by a client)
   extension-path        Print the unpacked extension directory for development
   uninstall             Remove browser host registration (keeps MCP client settings)
-  serve [--port N]      Run a standalone HTTP server for development
 `;
 
 async function main(): Promise<void> {
   if (has('--help') || has('-h')) { process.stdout.write(HELP); return; }
   switch (cmd) {
     case 'help': case '--help': case '-h': process.stdout.write(HELP); return;
-    case 'stdio': case '--stdio': {
+    case 'stdio': {
       const { runStdio } = await import('./launcher/stdio.js');
-      await runStdio({ version: VERSION, forceEmbedded: has('--embedded') });
+      await runStdio({ version: VERSION });
       return;
     }
     case 'host': {
       const { runNativeHost } = await import('./host/host.js');
       await runNativeHost({ version: VERSION });
-      return;
-    }
-    case 'serve': {
-      const { Runtime } = await import('./runtime/runtime.js');
-      const { startHttpServer } = await import('./host/http.js');
-      const { loadOrCreateToken, readConfig } = await import('./host/state.js');
-      const config = readConfig();
-      const rt = new Runtime({ sites: config.sites, sitesWrite: config.sitesWrite, log: (m) => process.stderr.write(`[opencli-mcp] ${m}\n`) });
-      await rt.init();
-      const token = has('--no-auth') ? '' : loadOrCreateToken();
-      const h = await startHttpServer(rt, { port: Number(flag('--port') ?? 0), token, version: VERSION, allowNoAuth: has('--no-auth') });
-      process.stderr.write(`[opencli-mcp] serving http://${h.host}:${h.port}/mcp${token ? ' (Authorization: Bearer <~/.opencli-mcp/token>)' : ' (no auth)'}; direct clients also need X-OpenCLI-Session-ID\n`);
       return;
     }
     case 'setup': {

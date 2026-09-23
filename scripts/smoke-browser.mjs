@@ -43,8 +43,6 @@ if (ut) {
   await call('tab_act', { tab: claimed.json?.tab, action: 'scroll', direction: 'down' });
 }
 await call('js', { code: `const b = await agent.browsers.getDefault();\nconst t = await b.tabs.new('https://example.com/');\nconst st = await t.observe();\nnodeRepl.write(st.state.slice(0, 160));\nconst shot = await t.screenshot();\n({ url: st.url, title: st.title, tabs: (await b.tabs.list()).length })` }, { show: 600 });
-await call('tools_compile', { site: 'example', name: 'more-info', description: 'click through to IANA', inputs: {} }, { show: 500 });
-await call('js', { code: `session.trace()` }, { show: 300 });
 await call('session_finalize', { keep: [] }, { show: 300 });
 await client.close();
 console.log(`\nbrowser smoke done; unexpected results: ${failures}`);

@@ -4,7 +4,7 @@
  * Transport: Chrome Native Messaging (4-byte LE length + JSON) between the
  * Chrome-spawned host process and the extension service worker. The host is
  * the MCP server; the extension is the browser runtime that owns the
- * chrome.debugger session, tab leases, tab groups, cursor overlay and badges.
+ * chrome.debugger session, tab leases, tab groups, and cursor overlay.
  *
  * Envelope kinds:
  *   host → ext:  { type: 'command', command: Command }
@@ -36,7 +36,6 @@ export interface Command {
   session?: string;
   /** Surface policy: interactive browser session vs. background adapter run. */
   surface?: 'browser' | 'adapter';
-  siteSession?: 'ephemeral' | 'persistent';
   /** Target page identity (targetId) for page-scoped commands. */
   page?: string;
   code?: string;
@@ -64,9 +63,7 @@ export interface Command {
   timeoutMs?: number;
   cdpMethod?: string;
   cdpParams?: Record<string, unknown>;
-  windowMode?: 'foreground' | 'background';
   frameIndex?: number;
-  timeout?: number;
   deadlineAt?: number;
   /** session-name */
   name?: string;
@@ -130,7 +127,7 @@ export interface ActResult {
   /** end-to-end ms and its breakdown: resolve → dispatch (input events + verification) → settle (DOM quiet wait) */
   elapsedMs?: number;
   timings?: { resolveMs: number; actionMs: number; settleMs: number };
-  /** Playwright-generated selector for replay (tools_compile) */
+  /** Playwright-generated selector for locating the same element again. */
   selector?: string;
   /** set when the action triggered a navigation that has now finished */
   navigated?: boolean;
@@ -161,11 +158,10 @@ export type BrowserEvent =
 
 export type HostToExt = { type: 'command'; command: Command } | { type: 'ready'; version: string; port: number };
 export type ExtToHost =
-  | { type: 'hello'; extensionVersion: string; protocolVersion: number; contextId?: string }
+  | { type: 'hello'; extensionVersion: string }
   | { type: 'result'; result: Result }
   | { type: 'event'; event: BrowserEvent };
 
-export const PROTOCOL_VERSION = 1;
 export const NATIVE_HOST_NAME = 'com.opencli.mcp';
 /** Chrome caps host → extension frames at 1 MiB. */
 export const MAX_FRAME_BYTES = 1024 * 1024;

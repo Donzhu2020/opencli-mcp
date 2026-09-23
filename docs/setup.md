@@ -125,7 +125,7 @@ Settings live in `~/.opencli-mcp/config.json`. For example:
 | `sites` | Site commands to enable at startup, read-only |
 | `sitesWrite` | Sites whose write commands should also be enabled |
 
-The same state directory contains the HTTP token, `run/host.json`, and agent-defined tools under `tools/<site>/<name>.js`.
+The same state directory contains the HTTP token, `run/host.json`, and user-defined adapters under `adapters/<site>/<name>.js`.
 
 ## Troubleshooting
 

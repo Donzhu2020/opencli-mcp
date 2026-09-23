@@ -1,7 +1,7 @@
 /**
  * opencli-mcp extension service worker — the browser runtime.
  * Connects to the Chrome-spawned host over Native Messaging, owns chrome.debugger sessions,
- * tab leases / groups / claims / finalize, the cursor overlay and favicon badges.
+ * tab leases / groups / claims / finalize, and the cursor overlay.
  * Page semantics arrive as commands (exec/navigate/…) from the host runtime.
  */
 import type { Command, Result } from '../../src/protocol.js';
@@ -38,7 +38,7 @@ host.connect();
 // ── helpers ──
 function sessionFor(cmd: Command): Session {
   const key = cmd.session ?? 'default';
-  return sessions.get(key, cmd.surface ?? 'browser', cmd.siteSession);
+  return sessions.get(key, cmd.surface ?? 'browser');
 }
 function isSafeNavigationUrl(url: string): boolean { return url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:text/html'); }
 function normalizeUrl(url?: string): string {
@@ -47,7 +47,6 @@ function normalizeUrl(url?: string): string {
 }
 function commandTimeoutMs(cmd: Command): number | undefined {
   if (cmd.deadlineAt) return Math.max(1000, cmd.deadlineAt - Date.now() - 500);
-  if (cmd.timeout) return cmd.timeout * 1000;
   return undefined;
 }
 async function pageScoped(id: string, tabId: number, data: unknown): Promise<Result> {
@@ -212,7 +211,7 @@ async function handleNavigate(cmd: Command, s: Session): Promise<Result> {
   if (navError) return notLoaded(cmd.id, target, navError);
   const errDoc = await isErrorDocument(tabId);
   if (errDoc) return notLoaded(cmd.id, target, `the browser shows its error page (${errDoc})`);
-  const lease = s.leases.get(tabId); if (lease) { lease.url = after.url; lease.title = after.title; void sessions.badge(tabId, lease.state === 'handoff' ? 'handoff' : 'active'); }
+  const lease = s.leases.get(tabId); if (lease) { lease.url = after.url; lease.title = after.title; }
   return pageScoped(cmd.id, tabId, { title: after.title, url: after.url, timedOut });
 }
 

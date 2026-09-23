@@ -28,9 +28,40 @@ function chromeMock() {
   return tabs;
 }
 
-afterEach(() => { vi.unstubAllGlobals(); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('browser tab ownership', () => {
+  it('resumes idle cleanup after a service-worker restart', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-24T00:00:00Z'));
+    const tabs = chromeMock();
+    globalThis.chrome.storage.session.get.mockResolvedValue({
+      opencli_mcp_sessions_v1: [{
+        key: 'restored', surface: 'browser', name: null, groupId: 10, windowId: 1,
+        leases: [{ tabId: 1, origin: 'agent', mark: null, claimedAt: Date.now() - 60_000, state: 'active' }],
+        preferredTabId: 1, visible: false, lastActivity: Date.now() - 60 * 60_000 + 1000,
+      }],
+      opencli_mcp_released_v2: [],
+    });
+    const manager = new SessionManager(() => {});
+    await manager.ready();
+    expect(manager.sessions.has('restored')).toBe(true);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(tabs.remove).toHaveBeenCalledWith(1);
+    expect(manager.sessions.has('restored')).toBe(false);
+  });
+
+  it('saves the last activity time when an owned tab is used', async () => {
+    chromeMock();
+    const manager = new SessionManager(() => {});
+    await manager.ready();
+    const session = manager.get('active');
+    session.leases.set(1, { tabId: 1, origin: 'agent', mark: null, claimedAt: Date.now(), state: 'active' });
+    await manager.resolveTab(session, 'page-1');
+    const saved = globalThis.chrome.storage.session.set.mock.lastCall[0].opencli_mcp_sessions_v1[0];
+    expect(saved.lastActivity).toBe(session.lastActivity);
+  });
+
   it('removes a new tab if navigation cannot begin', async () => {
     const tabs = chromeMock();
     tabs.create.mockResolvedValue({ id: 1, url: 'about:blank', windowId: 1 });
@@ -95,6 +126,21 @@ describe('browser tab ownership', () => {
     session.leases.set(1, lease);
     expect(await manager.endTab(session, 1, 'close')).toMatchObject({ closed: true, released: false });
     expect(tabs.remove).toHaveBeenCalledWith(1);
+  });
+
+  it('remembers released tabs across a service-worker restart', async () => {
+    chromeMock();
+    const manager = new SessionManager(() => {});
+    await manager.ready();
+    const session = manager.get('first');
+    session.leases.set(1, { tabId: 1, origin: 'user', mark: null, claimedAt: Date.now(), state: 'active' });
+    await manager.endTab(session, 1, 'release');
+    const saved = globalThis.chrome.storage.session.set.mock.lastCall[0];
+    expect(saved.opencli_mcp_released_v2).toEqual([1]);
+    globalThis.chrome.storage.session.get.mockResolvedValue(saved);
+    const restarted = new SessionManager(() => {});
+    await restarted.ready();
+    await expect(restarted.resolveTab(restarted.get('second'), 'page-1')).rejects.toMatchObject({ code: 'page_released' });
   });
 
   it('ungroups and unmutes an agent tab when released', async () => {

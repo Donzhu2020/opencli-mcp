@@ -1,16 +1,19 @@
-## tools_define / tools_compile — freezing a flow
+## Define a site adapter
 
-A frozen flow is written against the same object model you explored with. Its function receives `{ tab, args, sites, recon }`: `tab` is a normal Tab (`goto/act/expect/observe/find/evaluate/fetchJson/network/…`) bound to the tool's own background page, `sites` and `recon` are the same objects as in `js`. Freezing changes nothing about how the page is driven.
+A site adapter is an explicit JavaScript function that uses the same `Tab` API as `js`. It receives `{ tab, args, sites, recon }` and runs in its own background tab in the connected Chrome profile. Browser actions, network reads, and `tab.fetchJson()` use the user's existing login.
 
-Three ways to freeze:
-- **From the code you just ran** (`js`): `await tools.define({ site, name, description, access, args, func: async ({ tab, args }) => { … } })` — pass the function itself; its source is what gets saved.
-- **From the session trace**: `tools_compile` drafts the function from your recorded steps — **API first**: the captured JSON response that carries the words of what you observed or extracted becomes one `tab.fetchJson(url, {method, headers, body})` call through the logged-in page (contract headers and body frozen, credentials never; declared inputs parameterized where they occurred in the query string or body), else `tab.goto`, `tab.act({action, target, value})` with the **intent** you acted with (`role`+`name`, `label`, `text`, `testid`, a `selector` you chose, `within`) — never the element the engine happened to resolve — and `tab.expect({...})` for every `tab_expect` you made. A step that acted on a one-time `eN` ref or a point is frozen with the engine's replay selector and reported in `warnings` (also as a `// REVIEW` comment): replace it with a stable locator before `tools_define`. Structural css selectors are warned about too. Put a `tab_expect` after each meaningful step while exploring; those checkpoints are what make the frozen tool trustworthy.
-- **By hand**: `tools_define` with `func` source.
+1. Explore the site with `tab.observe()`, `tab.act()`, and `tab.network.read()`. `recon.discover(tab)` can suggest API endpoints, but a candidate is evidence, not a verified contract.
+2. Verify the endpoint or UI workflow, including authentication, arguments, pagination, and errors. Recompute CSRF tokens and request signatures at run time; never save a captured credential or one-time value.
+3. Define the adapter with `tools_define {site, name, description, access, domain?, args?, func}` or `await tools.define({...})` in `js`. The `func` is a JavaScript function source such as `async ({ tab, args }) => { ... }`.
+4. Run the new command with `site_run` and check its actual result. The source is saved under `~/.opencli-mcp/adapters/<site>/<name>.js` and becomes available without restarting the host.
 
-**Signed / computed request params (the replay hook).** Some endpoints require per-request values the page computes: csrf/xsrf tokens, signatures (wbi, x-s), nonces, transaction ids. These are never frozen — a frozen value would be stale. Instead the tool recomputes them at replay:
-- **csrf/xsrf-family tokens** are re-read from the cookie automatically: `tools_compile` emits `const __tok0 = await tab.cookie("ct0") || await tab.cookie("csrftoken") || …;` and puts it back in the request headers. Use `tab.cookie(name)` yourself the same way in a hand-written `func`.
-- **Computed signatures** (wbi, x-s, transaction ids) are named in a `warning` and left out of the frozen headers — the endpoint will fail until you recompute them at replay. Add them yourself: call the site's own signer on the page with `tab.evaluate('(/* return the signed value */)')`, or read the value from page state, then put it in the `headers` before `tab.fetchJson`. If you cannot recompute the signature, freeze the flow as DOM steps instead.
+For a logged-in JSON API, navigate to the site's origin before fetching. A minimal function looks like this:
 
-`inputs` are explicit: `{query: "what you typed"}` or `{query: {sample, description, type, mode: "exact"|"within"}}`. By default only whole literals equal to the sample become `args.query`; declare `mode: "within"` to also parameterize longer literals that contain it. Nothing is guessed.
+```js
+async ({ tab, args }) => {
+  await tab.goto('https://example.com/');
+  return await tab.fetchJson(`/api/search?q=${encodeURIComponent(args.query)}`);
+}
+```
 
-Each compiled step is wrapped: a failure reports `error.details.step`, `label`, the engine's code/hint, the failed expectation and the page state at that moment, so the one broken step can be fixed. `tools_define` takes `{site, name, description, access, browser?, domain?, args?, func}`; review the draft, define it, run it once.
+Use stable semantic targets and `tab.expect()` when the adapter must interact with the UI. `tools.list()` and `tools.remove(site, name)` manage user-defined adapters. Built-in adapters and user adapters use the same loader; a user adapter with the same site and name takes precedence.

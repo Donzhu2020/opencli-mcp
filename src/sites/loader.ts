@@ -30,7 +30,6 @@ export interface AdapterCommand {
   name: string;
   description: string;
   access: 'read' | 'write';
-  browser: boolean;
   domain?: string;
   args: Arg[];
   aliases?: string[];
@@ -102,7 +101,6 @@ export class SiteRegistry {
       site, name, source: this.kindOf(file),
       description: String(d.description ?? ''),
       access: d.access === 'write' ? 'write' : 'read',
-      browser: d.browser !== false,
       domain: d.domain as string | undefined,
       args: (d.args as Arg[]) ?? [],
       aliases: d.aliases as string[] | undefined,

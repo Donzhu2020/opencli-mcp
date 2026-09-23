@@ -7,16 +7,26 @@ describe('HTTP client sessions', () => {
   const open: Array<() => Promise<void>> = [];
   afterEach(async () => { for (const close of open.splice(0).reverse()) await close().catch(() => {}); });
 
+  it('accepts bearer headers without accepting tokens in URLs', async () => {
+    const rt = new Runtime();
+    await rt.init();
+    const host = await startHttpServer(rt, { port: 0, token: 'test-token', version: '0.0.12' });
+    open.push(() => host.close());
+    const base = `http://${host.host}:${host.port}/health`;
+    expect((await fetch(`${base}?token=test-token`)).status).toBe(401);
+    expect((await fetch(base, { headers: { authorization: 'Bearer test-token' } })).status).toBe(200);
+  });
+
   it('keeps two MCP clients in separate runtime sessions and cleans up only the departing one', async () => {
     const rt = new Runtime();
     await rt.init();
-    const host = await startHttpServer(rt, { port: 0, token: 'test', version: '0.0.12', allowNoAuth: true });
+    const host = await startHttpServer(rt, { port: 0, token: 'test', version: '0.0.12' });
     open.push(() => host.close());
-    const missing = await fetch(`http://${host.host}:${host.port}/mcp`, { method: 'POST' });
+    const missing = await fetch(`http://${host.host}:${host.port}/mcp`, { method: 'POST', headers: { authorization: 'Bearer test' } });
     expect(missing.status).toBe(400);
     const connect = async (id: string) => {
       const client = new Client({ name: id, version: '1' }, { capabilities: {} });
-      const transport = new StreamableHTTPClientTransport(new URL(`http://${host.host}:${host.port}/mcp`), { requestInit: { headers: { [SESSION_HEADER]: id } } });
+      const transport = new StreamableHTTPClientTransport(new URL(`http://${host.host}:${host.port}/mcp`), { requestInit: { headers: { authorization: 'Bearer test', [SESSION_HEADER]: id } } });
       await client.connect(transport);
       open.push(() => client.close());
       await client.callTool({ name: 'doctor', arguments: {} });
@@ -27,7 +37,7 @@ describe('HTTP client sessions', () => {
     expect(rt.sessions.has('client-one')).toBe(true);
     expect(rt.sessions.has('client-two')).toBe(true);
     await first.close();
-    const response = await fetch(`http://${host.host}:${host.port}/session`, { method: 'DELETE', headers: { [SESSION_HEADER]: 'client-one' } });
+    const response = await fetch(`http://${host.host}:${host.port}/session`, { method: 'DELETE', headers: { authorization: 'Bearer test', [SESSION_HEADER]: 'client-one' } });
     expect(response.status).toBe(204);
     expect(rt.sessions.has('client-one')).toBe(false);
     expect(rt.sessions.has('client-two')).toBe(true);

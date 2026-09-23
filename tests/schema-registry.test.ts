@@ -36,7 +36,6 @@ describe('SourceLoader', () => {
     const cmd = await r.resolve('twitter', 'bookmarks');
     expect(cmd.site).toBe('twitter');
     expect(cmd.access).toBe('read');
-    expect(cmd.browser).toBe(true);
     expect(typeof cmd.run).toBe('function');
     expect(cmd.args.map((a) => a.name)).toContain('limit');
     // site.json defaults flow into the command

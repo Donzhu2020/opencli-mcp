@@ -11,7 +11,6 @@ import * as identity from './identity';
 
 export type Origin = 'agent' | 'user';
 export type Mark = 'deliverable' | 'handoff' | null;
-export type Badge = 'active' | 'deliverable' | 'handoff' | null;
 
 export interface Lease { tabId: number; origin: Origin; mark: Mark; title?: string; url?: string; claimedAt: number; state: 'active' | 'handoff' }
 export interface Session {
@@ -23,7 +22,6 @@ export interface Session {
   leases: Map<number, Lease>;
   preferredTabId: number | null;
   visible: boolean;
-  lifecycle: 'ephemeral' | 'persistent';
   idleTimer: ReturnType<typeof setTimeout> | null;
   lastActivity: number;
 }
@@ -39,12 +37,12 @@ function isHttp(url?: string): boolean { return Boolean(url && (url.startsWith('
 
 const STORE_KEY = 'opencli_mcp_sessions_v1';
 type StoredSession = Omit<Session, 'leases' | 'idleTimer'> & { leases: Lease[] };
-const RELEASED_KEY = 'opencli_mcp_released_v1';
+const RELEASED_KEY = 'opencli_mcp_released_v2';
 
 export class SessionManager {
   readonly sessions = new Map<string, Session>();
   /** Tabs finalize handed back to the user (kept, released, handoff). Commands to them are refused until a claim; a stale Tab handle cannot re-adopt one. */
-  private readonly released = new Map<number, string>();
+  private readonly released = new Set<number>();
   private cursorSeq = 0;
   private restored: Promise<void> | null = null;
 
@@ -52,7 +50,7 @@ export class SessionManager {
   private persistQueue: Promise<void> = Promise.resolve();
   private persist(): Promise<void> {
     const data: StoredSession[] = [...this.sessions.values()].map(({ leases, idleTimer: _t, ...rest }) => ({ ...rest, leases: [...leases.values()].map((lease) => ({ ...lease })) }));
-    const snapshot = { [STORE_KEY]: data, [RELEASED_KEY]: [...this.released.entries()] };
+    const snapshot = { [STORE_KEY]: data, [RELEASED_KEY]: [...this.released] };
     this.persistQueue = this.persistQueue.then(() => chrome.storage.session.set(snapshot)).catch(() => {});
     return this.persistQueue;
   }
@@ -60,14 +58,16 @@ export class SessionManager {
     if (!this.restored) this.restored = (async () => {
       try {
         const all = await chrome.storage.session.get([STORE_KEY, RELEASED_KEY]);
-        for (const [tabId, key] of (all?.[RELEASED_KEY] ?? []) as Array<[number, string]>) if (!this.released.has(tabId)) this.released.set(tabId, key);
+        for (const tabId of (all?.[RELEASED_KEY] ?? []) as number[]) this.released.add(tabId);
         const stored = all?.[STORE_KEY] as StoredSession[] | undefined;
         for (const st of stored ?? []) {
           if (this.sessions.has(st.key)) continue;
           const leases = new Map<number, Lease>();
           for (const l of st.leases) { try { await chrome.tabs.get(l.tabId); leases.set(l.tabId, l); } catch { /* tab gone */ } }
           if (leases.size === 0) continue;
-          this.sessions.set(st.key, { ...st, leases, idleTimer: null });
+          const session = { ...st, leases, idleTimer: null };
+          this.sessions.set(st.key, session);
+          this.scheduleIdle(session);
         }
       } catch { /* storage unavailable */ }
     })();
@@ -85,26 +85,28 @@ export class SessionManager {
     chrome.tabGroups.onRemoved.addListener((g) => { for (const s of this.sessions.values()) if (s.groupId === g.id) s.groupId = null; });
     chrome.webNavigation.onCreatedNavigationTarget.addListener((d) => { void this.onChildTab(d.sourceTabId, d.tabId); });
     chrome.windows.onRemoved.addListener((windowId) => { if (this.adapterWindowId === windowId) this.adapterWindowId = null; for (const s of this.sessions.values()) if (s.windowId === windowId) { s.windowId = null; s.groupId = null; } });
-    chrome.tabs.onUpdated.addListener((tabId, info) => { if (info.status === 'complete') { const s = this.ownerOf(tabId); const lease = s?.leases.get(tabId); if (lease) void this.badge(tabId, lease.state === 'handoff' ? 'handoff' : 'active'); } });
     void this.restore();
   }
 
   async ready(): Promise<void> { await this.restore(); }
 
-  get(key: string, surface: 'browser' | 'adapter' = 'browser', lifecycle?: 'ephemeral' | 'persistent'): Session {
+  get(key: string, surface: 'browser' | 'adapter' = 'browser'): Session {
     let s = this.sessions.get(key);
     if (!s) {
-      s = { key, surface, name: null, groupId: null, windowId: null, leases: new Map(), preferredTabId: null, visible: false, lifecycle: lifecycle ?? (surface === 'adapter' ? 'ephemeral' : 'persistent'), idleTimer: null, lastActivity: Date.now() };
+      s = { key, surface, name: null, groupId: null, windowId: null, leases: new Map(), preferredTabId: null, visible: false, idleTimer: null, lastActivity: Date.now() };
       this.sessions.set(key, s);
     }
-    if (lifecycle) s.lifecycle = lifecycle;
     return s;
   }
-  touch(s: Session): void {
+  touch(s: Session): Promise<void> {
     s.lastActivity = Date.now();
+    this.scheduleIdle(s);
+    return this.persist();
+  }
+  private scheduleIdle(s: Session): void {
     if (s.idleTimer) clearTimeout(s.idleTimer);
-    const ms = IDLE_MS[s.surface];
-    s.idleTimer = setTimeout(() => { void this.finalize(s, []).catch(() => {}); }, ms);
+    const remaining = Math.max(0, IDLE_MS[s.surface] - (Date.now() - s.lastActivity));
+    s.idleTimer = setTimeout(() => { void this.finalize(s, []).catch(() => {}); }, remaining);
   }
   ownerOf(tabId: number): Session | null { for (const s of this.sessions.values()) if (s.leases.has(tabId)) return s; return null; }
 
@@ -163,7 +165,7 @@ export class SessionManager {
     });
     let tab!: chrome.tabs.Tab;
     // the tab is born blank, attached (network capture armed), and only then navigated: the requests of the first load
-    // are evidence too — API-first needs the document's own XHR/fetch, which fire before any command would attach
+    // are evidence too — network inspection needs the document's own XHR/fetch, which fire before any command would attach
     try {
       try { tab = await chrome.tabs.create({ windowId, url: 'about:blank', active: s.visible }); }
       catch { s.windowId = null; s.groupId = null; windowId = await pick(); tab = await chrome.tabs.create({ windowId, url: 'about:blank', active: s.visible }); }
@@ -191,8 +193,7 @@ export class SessionManager {
             s.windowId = survivor.windowId;
             s.leases.set(createdId, { tabId: createdId, origin: 'agent', mark: null, url: survivor.url, title: survivor.title, claimedAt: Date.now(), state: 'active' });
             s.preferredTabId = createdId;
-            this.touch(s);
-            await this.persist();
+            await this.touch(s);
             throw new SessionError('tab_create_cleanup_failed', `Opening the page failed and tab ${createdId} could not be closed: ${String(error)}`, 'The tab remains in this session. Use tab_list and tab_close to clean it up.');
           }
         }
@@ -205,10 +206,8 @@ export class SessionManager {
     s.leases.set(tabId, { tabId, origin: 'agent', mark: null, url: tab.url, title: tab.title, claimedAt: Date.now(), state: 'active' });
     s.preferredTabId = tabId;
     const page = await identity.resolveTargetId(tabId).catch(() => String(tabId));
-    void this.badge(tabId, 'active');
     this.emit({ kind: 'tab_created', session: s.key, page, tabId, url: tab.url, title: tab.title, origin: 'agent' });
-    this.touch(s);
-    await this.persist();
+    await this.touch(s);
     return { tabId, page, tab };
   }
 
@@ -256,16 +255,14 @@ export class SessionManager {
     s.leases.set(tabId, { tabId, origin, mark: null, url: tab.url, title: tab.title, claimedAt: Date.now(), state: 'active' });
     s.preferredTabId = tabId;
     const page = await identity.resolveTargetId(tabId).catch(() => String(tabId));
-    void this.badge(tabId, 'active');
     this.emit({ kind: 'tab_acquired', session: s.key, page, tabId, url: tab.url, title: tab.title, origin });
-    this.touch(s);
-    await this.persist();
+    await this.touch(s);
     return { tabId: tabId, page, tab };
   }
 
   /** Resolve the tab a page-scoped command targets; create one when the session has none. */
   async resolveTab(s: Session, page?: string, initialUrl?: string): Promise<number> {
-    this.touch(s);
+    await this.touch(s);
     if (page) {
       let tabId: number;
       try { tabId = await identity.resolveTabId(page); } catch { throw new SessionError('stale_page', `stale page identity ${page}`, 'The tab was closed or navigated away; open or claim a fresh tab.'); }
@@ -316,7 +313,7 @@ export class SessionManager {
           if (tab.groupId !== undefined && tab.groupId >= 0) await chrome.tabs.ungroup(tabId);
         } catch (error) { throw new SessionError('tab_release_failed', `Could not release tab ${tabId}: ${String(error)}`, 'The tab is still controlled by this session. Retry tab_release or session_finalize.'); }
       }
-      this.released.set(tabId, s.key);
+      this.released.add(tabId);
       s.leases.delete(tabId);
       if (s.preferredTabId === tabId) s.preferredTabId = null;
       this.emit({ kind: 'tab_released', session: s.key, page, tabId, origin: lease.origin });
@@ -349,9 +346,9 @@ export class SessionManager {
       if (status === 'handoff') {
         await executor.detach(lease.tabId).catch(() => {});
         await this.hideCursor(lease.tabId);
-        this.released.set(lease.tabId, s.key);
+        this.released.add(lease.tabId);
         lease.state = 'handoff'; lease.mark = 'handoff';
-        await this.badge(lease.tabId, 'handoff'); kept.push(page); continue;
+        kept.push(page); continue;
       }
       const op = status === 'deliverable' || lease.origin === 'user' ? 'release' : 'close';
       try {
@@ -401,19 +398,15 @@ export class SessionManager {
     if (!s.visible) await chrome.tabs.update(childId, { muted: true, active: false }).catch(() => {});
     await this.ensureGroup(s, childId);
     const page = await identity.resolveTargetId(childId).catch(() => String(childId));
-    void this.badge(childId, 'active');
     this.emit({ kind: 'tab_created', session: s.key, page, tabId: childId, url: tab.url, title: tab.title, origin: 'agent' });
     void this.persist();
   }
 
-  // ── human visibility: content script for cursor overlay + favicon badge ──
+  // ── human visibility: content script for cursor overlay ──
   private async ensureContent(tabId: number): Promise<boolean> {
     try { const r = await chrome.tabs.sendMessage(tabId, { type: 'opencli:ping' }); if (r?.ok) return true; } catch { /* inject */ }
     try { await chrome.scripting.executeScript({ target: { tabId }, files: [CONTENT_FILE], injectImmediately: true }); return true; } catch { return false; }
   }
-  // Favicon badging was removed — a data: SVG favicon violates strict `img-src` CSP pages (e.g. Hacker News) and a
-  // content script can't avoid or catch that, so it logged a CSP error. Agent tabs are marked by the named tab group.
-  async badge(_tabId: number, _badge: Badge): Promise<void> { /* no-op */ }
   /**
    * Cursor overlay state, owned here (the ChatGPT plugin's arrangement): the content script is a renderer that pulls
    * this on load and receives pushes, so the cursor survives navigations, hides when the session finalizes, and is

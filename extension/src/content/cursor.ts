@@ -88,10 +88,6 @@ function moveTo(x: number, y: number, animate: boolean): Promise<boolean> {
   });
 }
 
-// The favicon-badge feature was removed: rewriting the page favicon to a data: SVG always violates a strict `img-src`
-// CSP (e.g. Hacker News), which a content script cannot avoid or catch, so it logged a CSP error on those pages. Agent
-// tabs are already marked by the named, coloured tab group; the cursor overlay shows where the agent is acting.
-
 type CursorState = { x: number; y: number; seq: number; visible: boolean; animate?: boolean } | null;
 
 /** The session is done with this tab: tear the overlay down completely (observer off, animation cancelled, root removed). */

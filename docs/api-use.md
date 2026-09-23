@@ -23,9 +23,8 @@ families are in the `errors` doc; the full object model arrives with your first 
 8. **API first.** Every session tab is captured from attach: `tab.network.read({afterSequence})` (in `js`) is a paged
    log of the requests your steps triggered (method, status, headers, body, JSON sample); endpoint candidates come from
    the explicit `recon.discover(tab)`. When you've reached the data in the UI, find the request that carried it, verify
-   with `tab.fetchJson(url,{method,headers,body})` (runs in the page: cookies + origin), and freeze that. DOM
-   extraction (`tab.evaluate`) is the last resort. `tools_compile` follows the same order and explains its choice in
-   `warnings`.
+   with `tab.fetchJson(url,{method,headers,body})` (runs in the page: cookies + origin). An adapter should encode
+   the verified request explicitly and handle changing tokens at run time. DOM extraction (`tab.evaluate`) is the last resort.
 9. **Dialogs:** a native `alert`/`confirm`/`prompt` freezes the page (`dialog_open`, details in `error.dialog`). Read
    with `tab.dialog.get()` and answer `tab.dialog.accept(text?)` / `tab.dialog.dismiss()` (in `js`), then retry — never
    answer a dialog the user didn't ask you to.

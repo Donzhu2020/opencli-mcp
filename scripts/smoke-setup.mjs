@@ -145,9 +145,8 @@ try {
   host = spawn(manifest.path, [], { env: launcherEnv, stdio: ['pipe', 'pipe', 'pipe'] });
   host.stderr.on('data', (chunk) => { stderr += chunk; });
   host.stdout.resume();
-  const { PROTOCOL_VERSION } = await import('../dist/src/protocol.js');
   const { encodeFrame } = await import('../dist/src/host/native-messaging.js');
-  host.stdin.write(encodeFrame({ type: 'hello', extensionVersion: 'test', protocolVersion: PROTOCOL_VERSION, contextId: 'setup-e2e' }));
+  host.stdin.write(encodeFrame({ type: 'hello', extensionVersion: 'test' }));
   const stateFile = path.join(stateDir, 'run', 'host.json');
   const deadline = Date.now() + 10_000;
   while (!fs.existsSync(stateFile) && Date.now() < deadline && host.exitCode === null) await new Promise((resolve) => setTimeout(resolve, 50));

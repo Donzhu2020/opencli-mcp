@@ -18,7 +18,7 @@ export class BrowserCommandError extends Error {
 type Pending = { resolve: (r: Result) => void; reject: (e: Error) => void; timer: NodeJS.Timeout };
 
 export interface BridgeEvents {
-  hello: [{ extensionVersion: string; protocolVersion: number; contextId?: string }];
+  hello: [{ extensionVersion: string }];
   event: [BrowserEvent];
   close: [];
 }
@@ -26,7 +26,6 @@ export interface BridgeEvents {
 export class ExtensionBridge extends EventEmitter<BridgeEvents> {
   private readonly pending = new Map<string, Pending>();
   extensionVersion: string | null = null;
-  contextId: string | undefined;
   connected = false;
 
   /** Set by the host so the extension learns where MCP is served (informational). */
@@ -53,7 +52,6 @@ export class ExtensionBridge extends EventEmitter<BridgeEvents> {
     if (msg.type === 'hello') {
       this.connected = true;
       this.extensionVersion = msg.extensionVersion;
-      this.contextId = msg.contextId;
       if (this.ready) { try { this.channel.send({ type: 'ready', ...this.ready }); } catch { /* ignore */ } }
       this.emit('hello', msg);
       return;

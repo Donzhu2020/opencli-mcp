@@ -4,10 +4,9 @@
  * runtime warm. Reconnect immediately on disconnect (backoff) with an alarm as the safety net.
  */
 import type { Command, ExtToHost, HostToExt, Result, BrowserEvent } from '../../src/protocol.js';
-import { NATIVE_HOST_NAME, PROTOCOL_VERSION } from '../../src/protocol.js';
+import { NATIVE_HOST_NAME } from '../../src/protocol.js';
 
 const RECONNECT_ALARM = 'opencli-mcp-reconnect';
-const CONTEXT_KEY = 'opencli_mcp_context_id';
 
 export class NativeHost {
   private port: chrome.runtime.Port | null = null;
@@ -21,15 +20,6 @@ export class NativeHost {
   }
 
   get connected(): boolean { return this.port !== null && this.status === 'connected'; }
-
-  async contextId(): Promise<string> {
-    const stored = await chrome.storage.local.get(CONTEXT_KEY);
-    const existing = stored?.[CONTEXT_KEY] as string | undefined;
-    if (existing) return existing;
-    const id = crypto.randomUUID();
-    await chrome.storage.local.set({ [CONTEXT_KEY]: id });
-    return id;
-  }
 
   connect(): boolean {
     if (this.port) return true;
@@ -61,7 +51,7 @@ export class NativeHost {
       this.scheduleReconnect();
     });
     this.status = 'connected';
-    void this.contextId().then((contextId) => this.send({ type: 'hello', extensionVersion: chrome.runtime.getManifest().version, protocolVersion: PROTOCOL_VERSION, contextId }));
+    this.send({ type: 'hello', extensionVersion: chrome.runtime.getManifest().version });
     return true;
   }
 

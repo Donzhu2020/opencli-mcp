@@ -1,7 +1,6 @@
 /**
- * Runtime — the resident kernel: site registry, per-MCP-session state, page backends, traces.
- * Lives inside the Chrome-spawned host (extension backend) or embedded in the stdio launcher
- * (browser-less: only `public` site commands work until Chrome connects).
+ * Runtime — the resident kernel: site registry, per-MCP-session state, and page backends.
+ * Lives inside the Chrome-spawned host. The stdio launcher proxies to this runtime.
  */
 import { EventEmitter } from 'node:events';
 import type { ExtensionBridge } from '../host/bridge.js';
@@ -12,7 +11,6 @@ import { listDefinedTools, ensureUserSource, saveTool, deleteTool, type ToolDefi
 import { defaultSources } from '../lib/sources.js';
 import { createExtensionPage, type ExtensionRuntimePage } from '../backends/extension-page.js';
 import type { RuntimePage } from '../backends/page-types.js';
-import { TraceRecorder, type NetworkEvidence } from './trace.js';
 import { JsSession } from '../mcp/js-session.js';
 import { Tab, createAgentApi, type AgentApi } from '../api/agent.js';
 
@@ -30,7 +28,6 @@ export interface SessionState {
   id: string;
   name?: string;
   createdAt: number;
-  trace: TraceRecorder;
   browserPage?: RuntimePage;
   browserPagePromise?: Promise<RuntimePage>;
   /** One page object per tab (same bridge, own identity); the session page above carries no tab and serves session-scope calls. */
@@ -45,14 +42,12 @@ export interface SessionState {
   lastObserve: Map<string, string>;
   /** Network entries seen per tab, with monotonically increasing sequence numbers for cursor-based reads. */
   netLog: Map<string, { seq: number; entries: Array<Record<string, unknown> & { seq: number }>; seen: Set<string> }>;
-  /** Captured requests kept as tools_compile evidence (step-tagged, capped) — not in the step trace. */
-  netEvidence: NetworkEvidence[];
   finalized: boolean;
 }
 
 export interface DoctorReport {
   backend: Backend;
-  extension: { connected: boolean; version: string | null; contextId?: string };
+  extension: { connected: boolean; version: string | null };
   sites: number;
   commands: number;
   definedTools: number;
@@ -63,7 +58,6 @@ export interface DoctorReport {
 export interface RuntimeEvents {
   'browser-event': [BrowserEvent];
   'tools-changed': [{ site?: string }];
-  'session-closed': [string];
   log: [string];
 }
 
@@ -103,7 +97,7 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
   session(id: string): SessionState {
     let s = this.sessions.get(id);
     if (!s) {
-      s = { id, createdAt: Date.now(), trace: new TraceRecorder(), pages: new Map(), tabLocks: new Map(), enabledSites: new Map(), capabilities: new Set(), lastObserve: new Map(), netLog: new Map(), netEvidence: [], finalized: false };
+      s = { id, createdAt: Date.now(), pages: new Map(), tabLocks: new Map(), enabledSites: new Map(), capabilities: new Set(), lastObserve: new Map(), netLog: new Map(), finalized: false };
       this.sessions.set(id, s);
     }
     return s;
@@ -114,7 +108,7 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
     const s = this.session(sessionId);
     if (s.browserPage) return s.browserPage;
     if (!s.browserPagePromise) {
-      s.browserPagePromise = this.createPage({ session: `mcp:${sessionId}`, surface: 'browser', windowMode: 'background' }).then((p) => { s.browserPage = p; return p; }).finally(() => { s.browserPagePromise = undefined; });
+      s.browserPagePromise = this.createPage({ session: `mcp:${sessionId}`, surface: 'browser' }).then((p) => { s.browserPage = p; return p; }).finally(() => { s.browserPagePromise = undefined; });
     }
     return s.browserPagePromise;
   }
@@ -124,31 +118,31 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
     const s = this.session(sessionId);
     const existing = s.pages.get(pageId);
     if (existing) return existing;
-    const page = await this.createPage({ session: `mcp:${sessionId}`, surface: 'browser', windowMode: 'background', page: pageId });
+    const page = await this.createPage({ session: `mcp:${sessionId}`, surface: 'browser', page: pageId });
     s.pages.set(pageId, page);
     return page;
   }
   forgetPage(sessionId: string, pageId: string): void { const s = this.sessions.get(sessionId); s?.pages.delete(pageId); s?.tabLocks.delete(pageId); if (s?.selected === pageId) s.selected = undefined; }
 
   /** Background adapter page per site (shared by all MCP sessions). */
-  async getAdapterPage(site: string, opts: { siteSession: 'ephemeral' | 'persistent'; windowMode: 'foreground' | 'background'; navigateTo?: string }): Promise<RuntimePage> {
+  async getAdapterPage(site: string): Promise<RuntimePage> {
     const key = `site:${site}`;
     let p = this.adapterPages.get(key);
     if (!p) {
-      p = this.createPage({ session: key, surface: 'adapter', siteSession: opts.siteSession, windowMode: opts.windowMode });
+      p = this.createPage({ session: key, surface: 'adapter' });
       this.adapterPages.set(key, p);
       p.catch(() => this.adapterPages.delete(key));
     }
     return p;
   }
 
-  private async createPage(opts: { session: string; surface: 'browser' | 'adapter'; siteSession?: 'ephemeral' | 'persistent'; windowMode?: 'foreground' | 'background'; page?: string }): Promise<RuntimePage> {
+  private async createPage(opts: { session: string; surface: 'browser' | 'adapter'; page?: string }): Promise<RuntimePage> {
     const backend = this.backend();
     if (backend === 'extension' && this.bridge) return createExtensionPage(this.bridge, opts);
     throw Object.assign(new Error('No browser backend is connected'), { code: 'browser_unavailable', hint: 'Run `opencli-mcp doctor`. Chrome with the opencli-mcp extension must be running.' });
   }
 
-  /** Frozen tools run on the exploration object model: a Tab bound to the adapter page, plus sites/recon. */
+  /** Adapters run on the browser object model: a Tab bound to the adapter page, plus sites/recon. */
   async toolContext(page: RuntimePage, site: string): Promise<Record<string, unknown>> {
     const sessionId = `site:${site}`;
     let api = this.siteApis.get(sessionId);
@@ -160,10 +154,9 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
 
   isExtensionPage(page: RuntimePage): page is ExtensionRuntimePage { return typeof (page as ExtensionRuntimePage).claim === 'function'; }
 
-  async runSite(sessionId: string | null, site: string, name: string, args: Record<string, unknown>, opts: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<CommandRunResult | CommandRunError> {
+  async runSite(site: string, name: string, args: Record<string, unknown>, opts: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<CommandRunResult | CommandRunError> {
     const cmd = await this.registry.resolve(site, name);
     const r = await runAdapter(this, cmd, args, opts);
-    if (sessionId) this.session(sessionId).trace.record({ kind: 'site', site, name, ok: r.ok, elapsedMs: r.elapsedMs });
     return r;
   }
 
@@ -189,7 +182,6 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
         else await page.closeWindow();
       } catch (err) { this.emit('log', `finalize on close failed: ${(err as Error).message}`); }
     }
-    this.emit('session-closed', id);
   }
 
   async shutdown(): Promise<void> {
@@ -200,7 +192,7 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
     const list = this.registry.sites();
     return {
       backend: this.backend(),
-      extension: { connected: Boolean(this.bridge?.connected), version: this.bridge?.extensionVersion ?? null, contextId: this.bridge?.contextId },
+      extension: { connected: Boolean(this.bridge?.connected), version: this.bridge?.extensionVersion ?? null },
       sites: list.length,
       commands: list.reduce((n, s) => n + s.commands, 0),
       definedTools: listDefinedTools().length,

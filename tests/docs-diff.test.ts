@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildInstructions, listDocs, readDoc } from '../src/docs/manifest.js';
-import { compileFromTrace, renderAdapterModule, validateDefinition } from '../src/sites/define.js';
+import { renderAdapterModule, validateDefinition } from '../src/sites/define.js';
 
 describe('docs manifest', () => {
   it('builds instructions per backend and gates cdp', () => {
@@ -20,21 +20,13 @@ describe('docs manifest', () => {
 });
 
 describe('tools.define', () => {
-  it('renders a valid adapter module and compiles a trace', () => {
+  it('renders a valid explicit adapter module', () => {
     const def = { site: 'demo', name: 'thing', description: 'd', access: 'read' as const, args: [{ name: 'q', required: true }], func: 'async ({ tab, args }) => { await tab.goto("https://x.test/?q=" + args.q); return await tab.observe(); }' };
     validateDefinition(def);
     const mod = renderAdapterModule(def);
     expect(mod).toContain("import { defineAdapter } from '@opencli-mcp/adapter-sdk'");
     expect(mod).toContain('export default defineAdapter({'); expect(mod).toContain('run: async ({ tab, args }) =>');
     expect(() => validateDefinition({ ...def, func: 'not a function {' })).toThrow(/parse/);
-    const draft = compileFromTrace([
-      { t: 1, kind: 'goto', url: 'https://x.test/search?q=shoes' },
-      { t: 2, kind: 'act', action: 'fill', target: 'css:#q', targetRef: '12', value: 'shoes', ok: true },
-      { t: 3, kind: 'act', action: 'press', target: 'ref:12', value: 'Enter', ok: true },
-    ], [], { site: 'x', name: 'search', description: 's', inputs: { query: 'shoes' } });
-    expect(draft.func).toContain('args.query'); expect(draft.args?.[0].name).toBe('query');
-    const net = compileFromTrace([{ t: 1, kind: 'goto', url: 'https://x.test/' }], [{ url: 'https://x.test/api/list?q=shoes', method: 'GET', status: 200, contentType: 'application/json', bodyBytes: 900 }], { site: 'x', name: 'list', description: 'l', inputs: { q: { sample: 'shoes', mode: 'within' } }, domain: 'x.test' });
-    expect(net.func).toContain('tab.fetchJson(`https://x.test/api/list?q=${encodeURIComponent(args.q)}`)');
   });
 });
 

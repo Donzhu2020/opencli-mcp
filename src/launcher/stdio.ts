@@ -1,37 +1,24 @@
 /**
  * stdio launcher for local MCP hosts (Claude Code, Cursor, Codex, …).
- * If the Chrome-spawned host is running, proxy to it (shared browser runtime). Otherwise embed a
- * runtime in-process: site commands with `browser: false` work; browsing needs Chrome + the extension.
+ * Proxies to the Chrome-spawned host. Browser and site-adapter commands share that runtime.
  */
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { randomUUID } from 'node:crypto';
 import { Server } from '@modelcontextprotocol/server';
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
-import { Runtime } from '../runtime/runtime.js';
-import { createMcpServer } from '../mcp/server.js';
-import { hostHealth, readConfig, readHostState } from '../host/state.js';
+import { hostHealth, readHostState } from '../host/state.js';
 import { SESSION_HEADER } from '../host/http.js';
 
-export async function runStdio(opts: { version: string; forceEmbedded?: boolean }): Promise<void> {
+export async function runStdio(opts: { version: string }): Promise<void> {
   const log = (m: string): void => { process.stderr.write(`[opencli-mcp] ${m}\n`); };
   const state = readHostState();
-  const health = opts.forceEmbedded ? { ok: false } : await hostHealth(state);
+  const health = await hostHealth(state);
   if (state && health.ok) {
     log(`proxying to host on port ${state.port} (backend ${health.backend})`);
     await proxyToHost({ host: state.host, port: state.port, token: state.token }, opts.version, log);
     return;
   }
-  log(`host not running (${'error' in health ? health.error : 'embedded mode'}): embedded runtime; browsing needs Chrome + the extension`);
-  const config = readConfig();
-  const rt = new Runtime({ cursor: config.cursor ?? true, sites: config.sites, sitesWrite: config.sitesWrite, log });
-  await rt.init();
-  const session = createMcpServer(rt, 'stdio', { version: opts.version });
-  const transport = new StdioServerTransport();
-  await session.server.connect(transport);
-  let closing = false;
-  const bye = (): void => { if (closing) return; closing = true; void session.close().catch(() => {}).then(() => rt.shutdown()).catch(() => {}).finally(() => process.exit(0)); };
-  transport.onclose = bye;
-  process.stdin.once('end', bye);
+  throw new Error(`Chrome host is not connected (${health.error ?? 'unavailable'}). Open Chrome, enable the extension, and run opencli-mcp doctor.`);
 }
 
 async function proxyToHost(initial: { host: string; port: number; token: string }, version: string, log: (m: string) => void): Promise<void> {

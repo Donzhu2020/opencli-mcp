@@ -57,8 +57,6 @@ export interface AdapterContext {
 export interface AdapterDescriptor {
   description: string;
   access: Access;
-  /** needs a logged-in page (default true). false = pure fetch, no browser provisioned. */
-  browser?: boolean;
   /** favicon + default navigation host, e.g. 'x.com' */
   domain?: string;
   args?: Arg[];

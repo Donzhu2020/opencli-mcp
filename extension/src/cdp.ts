@@ -336,8 +336,7 @@ async function attachNow(tabId: number, aggressiveRetry: boolean): Promise<void>
   // awaits above) so it wins over the onDetach handler's delete, which fires
   // while those awaits yield to the event loop.
   if (!preservedNetworkCapture && aggressiveRetry) {
-    // API-first: every session tab is captured from the moment it is attached, so each goto/act leaves the requests it
-    // triggered in the trace and tools_compile can freeze the endpoint instead of the DOM. Adapter tabs opt in explicitly.
+    // Browser tabs capture requests from attachment onward. Adapter tabs opt in explicitly.
     try { await sendDebuggerCommand({ tabId }, 'Network.enable'); networkCaptures.set(tabId, { patterns: [], entries: [], requestToIndex: new Map() }); } catch { /* next start-capture arms it */ }
   }
   if (preservedNetworkCapture) {

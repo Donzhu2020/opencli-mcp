@@ -2,10 +2,13 @@
 
 ## Unreleased
 
+- Redesign the virtual cursor with a compact rounded pointer, blue glow, curved long moves, and reduced-motion support. Interrupted moves now report that they did not arrive.
+- Give each MCP client its own browser and JavaScript session. Local stdio launchers create a session ID automatically and clean up on disconnect; direct HTTP clients provide `X-OpenCLI-Session-ID`.
+- Clean up tabs when opening fails, and keep tab leases if releasing cannot finish. Closing a tab already removed by Chrome is treated as complete.
+- Persist command journal snapshots before executing and before replying, so a retried write cannot silently run twice after a service-worker restart when session storage is available.
 - Make browser tab ownership explicit: operations no longer create a tab or adopt an unknown page implicitly. Add searchable `tab_list` discovery with bounded user-tab results and expose tab origin/state.
 - Separate `tab_release` / `tab.release()` (leave open) from `tab_close` / `tab.close()` (close), for both agent-created and claimed tabs. Session cleanup reports failed tab closures and leaves their leases available for retry.
 - Serialize extension lease persistence to prevent out-of-order state writes. Allow long document reads to continue with `nextStart` and `start`.
-- Fail closed when the Chrome extension and npm host use incompatible browser protocols; `doctor` reports the observed and expected protocol versions.
 
 ## 0.0.12 — 2026-09-23
 

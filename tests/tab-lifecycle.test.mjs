@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SessionManager } from '../extension/src/sessions.js';
 
+vi.mock('../extension/src/cdp.js', () => ({ ensureAttached: vi.fn(async () => {}), detach: vi.fn(async () => {}) }));
+
 const event = () => ({ addListener: vi.fn(), removeListener: vi.fn() });
 
 function chromeMock() {
@@ -12,6 +14,7 @@ function chromeMock() {
     update: vi.fn(async (_tabId, _change) => {}),
     query: vi.fn(async () => []),
     create: vi.fn(),
+    group: vi.fn(async () => 10),
   };
   vi.stubGlobal('chrome', {
     tabs,
@@ -19,7 +22,7 @@ function chromeMock() {
     storage: { session: { get: vi.fn(async () => ({})), set: vi.fn(async () => {}) } },
     windows: { onFocusChanged: event(), onRemoved: event() },
     runtime: { onMessage: event() },
-    tabGroups: { onRemoved: event() },
+    tabGroups: { onRemoved: event(), update: vi.fn(async () => {}) },
     webNavigation: { onCreatedNavigationTarget: event(), onErrorOccurred: event() },
   });
   return tabs;
@@ -28,6 +31,46 @@ function chromeMock() {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('browser tab ownership', () => {
+  it('removes a new tab if navigation cannot begin', async () => {
+    const tabs = chromeMock();
+    tabs.create.mockResolvedValue({ id: 1, url: 'about:blank', windowId: 1 });
+    tabs.update.mockRejectedValueOnce(new Error('blocked navigation'));
+    const manager = new SessionManager(() => {});
+    await manager.ready();
+    const session = manager.get('test');
+    session.windowId = 1;
+    await expect(manager.createTab(session, 'https://example.com/')).rejects.toMatchObject({ code: 'page_not_loaded' });
+    expect(tabs.remove).toHaveBeenCalledWith(1);
+    expect(session.leases.size).toBe(0);
+    expect(tabs.onUpdated.removeListener).toHaveBeenCalledOnce();
+  });
+
+  it('removes a new tab if it cannot join the session group', async () => {
+    const tabs = chromeMock();
+    tabs.create.mockResolvedValue({ id: 1, url: 'about:blank', windowId: 1 });
+    tabs.group.mockRejectedValue(new Error('group unavailable'));
+    const manager = new SessionManager(() => {});
+    await manager.ready();
+    const session = manager.get('test');
+    session.windowId = 1;
+    await expect(manager.createTab(session)).rejects.toThrow('group unavailable');
+    expect(tabs.remove).toHaveBeenCalledWith(1);
+    expect(session.leases.size).toBe(0);
+  });
+
+  it('keeps ownership if cleanup of a failed new tab also fails', async () => {
+    const tabs = chromeMock();
+    tabs.create.mockResolvedValue({ id: 1, url: 'about:blank', windowId: 1 });
+    tabs.group.mockRejectedValue(new Error('group unavailable'));
+    tabs.remove.mockRejectedValue(new Error('remove blocked'));
+    const manager = new SessionManager(() => {});
+    await manager.ready();
+    const session = manager.get('test');
+    session.windowId = 1;
+    await expect(manager.createTab(session)).rejects.toMatchObject({ code: 'tab_create_cleanup_failed' });
+    expect(session.leases.get(1)).toMatchObject({ origin: 'agent', state: 'active' });
+  });
+
   it('requires explicit open or claim and never adopts an unknown page', async () => {
     const tabs = chromeMock();
     const manager = new SessionManager(() => {});
@@ -56,6 +99,7 @@ describe('browser tab ownership', () => {
 
   it('ungroups and unmutes an agent tab when released', async () => {
     const tabs = chromeMock();
+    tabs.get.mockResolvedValue({ id: 1, url: 'https://example.com/', windowId: 1, groupId: 10 });
     const manager = new SessionManager(() => {});
     await manager.ready();
     const session = manager.get('test');
@@ -64,6 +108,32 @@ describe('browser tab ownership', () => {
     expect(tabs.ungroup).toHaveBeenCalledWith(1);
     expect(tabs.update).toHaveBeenCalledWith(1, { muted: false });
     expect(tabs.remove).not.toHaveBeenCalled();
+  });
+
+  it('retains the lease if releasing an agent tab cannot ungroup it', async () => {
+    const tabs = chromeMock();
+    tabs.get.mockResolvedValue({ id: 1, url: 'https://example.com/', windowId: 1, groupId: 10 });
+    tabs.ungroup.mockRejectedValueOnce(new Error('group failed'));
+    const manager = new SessionManager(() => {});
+    await manager.ready();
+    const session = manager.get('test');
+    session.leases.set(1, { tabId: 1, origin: 'agent', mark: null, claimedAt: Date.now(), state: 'active' });
+    await expect(manager.endTab(session, 1, 'release')).rejects.toMatchObject({ code: 'tab_release_failed' });
+    expect(session.leases.has(1)).toBe(true);
+    await manager.endTab(session, 1, 'release');
+    expect(session.leases.has(1)).toBe(false);
+  });
+
+  it('treats a tab that Chrome already removed as closed', async () => {
+    const tabs = chromeMock();
+    tabs.remove.mockRejectedValueOnce(new Error('No tab with id: 1'));
+    tabs.get.mockRejectedValueOnce(new Error('No tab with id: 1'));
+    const manager = new SessionManager(() => {});
+    await manager.ready();
+    const session = manager.get('test');
+    session.leases.set(1, { tabId: 1, origin: 'agent', mark: null, claimedAt: Date.now(), state: 'active' });
+    expect(await manager.endTab(session, 1, 'close')).toMatchObject({ closed: true });
+    expect(session.leases.has(1)).toBe(false);
   });
 
   it('keeps the lease when Chrome refuses to close a tab', async () => {
@@ -92,6 +162,18 @@ describe('browser tab ownership', () => {
     manager.get('test').leases.set(1, { tabId: 1, origin: 'agent', mark: null, claimedAt: Date.now(), state: 'active' });
     expect((await manager.listUserTabs({ query: 'EXAMPLE', limit: 1 })).map((tab) => tab.tabId)).toEqual([3]);
     expect((await manager.listUserTabs({ query: 'example' })).map((tab) => tab.tabId)).toEqual([3, 2]);
+  });
+
+  it('preserves agent origin when another session claims a handoff tab', async () => {
+    chromeMock();
+    const events = [];
+    const manager = new SessionManager((value) => events.push(value));
+    await manager.ready();
+    manager.get('first').leases.set(1, { tabId: 1, origin: 'agent', mark: 'handoff', claimedAt: Date.now(), state: 'handoff' });
+    const second = manager.get('second');
+    await manager.claimUserTab(second, { tabId: 1 });
+    expect(second.leases.get(1).origin).toBe('agent');
+    expect(events.at(-1)).toMatchObject({ kind: 'tab_acquired', origin: 'agent' });
   });
 
   it('reports failed cleanup and keeps its lease for retry', async () => {

@@ -12,13 +12,18 @@ import { createMcpServer } from '../mcp/server.js';
 
 export interface HttpServerHandle { port: number; host: string; close(): Promise<void> }
 
-/** All HTTP requests share one runtime session (the endpoint is single-user, local); the per-request McpServer is stateless. */
-const HTTP_SESSION = 'http';
+/** Stdio launchers supply a stable id per connection; direct HTTP clients may supply one too. */
+export const SESSION_HEADER = 'x-opencli-session-id';
+const sessionId = (value: string | null): string | null => value !== null && /^[a-zA-Z0-9_-]{1,128}$/.test(value) ? value : null;
 
 export async function startHttpServer(rt: Runtime, opts: { port: number; host?: string; token: string; version: string; allowNoAuth?: boolean }): Promise<HttpServerHandle> {
   const host = opts.host ?? '127.0.0.1';
   const handler = createMcpHandler(
-    () => createMcpServer(rt, HTTP_SESSION, { version: opts.version, persistent: false }).server,
+    ({ requestInfo }) => {
+      const id = sessionId(requestInfo?.headers.get(SESSION_HEADER) ?? null);
+      if (!id) throw new Error(`${SESSION_HEADER} is required`);
+      return createMcpServer(rt, id, { version: opts.version, persistent: false }).server;
+    },
     { onerror: (e) => rt.emit('log', `http error: ${e.message}`) },
   );
   const mcp = toNodeHandler(handler);
@@ -44,6 +49,14 @@ export async function startHttpServer(rt: Runtime, opts: { port: number; host?: 
       if (!authorized(req, url)) { res.writeHead(401, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'unauthorized' })); return; }
       if (url.pathname === '/health') {
         res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, backend: rt.backend(), sessions: rt.sessions.size, extensionConnected: Boolean(rt.bridge?.connected), version: opts.version, uptimeMs: Date.now() - rt.startedAt }));
+        return;
+      }
+      const rawSession = req.headers[SESSION_HEADER];
+      const requestedSession = sessionId(typeof rawSession === 'string' ? rawSession : null);
+      if (requestedSession === null) { res.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: `${SESSION_HEADER} is required and must contain 1–128 letters, digits, hyphens or underscores` })); return; }
+      if (url.pathname === '/session' && req.method === 'DELETE') {
+        await rt.closeSession(requestedSession);
+        res.writeHead(204).end();
         return;
       }
       if (url.pathname !== '/mcp') { res.writeHead(404).end(); return; }

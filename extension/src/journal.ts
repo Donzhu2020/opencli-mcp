@@ -44,9 +44,9 @@ async function load(): Promise<JournalMap> {
   return cache;
 }
 
-function persist(): void {
-  const snapshot = cache;
-  if (!snapshot) return;
+function persist(): Promise<void> {
+  const snapshot = cache ? { ...cache } : null;
+  if (!snapshot) return Promise.resolve();
   writeQueue = writeQueue.then(async () => {
     try {
       await chrome.storage.session.set({ [JOURNAL_KEY]: snapshot });
@@ -54,6 +54,7 @@ function persist(): void {
       // Storage unavailable — journal stays in-memory for this worker's lifetime.
     }
   });
+  return writeQueue;
 }
 
 function trim(journal: JournalMap): void {
@@ -116,7 +117,7 @@ export async function executeWithJournal(
 
     journal[id] = { status: 'started', ts: Date.now() };
     trim(journal);
-    persist();
+    await persist();
     let result: Result;
     try {
       result = await execute(cmd);
@@ -126,7 +127,7 @@ export async function executeWithJournal(
     journal[id] = resultByteLength(result) <= JOURNAL_RESULT_MAX_BYTES
       ? { status: 'done', ts: Date.now(), result }
       : { status: 'done', ts: Date.now() };
-    persist();
+    await persist();
     return result;
   })();
 

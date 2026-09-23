@@ -150,32 +150,58 @@ export class SessionManager {
     const target = url && isHttp(url) ? url : 'about:blank';
     // Register the load watcher before the tab exists so a fast (cached) load is never missed.
     let createdId = -1; let loaded = false; let navError: string | null = null;
-    const loadedP = new Promise<void>((resolve) => {
-      const done = () => { chrome.tabs.onUpdated.removeListener(listener); chrome.webNavigation.onErrorOccurred.removeListener(onErr); resolve(); };
+    let stopLoadWatch = () => {};
+    const loadedP = target === 'about:blank' ? Promise.resolve() : new Promise<void>((resolve) => {
+      let timer: ReturnType<typeof setTimeout>;
+      const done = () => { clearTimeout(timer); chrome.tabs.onUpdated.removeListener(listener); chrome.webNavigation.onErrorOccurred.removeListener(onErr); resolve(); };
       const listener = (id: number, info: chrome.tabs.OnUpdatedInfo, tabInfo: chrome.tabs.Tab) => { if (id === createdId && info.status === 'complete' && tabInfo.url && tabInfo.url !== 'about:blank') { loaded = true; done(); } };
       const onErr = (d: chrome.webNavigation.WebNavigationFramedErrorCallbackDetails) => { if (d.tabId === createdId && d.frameId === 0) { navError = d.error; done(); } };
       chrome.tabs.onUpdated.addListener(listener);
       chrome.webNavigation.onErrorOccurred.addListener(onErr);
-      setTimeout(done, 15_000);
+      timer = setTimeout(done, 15_000);
+      stopLoadWatch = done;
     });
-    let tab: chrome.tabs.Tab;
+    let tab!: chrome.tabs.Tab;
     // the tab is born blank, attached (network capture armed), and only then navigated: the requests of the first load
     // are evidence too — API-first needs the document's own XHR/fetch, which fire before any command would attach
-    try { tab = await chrome.tabs.create({ windowId, url: 'about:blank', active: s.visible }); }
-    catch { s.windowId = null; s.groupId = null; windowId = await pick(); tab = await chrome.tabs.create({ windowId, url: 'about:blank', active: s.visible }); }
-    createdId = tab.id!;
-    if (target !== 'about:blank') {
-      await executor.ensureAttached(createdId, s.surface === 'browser').catch(() => { /* attach on first command instead */ });
-      await chrome.tabs.update(createdId, { url: target }).catch(() => {});
-      await loadedP; // the load watcher only resolves once the target (not the initial about:blank) reaches 'complete'
-      tab = await chrome.tabs.get(createdId).catch(() => tab);
-      if (navError) throw new SessionError('page_not_loaded', `navigation to ${target} failed: ${navError}`, 'The browser blocked or could not reach the URL (policy, offline, DNS, or an extension). Check chrome://policy and the network.');
-      if (!loaded) console.warn(`[opencli-mcp] tab ${createdId} did not finish loading ${target} within 15s (url=${tab.url ?? ''})`);
+    try {
+      try { tab = await chrome.tabs.create({ windowId, url: 'about:blank', active: s.visible }); }
+      catch { s.windowId = null; s.groupId = null; windowId = await pick(); tab = await chrome.tabs.create({ windowId, url: 'about:blank', active: s.visible }); }
+      createdId = tab.id!;
+      if (target !== 'about:blank') {
+        await executor.ensureAttached(createdId, s.surface === 'browser').catch(() => { /* attach on first command instead */ });
+        try { await chrome.tabs.update(createdId, { url: target }); }
+        catch (error) { throw new SessionError('page_not_loaded', `navigation to ${target} failed: ${String(error)}`); }
+        await loadedP;
+        tab = await chrome.tabs.get(createdId).catch(() => tab);
+        if (navError) throw new SessionError('page_not_loaded', `navigation to ${target} failed: ${navError}`, 'The browser blocked or could not reach the URL (policy, offline, DNS, or an extension). Check chrome://policy and the network.');
+        if (!loaded && tab.url === 'about:blank') throw new SessionError('page_not_loaded', `navigation to ${target} did not start`);
+        if (!loaded) console.warn(`[opencli-mcp] tab ${createdId} did not finish loading ${target} within 15s (url=${tab.url ?? ''})`);
+      }
+      if (!s.visible) await chrome.tabs.update(createdId, { muted: true }).catch(() => {});
+      await this.ensureGroup(s, createdId);
+    } catch (error) {
+      stopLoadWatch();
+      if (createdId >= 0) {
+        await executor.detach(createdId).catch(() => {});
+        try { await chrome.tabs.remove(createdId); }
+        catch {
+          const survivor = await chrome.tabs.get(createdId).catch(() => null);
+          if (survivor) {
+            s.windowId = survivor.windowId;
+            s.leases.set(createdId, { tabId: createdId, origin: 'agent', mark: null, url: survivor.url, title: survivor.title, claimedAt: Date.now(), state: 'active' });
+            s.preferredTabId = createdId;
+            this.touch(s);
+            await this.persist();
+            throw new SessionError('tab_create_cleanup_failed', `Opening the page failed and tab ${createdId} could not be closed: ${String(error)}`, 'The tab remains in this session. Use tab_list and tab_close to clean it up.');
+          }
+        }
+        identity.evictTab(createdId);
+      }
+      throw error;
     }
-    const tabId = tab.id!;
+    const tabId = createdId;
     s.windowId = tab.windowId;
-    if (!s.visible) await chrome.tabs.update(tabId, { muted: true }).catch(() => {});
-    await this.ensureGroup(s, tabId);
     s.leases.set(tabId, { tabId, origin: 'agent', mark: null, url: tab.url, title: tab.title, claimedAt: Date.now(), state: 'active' });
     s.preferredTabId = tabId;
     const page = await identity.resolveTargetId(tabId).catch(() => String(tabId));
@@ -226,11 +252,12 @@ export class SessionManager {
     s.windowId = s.windowId ?? tab.windowId;
     this.released.delete(tabId); // a claim is the one way a released tab comes back
     // an agent-created handoff tab keeps its agent origin (and group), so a later finalize may still close it
-    s.leases.set(tabId, { tabId: tabId, origin: prior?.state === 'handoff' ? prior.origin : 'user', mark: null, url: tab.url, title: tab.title, claimedAt: Date.now(), state: 'active' });
+    const origin = prior?.state === 'handoff' ? prior.origin : 'user';
+    s.leases.set(tabId, { tabId, origin, mark: null, url: tab.url, title: tab.title, claimedAt: Date.now(), state: 'active' });
     s.preferredTabId = tabId;
     const page = await identity.resolveTargetId(tabId).catch(() => String(tabId));
     void this.badge(tabId, 'active');
-    this.emit({ kind: 'tab_acquired', session: s.key, page, tabId: tabId, url: tab.url, title: tab.title, origin: 'user' });
+    this.emit({ kind: 'tab_acquired', session: s.key, page, tabId, url: tab.url, title: tab.title, origin });
     this.touch(s);
     await this.persist();
     return { tabId: tabId, page, tab };
@@ -273,15 +300,21 @@ export class SessionManager {
       if (preferred === tabId) s.preferredTabId = null;
       try { await chrome.tabs.remove(tabId); }
       catch (error) {
-        s.leases.set(tabId, lease);
-        s.preferredTabId = preferred;
-        throw new SessionError('tab_close_failed', `Could not close tab ${tabId}: ${String(error)}`);
+        const missing = await chrome.tabs.get(tabId).then(() => false, (getError: unknown) => /No tab with id/i.test(String(getError)));
+        if (!missing) {
+          s.leases.set(tabId, lease);
+          s.preferredTabId = preferred;
+          throw new SessionError('tab_close_failed', `Could not close tab ${tabId}: ${String(error)}`);
+        }
       }
       this.emit({ kind: 'tab_closed', session: s.key, page, tabId, origin: lease.origin });
     } else {
       if (lease.origin === 'agent') {
-        await chrome.tabs.ungroup(tabId).catch(() => {});
-        await chrome.tabs.update(tabId, { muted: false }).catch(() => {});
+        try {
+          await chrome.tabs.update(tabId, { muted: false });
+          const tab = await chrome.tabs.get(tabId);
+          if (tab.groupId !== undefined && tab.groupId >= 0) await chrome.tabs.ungroup(tabId);
+        } catch (error) { throw new SessionError('tab_release_failed', `Could not release tab ${tabId}: ${String(error)}`, 'The tab is still controlled by this session. Retry tab_release or session_finalize.'); }
       }
       this.released.set(tabId, s.key);
       s.leases.delete(tabId);

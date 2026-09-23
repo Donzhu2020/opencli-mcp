@@ -165,8 +165,7 @@ export type ExtToHost =
   | { type: 'result'; result: Result }
   | { type: 'event'; event: BrowserEvent };
 
-// Bump when a host and extension cannot safely use each other's command semantics.
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 1;
 export const NATIVE_HOST_NAME = 'com.opencli.mcp';
 /** Chrome caps host → extension frames at 1 MiB. */
 export const MAX_FRAME_BYTES = 1024 * 1024;

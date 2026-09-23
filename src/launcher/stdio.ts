@@ -4,11 +4,13 @@
  * runtime in-process: site commands with `browser: false` work; browsing needs Chrome + the extension.
  */
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import { randomUUID } from 'node:crypto';
 import { Server } from '@modelcontextprotocol/server';
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { Runtime } from '../runtime/runtime.js';
 import { createMcpServer } from '../mcp/server.js';
 import { hostHealth, readConfig, readHostState } from '../host/state.js';
+import { SESSION_HEADER } from '../host/http.js';
 
 export async function runStdio(opts: { version: string; forceEmbedded?: boolean }): Promise<void> {
   const log = (m: string): void => { process.stderr.write(`[opencli-mcp] ${m}\n`); };
@@ -33,6 +35,7 @@ export async function runStdio(opts: { version: string; forceEmbedded?: boolean 
 }
 
 async function proxyToHost(initial: { host: string; port: number; token: string }, version: string, log: (m: string) => void): Promise<void> {
+  const sessionId = randomUUID();
   // The Chrome-spawned host restarts whenever the extension's Native port drops — an extension reload, a crash, or the
   // service worker being replaced. When that happens we must NOT kill the client's stdio channel (Codex/Claude don't
   // auto-reconnect a dead MCP server); we keep the stdio server up and reconnect to the host on demand, re-reading the
@@ -53,7 +56,7 @@ async function proxyToHost(initial: { host: string; port: number; token: string 
     const h = await hostHealth(st);
     if (!h.ok) throw new Error('error' in h ? h.error : 'host not running');
     const c = new Client({ name: 'opencli-mcp-stdio', version }, { capabilities: {} });
-    const up = new StreamableHTTPClientTransport(new URL(`http://${st.host}:${st.port}/mcp`), { requestInit: { headers: { authorization: `Bearer ${st.token}` } } });
+    const up = new StreamableHTTPClientTransport(new URL(`http://${st.host}:${st.port}/mcp`), { requestInit: { headers: { authorization: `Bearer ${st.token}`, [SESSION_HEADER]: sessionId } } });
     const gen = ++clientGen;
     up.onclose = () => { if (gen === clientGen) { client = null; log('host connection closed; will reconnect on next request'); } };
     up.onerror = () => { /* surfaced when a request fails; reconnect handles it */ };
@@ -79,7 +82,7 @@ async function proxyToHost(initial: { host: string; port: number; token: string 
   // Peek the host's instructions with a short-lived client so the stdio Server can advertise them at construction
   // (instructions travel in the initialize response), then hand off to the managed, reconnectable client.
   const peek = new Client({ name: 'opencli-mcp-stdio', version }, { capabilities: {} });
-  const peekUp = new StreamableHTTPClientTransport(new URL(`http://${initial.host}:${initial.port}/mcp`), { requestInit: { headers: { authorization: `Bearer ${initial.token}` } } });
+  const peekUp = new StreamableHTTPClientTransport(new URL(`http://${initial.host}:${initial.port}/mcp`), { requestInit: { headers: { authorization: `Bearer ${initial.token}`, [SESSION_HEADER]: sessionId } } });
   await peek.connect(peekUp);
   const instructions = peek.getInstructions();
   await peek.close().catch(() => {});
@@ -117,7 +120,11 @@ async function proxyToHost(initial: { host: string; port: number; token: string 
     if (closing) return; closing = true;
     log(why);
     transport.onclose = undefined;
-    void (client?.close().catch(() => {}) ?? Promise.resolve()).finally(() => process.exit(0));
+    void (async () => {
+      await client?.close().catch(() => {});
+      const st = readHostState();
+      if (st) await fetch(`http://${st.host}:${st.port}/session`, { method: 'DELETE', headers: { authorization: `Bearer ${st.token}`, [SESSION_HEADER]: sessionId }, signal: AbortSignal.timeout(1500) }).catch(() => {});
+    })().finally(() => process.exit(0));
   };
   // Only the client (Codex/Claude) going away ends the launcher — never a host drop.
   transport.onclose = () => bye('stdio closed');

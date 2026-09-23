@@ -70,7 +70,7 @@ async function main(): Promise<void> {
       await rt.init();
       const token = has('--no-auth') ? '' : loadOrCreateToken();
       const h = await startHttpServer(rt, { port: Number(flag('--port') ?? 0), token, version: VERSION, allowNoAuth: has('--no-auth') });
-      process.stderr.write(`[opencli-mcp] serving http://${h.host}:${h.port}/mcp${token ? ' (Authorization: Bearer <~/.opencli-mcp/token>)' : ' (no auth)'}\n`);
+      process.stderr.write(`[opencli-mcp] serving http://${h.host}:${h.port}/mcp${token ? ' (Authorization: Bearer <~/.opencli-mcp/token>)' : ' (no auth)'}; direct clients also need X-OpenCLI-Session-ID\n`);
       return;
     }
     case 'setup': {

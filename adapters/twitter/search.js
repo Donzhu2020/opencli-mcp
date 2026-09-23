@@ -1,4 +1,4 @@
-import { defineAdapter, errors } from '@opencli-mcp/adapter-sdk';
+import { defineAdapter, errors } from 'opencli-mcp/adapter-sdk';
 import { ensureOnX, gql, walkTimeline } from './_shared.js';
 
 const QUERY_ID = 'nKAncKPF1fV1xltvF3UUlw';

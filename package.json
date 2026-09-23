@@ -34,11 +34,8 @@
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
-    "packages/",
-    "adapters/"
-  ],
-  "bundledDependencies": [
-    "@opencli-mcp/adapter-sdk"
+    "adapters/",
+    "adapter-sdk/"
   ],
   "dsh": {
     "bundle": {
@@ -50,7 +47,6 @@
     "@modelcontextprotocol/core": "^2.0.0",
     "@modelcontextprotocol/node": "^2.0.0",
     "@modelcontextprotocol/server": "^2.0.0",
-    "@opencli-mcp/adapter-sdk": "file:packages/adapter-sdk",
     "jsonc-parser": "^3.3.1",
     "tree-sitter-javascript": "^0.25.0",
     "web-tree-sitter": "^0.27.0",
@@ -69,5 +65,11 @@
     "tsx": "^4.23.13",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"
+  },
+  "exports": {
+    "./adapter-sdk": {
+      "types": "./adapter-sdk/index.d.ts",
+      "default": "./adapter-sdk/index.js"
+    }
   }
 }

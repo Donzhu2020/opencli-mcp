@@ -2,8 +2,8 @@
 import { z, type ZodTypeAny } from 'zod';
 import { ActionError } from '../api/errors.js';
 
-import type { Arg } from '@opencli-mcp/adapter-sdk';
-export type { Arg } from '@opencli-mcp/adapter-sdk';
+import type { Arg } from 'opencli-mcp/adapter-sdk';
+export type { Arg } from 'opencli-mcp/adapter-sdk';
 
 export interface ArgView {
   name: string;

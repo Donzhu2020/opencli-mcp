@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ActionError, errorEnvelope } from '../src/api/errors.js';
-import { errors } from '@opencli-mcp/adapter-sdk';
+import { errors } from 'opencli-mcp/adapter-sdk';
 
 describe('error envelopes', () => {
   it('preserves native runtime and adapter codes with their recovery details', () => {

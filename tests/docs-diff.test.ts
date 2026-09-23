@@ -24,7 +24,7 @@ describe('tools.define', () => {
     const def = { site: 'demo', name: 'thing', description: 'd', access: 'read' as const, args: [{ name: 'q', required: true }], func: 'async ({ tab, args }) => { await tab.goto("https://x.test/?q=" + args.q); return await tab.observe(); }' };
     validateDefinition(def);
     const mod = renderAdapterModule(def);
-    expect(mod).toContain("import { defineAdapter } from '@opencli-mcp/adapter-sdk'");
+    expect(mod).toContain("import { defineAdapter } from 'opencli-mcp/adapter-sdk'");
     expect(mod).toContain('export default defineAdapter({'); expect(mod).toContain('run: async ({ tab, args }) =>');
     expect(() => validateDefinition({ ...def, func: 'not a function {' })).toThrow(/parse/);
   });

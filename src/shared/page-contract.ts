@@ -52,7 +52,22 @@ export interface FindEntry {
 }
 export interface FindResult { matches_n: number; visible_n: number; selector: string; entries: FindEntry[] }
 
-export interface AriaArgs { /** only the subtree of elements intersecting the viewport */ viewport?: boolean }
+export interface AriaArgs {
+  /** only the subtree of elements intersecting the viewport */
+  viewport?: boolean;
+  /** open one branch of a previous snapshot (`eN`). Ignores viewport so an off-screen collapsed branch can be read. */
+  ref?: string;
+  /** character budget before branches with a ref collapse. The host uses the default; tests pass a small one. */
+  budget?: number;
+}
+
+export interface ReadTextArgs { maxChars?: number; maxSteps?: number; waitMs?: number }
+/** Linear document text. `complete` means the page had a bottom. `unbounded` means the page grew on every pass (a feed) and the head already collected is the answer. */
+export interface ReadTextResult { text: string; complete: boolean; reason?: 'budget' | 'unbounded'; chars: number }
+
+export interface DomClickArgs { selector: string; fallback: string | null }
+export interface DomClickOk { ok: true; ref: string | null; tag: string; selector: string | null; x: number; y: number }
+export type DomClickResult = DomClickOk | ResolveFail
 
 export interface PointInfo { tag: string; editable: boolean; isSelect: boolean }
 

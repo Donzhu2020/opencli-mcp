@@ -8,7 +8,10 @@ import {
   ACT_MARK, FRAME_MARK, ENGINE_GLOBAL, PAGE_GLOBAL,
   type ResolveArgs, type ResolveOutcome, type Candidate, type FindArgs, type FindResult, type FindEntry,
   type AriaArgs, type PointInfo, type FrameProbeResult, type SettleArgs, type SelectResult, type ElementAtResult, type Box, type Expectation, type CheckResult,
+  type ReadTextArgs, type ReadTextResult, type DomClickArgs, type DomClickResult,
 } from '../../../src/shared/page-contract.js';
+import { collapseAria, subtreeByRef } from '../../../src/shared/aria-collapse.js';
+export { collapseAria, subtreeByRef };
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Injected = any;
@@ -109,7 +112,7 @@ export async function resolve(args: ResolveArgs): Promise<ResolveOutcome> {
   }
   for (const st of states) if (!is(el, st)) return { error: { code: `not_${st}`, message: `element is not ${st} after scrolling` }, retry: true };
   const b = el.getBoundingClientRect();
-  if (b.width <= 0 || b.height <= 0) return { error: { code: 'not_visible', message: 'element has no clickable box' }, retry: true };
+  if (b.width <= 0 || b.height <= 0) return { error: { code: 'not_visible', message: 'element has no clickable box', hint: 'Retry this same target once with method:"dom". That runs HTMLElement.click() and sends no mouse event. Do not send it after a click that already returned ok.' }, retry: true };
   const x = Math.max(0, b.left + b.width / 2), y = Math.max(0, b.top + b.height / 2);
   if (x > innerWidth || y > innerHeight) return { error: { code: 'not_visible', message: 'element is outside the viewport' }, retry: true };
   const tag = el.tagName.toLowerCase();
@@ -223,7 +226,179 @@ export function frameProbe(args: { step: string | number }): FrameProbeResult {
 }
 export function clearFrameMark(): void { document.querySelectorAll(`[${FRAME_MARK}]`).forEach((n) => n.removeAttribute(FRAME_MARK)); }
 
-// ── observation: the aria snapshot is the one state source ──
+// ── click delivery: a real mouse event must hit the page; DOM click is an explicit other call ──
+let probeHits = 0;
+let probeCleanup: (() => void) | null = null;
+/** Listen before the host dispatches the mouse event. Capture phase, so a handler that stops the event still counts as delivery. */
+export function armClickProbe(): void {
+  probeCleanup?.();
+  probeHits = 0;
+  const on = () => { probeHits++; };
+  document.addEventListener('pointerdown', on, true);
+  document.addEventListener('mousedown', on, true);
+  probeCleanup = () => {
+    document.removeEventListener('pointerdown', on, true);
+    document.removeEventListener('mousedown', on, true);
+    probeCleanup = null;
+  };
+}
+export function readClickProbe(): boolean {
+  const hit = probeHits > 0;
+  probeCleanup?.();
+  probeHits = 0;
+  return hit;
+}
+
+/** HTMLElement.click() on a resolved element. No scroll, no hit-test, no mouse event — the caller already chose this instead of a pointer. */
+export function domClick(args: DomClickArgs): DomClickResult {
+  let matches = query(args.selector);
+  if (!matches.length && args.fallback) matches = query(args.fallback);
+  if (!matches.length) return { error: { code: 'not_found', message: `no element matches ${args.selector}` }, retry: true };
+  let el = matches[0];
+  if (matches.length > 1) {
+    const visible = matches.filter((m) => is(m, 'visible'));
+    if (visible.length === 1) el = visible[0];
+    else return { error: { code: 'selector_ambiguous', message: `${matches.length} elements match ${args.selector}${visible.length ? ` (${visible.length} visible)` : ''}`, hint: 'Add nth, use a more specific locator, or act on a ref/selector from find.', candidates: matches.slice(0, 8).map(candidate) }, retry: false };
+  }
+  const enabled = stateOf(el, 'enabled');
+  if (!enabled.matches) return { error: { code: 'not_enabled', message: `element is not enabled${enabled.received.startsWith('error:') ? ` (${enabled.received.slice(6)})` : ''}`, candidates: [candidate(el)] }, retry: true };
+  markAct(el);
+  (el as HTMLElement).click();
+  const b = el.getBoundingClientRect();
+  return { ok: true, ref: ariaRefOf(el), tag: el.tagName.toLowerCase(), selector: replaySelector(el), x: b.width > 0 ? b.left + b.width / 2 : 0, y: b.height > 0 ? b.top + b.height / 2 : 0 };
+}
+
+// ── reading: linear text, not the action map ──
+const READ_MAX_CHARS = 60_000;
+/** 0.8 viewport per step, so this reaches a finite page of about 30 screens before giving up. */
+const READ_MAX_STEPS = 40;
+/** Growths at the bottom, not reset while scrolling through what was just appended. */
+const READ_UNBOUNDED_GROWS = 3;
+
+interface ScrollPort { read(): { x: number; y: number; height: number; scrollHeight: number }; scrollTo(x: number, y: number): void }
+
+function asPort(el: Element, heightFallback: number): ScrollPort {
+  return {
+    read: () => ({
+      x: el.scrollLeft || 0,
+      y: el.scrollTop || 0,
+      height: el.clientHeight || heightFallback,
+      scrollHeight: el.scrollHeight || 0,
+    }),
+    scrollTo(x: number, y: number) {
+      const left = Math.max(0, x);
+      const top = Math.max(0, y);
+      try { el.scrollTo({ left, top, behavior: 'instant' }); } catch { /* jsdom */ }
+      el.scrollLeft = left;
+      el.scrollTop = top;
+      el.dispatchEvent(new Event('scroll'));
+    },
+  };
+}
+
+/** The scrollport that can still move. An inner overflow box wins when it has more hidden content than the document. */
+function pickPort(): ScrollPort {
+  const root = document.scrollingElement || document.documentElement;
+  const doc = asPort(root, window.innerHeight || 800);
+  let best = doc;
+  let bestRange = doc.read().scrollHeight - doc.read().height;
+  if (!document.body) return doc;
+  for (const el of document.body.querySelectorAll('*')) {
+    let oy = '';
+    try { oy = getComputedStyle(el).overflowY; } catch { oy = ''; }
+    if (oy !== 'auto' && oy !== 'scroll' && oy !== 'overlay') continue;
+    const port = asPort(el, 0);
+    const m = port.read();
+    if (m.height <= 0) continue;
+    const range = m.scrollHeight - m.height;
+    if (range > bestRange + 1) { best = port; bestRange = range; }
+  }
+  return best;
+}
+function skipRead(el: Element | null): boolean {
+  while (el) {
+    const tag = el.tagName;
+    if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT') return true;
+    if (el.id === 'opencli-mcp-annotate') return true;
+    el = el.parentElement;
+  }
+  return false;
+}
+function pageLines(): string[] {
+  const out: string[] = [];
+  if (!document.body) return out;
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let n: Node | null = walker.nextNode();
+  while (n) {
+    if (!skipRead(n.parentElement)) {
+      const t = (n.textContent || '').replace(/\s+/g, ' ').trim();
+      if (t) out.push(t);
+    }
+    n = walker.nextNode();
+  }
+  return out;
+}
+
+/**
+ * Text of a bounded page. Scrolls to mount lazy content, dedupes lines already seen, then restores the scroll position.
+ * A feed that grows every time we reach the bottom stops after a few passes: the head already read is the answer.
+ */
+export async function readText(args: ReadTextArgs = {}): Promise<ReadTextResult> {
+  const maxChars = args.maxChars && args.maxChars > 0 ? Math.round(args.maxChars) : READ_MAX_CHARS;
+  const maxSteps = args.maxSteps && args.maxSteps > 0 ? Math.round(args.maxSteps) : READ_MAX_STEPS;
+  const waitMs = args.waitMs === undefined ? 40 : Math.max(0, args.waitMs);
+  const wait = () => new Promise((r) => setTimeout(r, waitMs));
+  const port = pickPort();
+  const saved = port.read();
+  const seen = new Set<string>();
+  const lines: string[] = [];
+  const absorb = () => {
+    for (const line of pageLines()) if (!seen.has(line)) { seen.add(line); lines.push(line); }
+  };
+  const finish = (complete: boolean, reason?: ReadTextResult['reason']): ReadTextResult => {
+    const text = lines.join('\n').slice(0, maxChars);
+    return { text, complete, ...(reason && { reason }), chars: text.length };
+  };
+  try {
+    port.scrollTo(saved.x, 0);
+    // Count height increases and do not reset them while scrolling through a tall append.
+    let grows = 0;
+    let lastHeight = port.read().scrollHeight;
+    for (let step = 0; step < maxSteps; step++) {
+      await wait();
+      absorb();
+      if (lines.join('\n').length >= maxChars) return finish(false, 'budget');
+      const m = port.read();
+      // Only a growth at the previous bottom counts. A taller image mid-page does not make this a feed.
+      const reachedPriorBottom = m.y + m.height >= lastHeight - 1;
+      if (reachedPriorBottom && m.scrollHeight > lastHeight + 1) {
+        grows++;
+        if (grows >= READ_UNBOUNDED_GROWS) return finish(false, 'unbounded');
+      }
+      lastHeight = m.scrollHeight;
+      const atBottom = m.y + m.height >= m.scrollHeight - 1;
+      if (atBottom) {
+        const heightBefore = m.scrollHeight;
+        port.scrollTo(saved.x, m.y + 1);
+        await wait();
+        absorb();
+        if (lines.join('\n').length >= maxChars) return finish(false, 'budget');
+        const after = port.read();
+        if (after.scrollHeight <= heightBefore + 1) return finish(true);
+        grows++;
+        lastHeight = after.scrollHeight;
+        if (grows >= READ_UNBOUNDED_GROWS) return finish(false, 'unbounded');
+      }
+      const here = port.read();
+      port.scrollTo(saved.x, here.y + Math.max(1, Math.floor(here.height * 0.8)));
+    }
+    return finish(false, 'budget');
+  } finally {
+    port.scrollTo(saved.x, saved.y);
+  }
+}
+
+// ── observation: the aria snapshot is the action map, not the document ──
 const CRED = /user[-_ ]?name|e[-_ ]?mail|one[-_ ]?time[-_ ]?code|password|passcode|passwd|\botp\b|\b(?:2fa|mfa)\b|phone|mobile|\btel\b|\bcc-|cvc|cvv|csc|card|credit|payment|security[-_ ]?code|\biban\b|account[-_ ]?number|routing|ssn|social[-_ ]?security/i;
 /** Credential fields never expose their value to the model (the ChatGPT plugin's rule). */
 export function isCredentialField(el: Element): boolean {
@@ -268,7 +443,8 @@ export function aria(args: AriaArgs = {}): string {
     }
     // pin the line to the element's stable ref (identity is independent of the viewport filter below)
     let rline = line.replace('[ref=' + m[2] + ']', '[ref=' + stableRefOf(el) + ']');
-    if (args.viewport && !intersectsViewport(el)) { dropBelow = indent; continue; }
+    // a ref opens that branch even when it is off screen; viewport is not a page of the tree
+    if (args.viewport && !args.ref && !intersectsViewport(el)) { dropBelow = indent; continue; }
     if (m[3] && isCredentialField(el)) { out.push(rline.slice(0, rline.length - m[3].length) + ': <redacted>'); continue; }
     // Drop a value that just repeats the accessible name (Playwright renders `textbox "X": X` → the reported "X X" dup).
     if (m[3]) { const val = m[3].replace(/^:\s*/, '').trim(); if (val && rline.includes('"' + val + '"')) rline = rline.slice(0, rline.length - m[3].length); }
@@ -277,7 +453,14 @@ export function aria(args: AriaArgs = {}): string {
   // the plugin always ends its state with the focused element; ours names the focused ref so the next action can target it
   const active = document.activeElement;
   const focusRef = active && active !== document.body ? ariaRefOf(active) : null;
-  return out.map(capLine).join('\n') + (focusRef ? `\nFocused: [ref=${focusRef}]` : '');
+  let text = out.map(capLine).join('\n') + (focusRef ? `\nFocused: [ref=${focusRef}]` : '');
+  if (args.ref) {
+    const sub = subtreeByRef(text, args.ref);
+    if (sub == null) return `No node [ref=${args.ref}] in this snapshot. Observe again without ref.`;
+    text = sub;
+  }
+  // The host collapses the copy it returns. A caller that passes budget (tests) collapses here.
+  return typeof args.budget === 'number' ? collapseAria(text, args.budget).text : text;
 }
 
 const describe = (el: Element, i: number): FindEntry => {
@@ -350,7 +533,7 @@ export function check(args: Expectation): CheckResult {
   return { ok: failed.length === 0, failed, url: location.href, title: document.title };
 }
 
-export const api = { check, resolve, pointInfo, focus, readValue, fill, nativeSet, isChecked, select, caretToEnd, isFileInput, useAssociatedFileInput, clearActMark, settle, frameProbe, clearFrameMark, aria, find, elementAt, annotate, unannotate };
+export const api = { check, resolve, pointInfo, focus, readValue, fill, nativeSet, isChecked, select, caretToEnd, isFileInput, useAssociatedFileInput, clearActMark, settle, frameProbe, clearFrameMark, aria, find, elementAt, annotate, unannotate, armClickProbe, readClickProbe, domClick, readText };
 export type PageApi = typeof api;
 
 (globalThis as any)[PAGE_GLOBAL] = api;

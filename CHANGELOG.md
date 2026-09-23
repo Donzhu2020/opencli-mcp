@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.0.12 — 2026-09-23
+
+- Add `tab_read` / `tab.read()` for bounded document text, including lazy content, deduplication, and scroll restoration.
+- Collapse large accessibility snapshots into an action map and allow expanding a branch by ref.
+- Detect clicks that never reach the page and support explicit `method:"dom"` for single-click activation; real mouse input remains the default.
 
 - Remove the unused OpenCLI CLI dependency tree, legacy page wrappers and CLI argument filtering; use the adapter SDK argument type throughout. Keep only runtime docs in the npm package, clean build output before compilation, and remove historical release artifacts, obsolete design drafts and scripts. Remove unused extension transport operations and error-code compatibility mapping; adapters emit native error codes.
 

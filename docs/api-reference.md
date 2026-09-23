@@ -56,7 +56,8 @@ class Tab {
   observe(opts?: ObserveOptions): Promise<{ url: string | null; title: string | null; state?: string; diff?: boolean; changed?: { added: number; removed: number; changed?: number; }; image?: ImageValue; }>;
   screenshot(opts?: { fullPage?: boolean; annotate?: boolean; format?: "png" | "jpeg"; quality?: number; }): Promise<ImageValue>;
   find(target: Target & { limit?: number; }): Promise<FindResult | ElementAtResult>;
-  act(opts: ActOptions): Promise<Record<string, unknown>>; // wait + act in one call at the runtime edge: locate → wait actionable → hit-test → real input → settle.
+  read(opts?: ReadOptions): Promise<ReadTextResult>; // Linear text of a bounded document. Scrolls to mount lazy content, dedupes, restores the scroll position. No refs. A feed that grows without a bottom returns reason `unbounded` and the head already read — do not call it again to finish the feed.
+  act(opts: ActOptions): Promise<Record<string, unknown>>; // wait + act in one call at the runtime edge: locate → wait actionable → hit-test → real input → settle. `method:'dom'` skips the mouse event.
   webmcp: { // WebMCP: tools the page itself registers via navigator.modelContext (page-provided tool source).
     list(): Promise<Array<{ name: string; description?: string; inputSchema?: unknown; }>>;
     call(name: string, input?: Record<string, unknown>): Promise<unknown>;
@@ -90,7 +91,9 @@ type Target = ({ frame?: FrameStep | FrameStep[]; within?: string }) & (
 
 type ActAction = 'click' | 'dblclick' | 'hover' | 'focus' | 'fill' | 'type' | 'press' | 'select' | 'check' | 'uncheck' | 'upload' | 'drag' | 'scroll' | 'back' | 'forward' | 'reload';
 
-interface ActOptions { target?: Target; action: ActAction; value?: string; files?: string[]; to?: Target; direction?: 'up' | 'down' | 'left' | 'right'; amount?: number; timeoutMs?: number; settleMs?: number }
+interface ActOptions { target?: Target; action: ActAction; value?: string; files?: string[]; to?: Target; direction?: 'up' | 'down' | 'left' | 'right'; amount?: number; timeoutMs?: number; settleMs?: number; method?: 'cdp' | 'dom' }
 
-interface ObserveOptions { mode?: 'state' | 'screenshot' | 'both'; diff?: boolean; viewport?: boolean; annotate?: boolean; fullPage?: boolean }
+interface ObserveOptions { mode?: 'state' | 'screenshot' | 'both'; diff?: boolean; viewport?: boolean; ref?: string; annotate?: boolean; fullPage?: boolean }
+
+interface ReadOptions { maxChars?: number }
 ```

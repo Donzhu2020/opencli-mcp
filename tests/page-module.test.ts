@@ -192,6 +192,157 @@ describe('frames', () => {
   });
 });
 
+describe('readText', () => {
+  function installScroll(height: number, scrollHeight0: number, onScroll?: (y: number) => void) {
+    let y = 0;
+    let scrollHeight = scrollHeight0;
+    Object.defineProperty(window, 'innerHeight', { configurable: true, get: () => height });
+    Object.defineProperty(window, 'scrollY', { configurable: true, get: () => y });
+    Object.defineProperty(document.documentElement, 'scrollTop', { configurable: true, get: () => y, set: (v: number) => { y = Number(v); onScroll?.(y); } });
+    Object.defineProperty(document.documentElement, 'scrollHeight', { configurable: true, get: () => scrollHeight });
+    Object.defineProperty(document.documentElement, 'clientHeight', { configurable: true, get: () => height });
+    window.scrollTo = ((x?: number | ScrollToOptions, yy?: number) => {
+      const next = typeof x === 'number' ? (yy ?? 0) : (x?.top ?? 0);
+      document.documentElement.scrollTop = next;
+    }) as typeof window.scrollTo;
+    return {
+      get y() { return y; }, set y(v: number) { y = v; },
+      get scrollHeight() { return scrollHeight; }, set scrollHeight(v: number) { scrollHeight = v; },
+    };
+  }
+  it('returns the document once, then puts the scroll position back', async () => {
+    document.body.innerHTML = '<article><p>Hello article</p><p>Hello article</p></article>';
+    const sc = installScroll(100, 100);
+    sc.y = 40;
+    stubEngine();
+    const p = await page();
+    const r = await p.readText({ waitMs: 0, maxSteps: 4 });
+    expect(r.complete).toBe(true);
+    expect(r.reason).toBeUndefined();
+    expect(r.text).toBe('Hello article');
+    expect(sc.y).toBe(40);
+  });
+  it('mounts one lazy chunk, and stops when every nudge grows the page', async () => {
+    document.body.innerHTML = '<article><p>Intro</p></article>';
+    const sc = installScroll(100, 100, (y) => {
+      if (sc.scrollHeight > 100 || y <= 0) return;
+      sc.scrollHeight = 250;
+      const n = document.createElement('p');
+      n.textContent = 'Mounted later';
+      document.body.appendChild(n);
+    });
+    stubEngine();
+    const p = await page();
+    const lazy = await p.readText({ waitMs: 0, maxSteps: 6 });
+    expect(lazy.complete).toBe(true);
+    expect(lazy.text).toContain('Intro');
+    expect(lazy.text).toContain('Mounted later');
+    expect(sc.y).toBe(0);
+
+    document.body.innerHTML = '<article><p>Intro</p></article>';
+    const feed = installScroll(100, 100, (y) => {
+      if (y + 100 < feed.scrollHeight - 1) return;
+      feed.scrollHeight += 30;
+      const n = document.createElement('p');
+      n.textContent = `chunk ${feed.scrollHeight}`;
+      document.body.appendChild(n);
+    });
+    const grown = await p.readText({ waitMs: 0, maxSteps: 6 });
+    expect(grown.complete).toBe(false);
+    expect(grown.reason).toBe('unbounded');
+    expect(grown.text).toContain('chunk');
+    expect(feed.y).toBe(0);
+  });
+  it('reads a finite page taller than a few screens, and a tall append is a feed', async () => {
+    document.body.innerHTML = '<article><p>Start</p><p>Bottom line of a long article</p></article>';
+    installScroll(100, 900);
+    stubEngine();
+    const p = await page();
+    const tall = await p.readText({ waitMs: 0, maxSteps: 20 });
+    expect(tall.complete).toBe(true);
+    expect(tall.reason).toBeUndefined();
+    expect(tall.text).toContain('Bottom line of a long article');
+
+    document.body.innerHTML = '<article><p>Intro</p></article>';
+    const feed = installScroll(100, 100, (y) => {
+      if (y + 100 < feed.scrollHeight - 1) return;
+      feed.scrollHeight += 200;
+      const n = document.createElement('p');
+      n.textContent = `block ${feed.scrollHeight}`;
+      document.body.appendChild(n);
+    });
+    const grown = await p.readText({ waitMs: 0, maxSteps: 24 });
+    expect(grown.complete).toBe(false);
+    expect(grown.reason).toBe('unbounded');
+  });
+  it('scrolls an inner overflow box and restores it', async () => {
+    document.body.innerHTML = '<div id="log" style="overflow-y: auto"><p>Intro</p></div>';
+    const log = document.getElementById('log')!;
+    let y = 15;
+    let sh = 400;
+    let grew = false;
+    Object.defineProperty(document.documentElement, 'clientHeight', { configurable: true, get: () => 800 });
+    Object.defineProperty(document.documentElement, 'scrollHeight', { configurable: true, get: () => 800 });
+    Object.defineProperty(log, 'clientHeight', { configurable: true, get: () => 100 });
+    Object.defineProperty(log, 'scrollHeight', { configurable: true, get: () => sh });
+    Object.defineProperty(log, 'scrollTop', {
+      configurable: true,
+      get: () => y,
+      set: (v: number) => {
+        y = Number(v);
+        if (!grew && y > 0) {
+          grew = true;
+          sh = 400;
+          const n = document.createElement('p');
+          n.textContent = 'Later row';
+          log.appendChild(n);
+        }
+      },
+    });
+    stubEngine();
+    const p = await page();
+    const r = await p.readText({ waitMs: 0, maxSteps: 12 });
+    expect(r.complete).toBe(true);
+    expect(r.text).toContain('Later row');
+    expect(y).toBe(15);
+  });
+});
+
+describe('action map collapse and DOM click', () => {
+  it('collapses the largest ref branch and opens it again by ref', async () => {
+    document.body.innerHTML = '<nav id="n"></nav><a id="h">Home</a><a id="a">About</a><main id="m"></main><button id="s">Save</button>';
+    const [n, h, a, m, s] = ['n', 'h', 'a', 'm', 's'].map((id) => document.getElementById(id)!);
+    const tree = ['- navigation [ref=e1]', '  - link "Home" [ref=e2]', '  - link "About" [ref=e3]', '- main [ref=e4]', '  - button "Save" [ref=e5]'].join('\n');
+    stubEngine({ ariaText: tree, refs: { e1: n, e2: h, e3: a, e4: m, e5: s } });
+    const p = await page();
+    const collapsed = p.aria({ budget: 40 });
+    expect(collapsed).toContain('[ref=e1] (collapsed)');
+    expect(collapsed).not.toContain('Home');
+    expect(collapsed).toContain('Observe again with that ref');
+    const opened = p.aria({ ref: 'e1', budget: 5000 });
+    expect(opened).toContain('Home');
+    expect(opened).toContain('About');
+    expect(opened).not.toContain('Save');
+    expect(p.aria({ ref: 'e9', budget: 5000 })).toContain('No node [ref=e9]');
+  });
+  it('clicks an element with no box and reports whether a mouse event arrived', async () => {
+    document.body.innerHTML = '<button id="go">Go</button><button id="no" disabled>No</button>';
+    const go = document.getElementById('go')!;
+    let clicks = 0;
+    go.addEventListener('click', () => { clicks++; });
+    stubEngine();
+    const p = await page();
+    expect(p.domClick({ selector: '#go', fallback: null })).toMatchObject({ ok: true, tag: 'button' });
+    expect(clicks).toBe(1);
+    expect(p.domClick({ selector: '#no', fallback: null })).toMatchObject({ error: { code: 'not_enabled' } });
+    p.armClickProbe();
+    expect(p.readClickProbe()).toBe(false);
+    p.armClickProbe();
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(p.readClickProbe()).toBe(true);
+  });
+});
+
 describe('check', () => {
   it('evaluates text, url, title, selector and absence expectations', async () => {
     document.body.innerHTML = '<h1>Results for red shoes</h1><button id="b">Go</button>';

@@ -25,6 +25,12 @@ describe('tab_act input', () => {
     expect(err(() => checkActInput({ action: 'click', target: { ref: 'e1' }, value: 'x' })).message).toMatch(/does not take value/);
   });
 
+  it('allows method dom only on an element click', () => {
+    expect(checkActInput({ action: 'click', target: { ref: 'e1' }, method: 'dom' })).toMatchObject({ method: 'dom', target: { ref: 'e1' } });
+    expect(err(() => checkActInput({ action: 'press', target: { ref: 'e1' }, value: 'Enter', method: 'dom' })).message).toMatch(/does not take method/);
+    expect(err(() => checkActInput({ action: 'click', target: { x: 1, y: 2 }, method: 'dom' })).message).toMatch(/not a point/);
+  });
+
   it('rejects an empty expect and visible without a locator', () => {
     expect(() => checkExpect({})).toThrow(ActionError);
     expect(() => checkExpect({ text: 'Saved', visible: false })).toThrow(/selector or ref/);

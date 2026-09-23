@@ -155,6 +155,8 @@ async function resolve(io: ActIO, spec: ActSpec, target: ActTarget, timeoutMs: n
 }
 
 export async function performAct(io: ActIO, spec: ActSpec): Promise<ActResult> {
+  if (spec.method === 'dom') return performDomClick(io, spec);
+  if (spec.method !== undefined && spec.method !== 'cdp') throw new ActError('invalid_args', `method "${spec.method}" is not a click method.`, 'method is "cdp" (default) or "dom".');
   const timeoutMs = spec.timeoutMs ?? 3000;
   const started = Date.now();
   const r = await resolve(io, spec, spec.target, timeoutMs, started);
@@ -169,8 +171,22 @@ export async function performAct(io: ActIO, spec: ActSpec): Promise<ActResult> {
     case 'focus': { const f = await focus(); if (f !== 'done') throw new ActError('action_failed', `focus: ${f}`); break; }
     case 'click': case 'dblclick': {
       const count = spec.kind === 'dblclick' ? 2 : 1;
+      await io.call('armClickProbe');
       await mouse(io, 'mouseMoved', r.x, r.y);
       for (let i = 1; i <= count; i++) { await mouse(io, 'mousePressed', r.x, r.y, i); await mouse(io, 'mouseReleased', r.x, r.y, i); }
+      // A destroyed execution context is retried in a fresh world, where this probe reads 0. Navigation is the delivery signal for that case.
+      let landed = false;
+      try { landed = Boolean(await io.call('readClickProbe', undefined, 1500)); } catch { landed = false; }
+      if (!landed && navWait) {
+        const nav = await navWait.catch(() => ({ navigated: false as const }));
+        if (nav.navigated) { landed = true; Object.assign(base, { navigated: true, url: nav.url }); }
+      }
+      if (!landed) {
+        const hint = spec.kind === 'click'
+          ? 'Retry this same target once with method:"dom" only when the event was not delivered or the element has no box. method:"dom" runs HTMLElement.click() and sends no mouse event. Do not send it after a click that already returned ok.'
+          : 'Observe and retry this double-click. method:"dom" is only for a single click.';
+        throw new ActError('not_delivered', 'the click did not reach the page — no pointerdown or mousedown fired', hint);
+      }
       break;
     }
     case 'check': case 'uncheck': {
@@ -263,6 +279,30 @@ export async function performAct(io: ActIO, spec: ActSpec): Promise<ActResult> {
   if (settleMs > 0 && !(base as { navigated?: boolean }).navigated) { try { await io.call('settle', { maxMs: settleMs, quietMs: Math.min(200, settleMs) }, settleMs + 1500); } catch { /* navigation in flight */ } }
   const settled = Date.now();
   Object.assign(base, { elapsedMs: settled - started, timings: { resolveMs: base.waitedMs, actionMs: actionDone - started - base.waitedMs, settleMs: settled - actionDone } });
+  try { await io.call('clearActMark', undefined, 1000); } catch { /* page changed */ }
+  return base;
+}
+
+/** Explicit DOM activation. No mouse event is sent, so this cannot be a second click after a delivered one unless the caller asks again. */
+async function performDomClick(io: ActIO, spec: ActSpec): Promise<ActResult> {
+  if (spec.kind !== 'click') throw new ActError('invalid_args', 'method "dom" is only for click.', 'Real mouse input is the default. method:"dom" is the one click that has no layout box.');
+  if (typeof spec.target.x === 'number') throw new ActError('invalid_args', 'method "dom" needs an element, not a point.', 'A point has no HTMLElement.click().');
+  const selector = targetToSelector(spec.target);
+  if (!selector) throw new ActError('invalid_target', 'target needs an aria ref (eN), a selector, or a semantic locator (role/name/label/text/testid)');
+  const timeoutMs = spec.timeoutMs ?? 3000;
+  const started = Date.now();
+  const res = await io.call('domClick', { selector, fallback: fallbackSelector(spec.target) }) as { ok?: true; error?: { code: string; message: string; hint?: string; candidates?: unknown[] }; ref?: string | null; tag?: string; selector?: string | null; x?: number; y?: number; matches_n?: number };
+  if (!res || res.ok !== true) {
+    const e = res?.error ?? { code: 'action_failed', message: 'DOM click failed' };
+    throw new ActError(e.code, e.message, e.hint, e.candidates ? { candidates: e.candidates } : undefined);
+  }
+  const base: ActResult = { ok: true, kind: 'click', ref: res.ref, matches_n: 1, visible_n: 1, match_level: 'exact', point: { x: Math.round(res.x ?? 0), y: Math.round(res.y ?? 0) }, method: 'dom', hit: 'target', tag: res.tag ?? '', waitedMs: Date.now() - started, selector: res.selector ?? undefined };
+  const navWait = io.waitForNavigation?.(300, timeoutMs + 12_000);
+  if (navWait) { const nav = await navWait.catch(() => ({ navigated: false as const })); if (nav.navigated) Object.assign(base, { navigated: true, url: nav.url }); }
+  const settleMs = spec.settleMs ?? 600;
+  const actionDone = Date.now();
+  if (settleMs > 0 && !base.navigated) { try { await io.call('settle', { maxMs: settleMs, quietMs: Math.min(200, settleMs) }, settleMs + 1500); } catch { /* navigation in flight */ } }
+  Object.assign(base, { elapsedMs: Date.now() - started, timings: { resolveMs: base.waitedMs, actionMs: actionDone - started - base.waitedMs, settleMs: Date.now() - actionDone } });
   try { await io.call('clearActMark', undefined, 1000); } catch { /* page changed */ }
   return base;
 }

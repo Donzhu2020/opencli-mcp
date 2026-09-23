@@ -29,6 +29,7 @@ export interface ActToolInput {
   files?: string[];
   direction?: 'up' | 'down' | 'left' | 'right';
   amount?: number;
+  method?: 'cdp' | 'dom';
 }
 
 type Need = 'required' | 'nonempty' | 'present' | 'optional' | 'forbidden';
@@ -66,6 +67,7 @@ export function expectedAct(action: ActAction): Record<string, string> {
     to: rule.to === 'required' ? `required. ${TARGET_HELP}` : 'forbidden',
     direction: rule.scroll ? 'optional up|down|left|right (default down)' : 'forbidden',
     amount: rule.scroll ? 'optional number (default 600)' : 'forbidden',
+    method: action === 'click' ? 'optional cdp|dom. dom runs HTMLElement.click() and sends no mouse event. Only after not_delivered or no box.' : 'forbidden',
   };
 }
 
@@ -117,7 +119,7 @@ function present(value: unknown): boolean {
   return value !== undefined;
 }
 
-export function checkActInput(input: ActToolInput): { target?: Target; to?: Target } {
+export function checkActInput(input: ActToolInput): { target?: Target; to?: Target; method?: 'cdp' | 'dom' } {
   const rule = RULES[input.action];
   const target = pickTarget(input.target, input.action, 'target');
   const to = pickTarget(input.to, input.action, 'to');
@@ -131,7 +133,12 @@ export function checkActInput(input: ActToolInput): { target?: Target; to?: Targ
   if (rule.files === 'required' && !(input.files && input.files.length)) reject(input.action, `action "${input.action}" needs files.`);
   if (rule.files === 'forbidden' && input.files !== undefined) reject(input.action, `action "${input.action}" does not take files.`);
   if (!rule.scroll && (input.direction !== undefined || input.amount !== undefined)) reject(input.action, `action "${input.action}" does not take direction or amount.`);
-  return { target, to };
+  if (input.method !== undefined) {
+    if (input.method !== 'cdp' && input.method !== 'dom') reject(input.action, 'method must be "cdp" or "dom".');
+    if (input.action !== 'click') reject(input.action, `action "${input.action}" does not take method.`);
+    if (input.method === 'dom' && input.target && (input.target.x !== undefined || input.target.y !== undefined)) reject(input.action, 'method "dom" needs an element, not a point.');
+  }
+  return { target, to, ...(input.method && { method: input.method }) };
 }
 
 const EXPECT_KEYS = ['text', 'notText', 'url', 'title', 'selector', 'ref'] as const;

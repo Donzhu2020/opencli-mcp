@@ -99,7 +99,7 @@ opencli-mcp setup
 
 | 表面 | 内容 | 适合 |
 |---|---|---|
-| **入口工具** | `doctor`、`tab_open`（可命名会话）、`tab_claim`、`tab_observe`、`tab_act`、`tab_expect`、`session_finalize`、`sites_search`、`site_run`、`tools_compile`、`tools_define`、`docs_list`、`docs_get`、`js`、`js_reset`；启用站点后动态出现 `<site>_<command>` | 一次结构化调用就够的核心循环 |
+| **入口工具** | `doctor`、`tab_open`（可命名会话）、`tab_claim`、`tab_observe`、`tab_read`、`tab_act`、`tab_expect`、`session_finalize`、`sites_search`、`site_run`、`tools_compile`、`tools_define`、`docs_list`、`docs_get`、`js`、`js_reset`；启用站点后动态出现 `<site>_<command>` | 一次结构化调用就够的核心循环 |
 | **`js`** | 持久 JavaScript 会话，顶层 `const/let` 跨调用保留，最后一个表达式的值作为返回；全局有 `agent/sites/recon/tools/session/nodeRepl/Tab` | 批量多步、循环、条件、入口工具没有的能力（find、对话框、网络/console、cookies、frames、WebMCP、recon、关 tab 等） |
 
 ### 6.2 核心循环
@@ -108,8 +108,9 @@ opencli-mcp setup
 tab_open（或 tab_claim）→ tab_observe → tab_act → tab_observe → … → tab_expect → session_finalize
 ```
 
-- **observe**：Playwright 可访问性快照，节点带 `[ref=eN]`。默认是全量。只有还拿着上一份全量时才传 `diff:true`（`~` 变化、`+` 新增、`removed: e3–e5`）。`viewport:true` 只看视口内，不是全量的下一页。有 `Focused: [ref=eN]` 行；凭证字段值显示为 `<redacted>`。
-- **act**：一个 target + 一个 action。target 只能是一种定位：`{ref:"e12"}` | `{selector, nth?}` | `{role,name?}` | `{name}` | `{label}` | `{text}` | `{testid}` | `{x,y}`。`within` 和 `frame` 只缩小非坐标定位；`{x,y}` 不能带它们。`label` 和 `text` 不能同时给。action：click/dblclick/hover/focus/fill/type/press/select/check/uncheck/upload/drag/scroll/back/forward/reload。多个匹配只有一个可见才接受，否则 `selector_ambiguous`。
+- **observe**：操作地图，不是文档。Playwright 可访问性快照，节点带 `[ref=eN]`。默认是全量。只有还拿着上一份全量时才传 `diff:true`（`~` 变化、`+` 新增、`removed: e3–e5`）。`viewport:true` 只看视口内，不是全量的下一页。超长时带 ref 的分支标成 `(collapsed)`，再传 `{ref:"eN"}` 展开那一支。有 `Focused: [ref=eN]` 行；凭证字段值显示为 `<redacted>`。
+- **read**：有界文档的线性正文，没有 ref。内部滚动以挂上懒加载，去重，然后把滚动位置还原。`reason:"unbounded"` 是没有底的信息流，已经返回的就是结果，不要再调一次去读完。
+- **act**：一个 target + 一个 action。target 只能是一种定位：`{ref:"e12"}` | `{selector, nth?}` | `{role,name?}` | `{name}` | `{label}` | `{text}` | `{testid}` | `{x,y}`。`within` 和 `frame` 只缩小非坐标定位；`{x,y}` 不能带它们。`label` 和 `text` 不能同时给。action：click/dblclick/hover/focus/fill/type/press/select/check/uncheck/upload/drag/scroll/back/forward/reload。click 是真实鼠标事件，页面没收到就 `not_delivered`；只有这时才对同一目标用一次 `method:"dom"`（`HTMLElement.click()`，不发鼠标事件）。已经返回 ok 的点击不要再用 `method:"dom"` 重做。多个匹配只有一个可见才接受，否则 `selector_ambiguous`。
 - **expect**：`{text|notText|url|title|selector|ref, visible?}` 轮询到超时；同时写进轨迹，成为固化工具的检查点。
 - **finalize**：本回合最后一次浏览器动作。之后所有 Tab 句柄失效（`page_released`）。
 

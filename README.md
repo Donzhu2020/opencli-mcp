@@ -61,7 +61,7 @@ For integrations and custom workflows, the main tools are:
 
 | Task | Tools |
 |---|---|
-| Browse a page | `tab_open`, `tab_observe`, `tab_act`, `tab_expect` |
+| Browse a page | `tab_open`, `tab_observe`, `tab_read`, `tab_act`, `tab_expect` |
 | Use an existing tab | `tab_claim` |
 | Finish a browser session | `session_finalize` |
 | Discover and run site commands | `sites_search`, `site_run` |
@@ -69,7 +69,7 @@ For integrations and custom workflows, the main tools are:
 | Run multi-step JavaScript | `js`, `js_reset` |
 | Read built-in documentation | `docs_list`, `docs_get` |
 
-The browser workflow is **observe → act → verify → finalize**. Observations provide accessibility snapshots with element references; actions wait for their targets to be ready before dispatching browser input.
+The browser workflow is **observe → act → verify → finalize**. `tab_observe` is the action map (accessibility snapshot with element references). `tab_read` is the document text. Actions wait for their targets to be ready before dispatching browser input.
 
 Inside the `js` tool, you can also call site commands directly:
 

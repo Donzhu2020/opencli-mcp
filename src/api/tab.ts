@@ -5,8 +5,9 @@
 import type { RuntimePage } from '../backends/page-types.js';
 import { ActionError } from './errors.js';
 import { ariaDiff } from './diff.js';
+import { ARIA_BUDGET, collapseAria } from '../shared/aria-collapse.js';
 import { targetToSelector, fallbackSelector } from '../shared/engine.js';
-import type { FindEntry, FindResult, ElementAtResult, Expectation, CheckResult } from '../shared/page-contract.js';
+import type { FindEntry, FindResult, ElementAtResult, Expectation, CheckResult, ReadTextResult } from '../shared/page-contract.js';
 import type { DialogInfo, FrameStep } from '../protocol.js';
 import type { SessionContext } from './context.js';
 import type { TraceInput, NetworkEvidence } from '../runtime/trace.js';
@@ -19,9 +20,11 @@ export type Target = ({ frame?: FrameStep | FrameStep[]; /** container (css/sele
 
 export type ActAction = 'click' | 'dblclick' | 'hover' | 'focus' | 'fill' | 'type' | 'press' | 'select' | 'check' | 'uncheck' | 'upload' | 'drag' | 'scroll' | 'back' | 'forward' | 'reload';
 
-export interface ActOptions { target?: Target; action: ActAction; value?: string; files?: string[]; to?: Target; direction?: 'up' | 'down' | 'left' | 'right'; amount?: number; timeoutMs?: number; settleMs?: number }
+export interface ActOptions { target?: Target; action: ActAction; value?: string; files?: string[]; to?: Target; direction?: 'up' | 'down' | 'left' | 'right'; amount?: number; timeoutMs?: number; settleMs?: number; /** click only. `dom` runs HTMLElement.click() and sends no mouse event. Default is a real mouse event. */ method?: 'cdp' | 'dom' }
 
-export interface ObserveOptions { mode?: 'state' | 'screenshot' | 'both'; /** diff against the previous observe. Off unless explicitly true — a diff is useless when the caller no longer has the base snapshot. */ diff?: boolean; /** only the subtree on screen right now (what a screenshot shows) */ viewport?: boolean; /** overlay eN labels on the screenshot */ annotate?: boolean; fullPage?: boolean }
+export interface ObserveOptions { mode?: 'state' | 'screenshot' | 'both'; /** diff against the previous observe. Off unless explicitly true — a diff is useless when the caller no longer has the base snapshot. */ diff?: boolean; /** only the subtree on screen right now (what a screenshot shows). Not a page of the full tree. */ viewport?: boolean; /** open one branch of the action map (`eN` from a collapsed line). Ignores viewport. */ ref?: string; /** overlay eN labels on the screenshot */ annotate?: boolean; fullPage?: boolean }
+
+export interface ReadOptions { /** stop after this many characters. Default 60000. */ maxChars?: number }
 
 export interface ImageValue { __image: true; mimeType: string; base64: string }
 
@@ -133,8 +136,8 @@ export class Tab {
       const out: { url: string | null; title: string | null; state?: string; diff?: boolean; changed?: { added: number; removed: number; changed?: number }; image?: ImageValue } = { ...meta };
       if (mode === 'state' || mode === 'both') {
         // one state source: Playwright's aria snapshot (credential values redacted); its [ref=eN] are the act targets
-        let text = String(await page.pageCall('aria', { viewport: Boolean(opts.viewport) }));
-        const key = `${this.id}:${opts.viewport ? 'vp' : 'all'}`;
+        let text = String(await page.pageCall('aria', { viewport: Boolean(opts.viewport) && !opts.ref, ...(opts.ref ? { ref: opts.ref } : {}) }));
+        const key = `${this.id}:${opts.viewport && !opts.ref ? 'vp' : 'all'}:${opts.ref ?? ''}`;
         const prev = this.ctx.state.lastObserve.get(key);
         this.ctx.state.lastObserve.set(key, text);
         const diffOn = opts.diff === true;
@@ -145,7 +148,9 @@ export class Tab {
           const d = ariaDiff(prevTree, tree);
           if (d.changedRatio < 0.6) { out.diff = true; out.changed = { added: d.added, removed: d.removed, changed: d.changed }; text = `${d.text || '(no visible change)'}${focus ? `\n${focus}` : ''}`; }
         } else if (diffOn && prev && prevTree === tree) { out.diff = true; out.changed = { added: 0, removed: 0, changed: 0 }; text = `There has been no change since the last observe.${focus ? `\n${focus}` : ''}`; }
-        out.state = text;
+        // Diff compared the whole tree. Collapse only the copy the model sees, so a change inside a folded branch is not "no change".
+        const unchanged = out.diff === true && out.changed?.added === 0 && out.changed?.removed === 0 && (out.changed?.changed ?? 0) === 0;
+        out.state = unchanged ? text : collapseAria(text, ARIA_BUDGET).text;
         this.ctx.state.trace.record({ kind: 'observe', mode: 'aria', page: this.id, summary: meta.title ?? undefined, sample: text.slice(0, 1500) });
       }
       if (mode === 'screenshot' || mode === 'both') out.image = await this.screenshotOn(page, { annotate: opts.annotate, fullPage: opts.fullPage });
@@ -177,7 +182,19 @@ export class Tab {
     });
   }
 
-  /** wait + act in one call at the runtime edge: locate → wait actionable → hit-test → real input → settle. */
+  /**
+   * Linear text of a bounded document. Scrolls to mount lazy content, dedupes, restores the scroll position.
+   * No refs. A feed that grows without a bottom returns reason `unbounded` and the head already read — do not call it again to finish the feed.
+   */
+  async read(opts: ReadOptions = {}): Promise<ReadTextResult> {
+    return this.use(async (page) => {
+      const r = await page.pageCall('readText', opts.maxChars ? { maxChars: opts.maxChars } : {}) as ReadTextResult;
+      this.ctx.state.trace.record({ kind: 'observe', mode: 'read', page: this.id, summary: r.complete ? 'complete' : r.reason, sample: r.text.slice(0, 1500) });
+      return r;
+    });
+  }
+
+  /** wait + act in one call at the runtime edge: locate → wait actionable → hit-test → real input → settle. `method:'dom'` skips the mouse event. */
   async act(opts: ActOptions): Promise<Record<string, unknown>> {
     const { action } = opts;
     return this.use(async (page) => {
@@ -191,7 +208,7 @@ export class Tab {
           opts = { ...opts, target: { x: vp.x, y: vp.y } };
         }
         if (!opts.target) throw new ActionError('missing_target', `action "${action}" needs a target`, 'Pass a target: a {ref} from observe, or a selector/role+name/label/text/testid.');
-        const r = await page.act({ kind: action, target: opts.target as Record<string, unknown>, value: opts.value, files: opts.files, to: opts.to as Record<string, unknown> | undefined, direction: opts.direction, amount: opts.amount, timeoutMs: opts.timeoutMs, settleMs: opts.settleMs ?? 600, cursor: this.ctx.rt.cursorEnabled });
+        const r = await page.act({ kind: action, target: opts.target as Record<string, unknown>, value: opts.value, files: opts.files, to: opts.to as Record<string, unknown> | undefined, direction: opts.direction, amount: opts.amount, timeoutMs: opts.timeoutMs, settleMs: opts.settleMs ?? 600, cursor: this.ctx.rt.cursorEnabled, ...(opts.method ? { method: opts.method } : {}) });
         record(true, { ...r, ref: r.ref ?? undefined });
         await this.harvest(page, action);
         // Lean result: only what changes the agent's next move. Full telemetry (point/method/timings/selector/…) is in the trace.
@@ -204,6 +221,7 @@ export class Tab {
           ...(r.checked !== undefined ? { checked: r.checked, changed: r.changed } : {}),
           ...(r.selected !== undefined ? { selected: r.selected } : {}),
           ...(r.files !== undefined ? { files: r.files } : {}),
+          ...(action === 'click' && r.method === 'dom' ? { method: 'dom' as const } : {}),
         };
       } catch (err) {
         record(false);

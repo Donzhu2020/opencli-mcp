@@ -94,6 +94,11 @@ export interface ActSpec {
   settleMs?: number;
   cursor?: boolean;
   force?: boolean;
+  /**
+   * click only. `cdp` (default) is a real mouse event and fails if the page did not receive it.
+   * `dom` runs HTMLElement.click() and sends no mouse event — only when the event was not delivered or the element has no box.
+   */
+  method?: 'cdp' | 'dom';
   /** scroll */
   direction?: 'up' | 'down' | 'left' | 'right';
   amount?: number;

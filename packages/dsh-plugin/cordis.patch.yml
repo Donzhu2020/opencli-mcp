@@ -1,0 +1,10 @@
+- insert:
+    - id: opencli-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: opencli-mcp
+        transport: stdio
+        command: !!js process.env.OPENCLI_MCP_BIN || 'opencli-mcp'
+        args: ['stdio']
+        env: {}
+        cwd: !!js process.cwd()

@@ -33,6 +33,17 @@ A timeout leaves the configuration in place: enable the extension and rerun setu
 
 `opencli-mcp doctor` checks registration and the live connection without changing settings. It is for troubleshooting; it is not a required setup step.
 
+## DeepSeek Harness (dsh)
+
+After installing the Chrome extension and `opencli-mcp` globally, connect the browser without configuring another MCP client, then add the dsh bundle to your active profile:
+
+```bash
+opencli-mcp setup --clients none
+dsh plugin --profile web add dsh-plugin-opencli-mcp
+```
+
+Restart `dsh web`. The bundle inserts one `@deepseek-ai/dsh-mcp-client` entry, so dsh discovers the same MCP tools as other clients. The global `opencli-mcp` executable must be on dsh's `PATH`; set `OPENCLI_MCP_BIN` to its absolute path if dsh is launched from an app with a different `PATH`. See the [bundle README](../packages/dsh-plugin/README.md) for removal and troubleshooting.
+
 ## Other Chromium browsers
 
 Setup recognizes Chrome, Chromium, Edge, and Brave on macOS and Linux, plus Chrome Beta, Canary, Chrome for Testing, and Arc on macOS. On Windows it registers the Chrome Native Messaging host. Extension availability depends on the browser.

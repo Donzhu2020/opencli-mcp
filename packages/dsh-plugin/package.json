@@ -1,0 +1,19 @@
+{
+  "name": "dsh-plugin-opencli-mcp",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness bundle that connects the opencli-mcp browser service.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jackwener/opencli-mcp.git",
+    "directory": "packages/dsh-plugin"
+  },
+  "files": ["cordis.patch.yml", "README.md"],
+  "keywords": ["dsh-plugin", "deepseek-harness", "mcp", "browser"],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

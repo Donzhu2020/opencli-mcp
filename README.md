@@ -18,7 +18,7 @@ opencli-mcp lets MCP clients observe and operate your Chrome tabs through a loca
 - **Add site adapters.** Inspect a site's requests, verify an API, and define an explicit reusable MCP tool.
 - **Keep browser work organized.** Agent-created tabs live in named groups and are cleaned up after use. Tabs borrowed from the user are never closed by session cleanup.
 
-Works with MCP clients including Claude Code, Codex, Cursor, and Claude Desktop. Clients can use structured tools for individual actions or a persistent JavaScript session for multi-step workflows.
+Works with MCP clients including Claude Code, Codex, Cursor, Claude Desktop, and DeepSeek Harness (`dsh`). Clients can use structured tools for individual actions or a persistent JavaScript session for multi-step workflows.
 
 ## Quick start
 
@@ -38,6 +38,8 @@ opencli-mcp setup
 Keep Chrome open. `setup` connects the extension to the local program, asks which MCP clients to configure, registers only your selection, and checks the browser connection. If you have not installed the extension yet, it opens the Chrome Web Store for you.
 
 For **Cursor, Claude Desktop, and other MCP clients**, choose `manual` and copy the configuration printed by `setup` into your client's MCP settings. It uses absolute paths so desktop apps can find the program.
+
+For **DeepSeek Harness (`dsh`)**, install the [dsh bundle](packages/dsh-plugin/README.md) after `setup`. It uses dsh's own MCP client plugin and does not change your other dsh plugins.
 
 ### 3. Start using it
 

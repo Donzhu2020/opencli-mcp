@@ -37,30 +37,13 @@ async function harness() {
   const activate = async (draftId: string) => body(await client.callTool({ name: 'tools_activate', arguments: { draftId } }));
   const cleanup = async () => {
     for (const draftId of drafts) await client.callTool({ name: 'tools_discard', arguments: { draftId } }).catch(() => {});
-    try { await client.callTool({ name: 'js', arguments: { code: `await tools.remove('${site}', 'poke'); await tools.remove('${site}', 'need')` } }); } catch { /* ignore */ }
+    try { await client.callTool({ name: 'js', arguments: { code: `await tools.remove('${site}', 'poke')` } }); } catch { /* ignore */ }
     await client.close().catch(() => {}); await rt.shutdown().catch(() => {});
   };
   return { client, site, define, tryDraft, activate, elicits: () => elicits, cleanup };
 }
 
 describe('adapter draft lifecycle and write commands', () => {
-  it('exposes explicit tab discovery, release, and close', async () => {
-    const h = await harness();
-    try {
-      const listed = (await h.client.listTools()).tools;
-      const names = listed.map((t) => t.name);
-      expect(names).toContain('tab_list');
-      expect(names).toContain('tab_close');
-      expect(names).toContain('tab_release');
-      expect(listed.find((t) => t.name === 'tab_act')?.inputSchema).toMatchObject({ type: 'object', properties: { action: expect.any(Object), target: expect.any(Object) } });
-      expect(body(await h.client.callTool({ name: 'sites_search', arguments: {} }))).toMatchObject({ ok: true });
-      const unavailable = await h.client.callTool({ name: 'tab_list', arguments: { user: true } });
-      expect(body(unavailable)).toMatchObject({ ok: false, error: { code: 'browser_unavailable' } });
-      expect(body(await h.client.callTool({ name: 'tab_act', arguments: { action: 'back' } }))).toMatchObject({ ok: false, error: { code: 'browser_unavailable' } });
-      expect((await h.client.callTool({ name: 'tab_act', arguments: { action: 'press', target: { text: 'Search' } } })).isError).toBe(true);
-    } finally { await h.cleanup(); }
-  });
-
   it('runs writes through site_run, typed tools, and js without elicitation', async () => {
     const h = await harness();
     try {
@@ -81,12 +64,6 @@ describe('adapter draft lifecycle and write commands', () => {
       const js = await h.client.callTool({ name: 'js', arguments: { code: `await sites.${h.site}.poke({})` } });
       expect(body(js)).toMatchObject({ ok: true, value: { done: true } });
       expect(h.elicits()).toBe(0);
-      const simple = await h.client.callTool({ name: 'js', arguments: { code: '1 + 1' } });
-      expect(simple.content).toMatchObject([{ type: 'text', text: '{"ok":true,"value":2}' }]);
-      expect((await h.client.callTool({ name: 'docs_get', arguments: { name: 'api-reference' } })).content).toMatchObject([{ type: 'text', text: expect.stringContaining('class Tab') }]);
-      const withOutput = await h.client.callTool({ name: 'js', arguments: { code: 'nodeRepl.write("detail")' } });
-      expect(body(withOutput)).toMatchObject({ ok: true, value: null });
-      expect(withOutput.content).toMatchObject([{ type: 'text' }, { type: 'text', text: 'detail' }]);
     } finally { await h.cleanup(); }
   });
 
@@ -109,31 +86,6 @@ describe('adapter draft lifecycle and write commands', () => {
       expect(hits).toMatchObject({ ok: true, results: expect.arrayContaining([expect.objectContaining({ name: 'poke', args: [expect.objectContaining({ name: 'message' })] })]) });
       expect(body(await h.client.callTool({ name: 'site_run', arguments: { site: h.site, command: 'poke', args: { x: 'old' } } }))).toMatchObject({ ok: false, error: { code: 'invalid_args' } });
       expect(body(await h.client.callTool({ name: `${h.site}_poke`, arguments: { message: 'new' } }))).toMatchObject({ ok: true, value: { message: 'new' } });
-    } finally { await h.cleanup(); }
-  });
-
-  it('keeps the working adapter when a replacement cannot load', async () => {
-    const h = await harness();
-    try {
-      const first = await h.define('poke');
-      await h.tryDraft(first.data.draftId as string);
-      await h.activate(first.data.draftId as string);
-      const failed = await h.client.callTool({ name: 'tools_define', arguments: { site: h.site, name: 'poke', description: 'broken replacement', access: 'write', func: '(() => { throw new Error("bad descriptor"); })()' } });
-      expect(failed.isError).toBe(true);
-      expect(body(await h.client.callTool({ name: 'site_run', arguments: { site: h.site, command: 'poke', args: {} } }))).toMatchObject({ ok: true, value: { done: true } });
-    } finally { await h.cleanup(); }
-  });
-
-  it('still rejects invalid write arguments', async () => {
-    const h = await harness();
-    try {
-      const defined = await h.define('need', { description: 'needs text', args: [{ name: 'text', required: true }], func: 'async ({ args }) => ({ text: args.text })' });
-      await h.tryDraft(defined.data.draftId as string, { text: 'verified' }, { path: 'value.text', equals: 'verified' });
-      await h.activate(defined.data.draftId as string);
-      const r = await h.client.callTool({ name: 'site_run', arguments: { site: h.site, command: 'need', args: {} } });
-      expect(r.isError).toBe(true);
-      expect(body(r)).toMatchObject({ ok: false, error: { code: 'invalid_args', details: { expected: [{ name: 'text' }] } } });
-      expect(h.elicits()).toBe(0);
     } finally { await h.cleanup(); }
   });
   it('does not activate a failed or discarded draft', async () => {

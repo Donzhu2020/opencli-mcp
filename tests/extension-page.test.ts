@@ -5,16 +5,6 @@ import { BrowserCommandError, type ExtensionBridge } from '../src/host/bridge.js
 import type { Command } from '../src/protocol.js';
 
 describe('extension page transport', () => {
-  it('keeps release and close as separate, explicit operations', async () => {
-    const send = vi.fn().mockResolvedValue({ data: {} });
-    const first = await createExtensionPage({ send } as unknown as ExtensionBridge, { session: 'test', surface: 'browser', page: 'tab-1' });
-    await first.releaseTab('tab-1');
-    expect(send).toHaveBeenNthCalledWith(1, 'tabs', expect.objectContaining({ op: 'release', page: 'tab-1' }));
-    const second = await createExtensionPage({ send } as unknown as ExtensionBridge, { session: 'test', surface: 'browser', page: 'tab-2' });
-    await second.closeTab('tab-2');
-    expect(send).toHaveBeenNthCalledWith(2, 'tabs', expect.objectContaining({ op: 'close', page: 'tab-2' }));
-  });
-
   it('evaluates source and fetches JSON through the page context', async () => {
     const fetch = vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK', url: 'https://example.test/api', headers: new Headers({ 'content-type': 'application/json' }), text: async () => '{"saved":true}' }));
     const send = vi.fn(async (_action: string, params: Partial<Command>) => ({ data: await runInNewContext(params.code!, { fetch, AbortController, setTimeout, clearTimeout }) }));

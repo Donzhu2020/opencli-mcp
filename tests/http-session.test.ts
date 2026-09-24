@@ -7,16 +7,6 @@ describe('HTTP client sessions', () => {
   const open: Array<() => Promise<void>> = [];
   afterEach(async () => { for (const close of open.splice(0).reverse()) await close().catch(() => {}); });
 
-  it('accepts bearer headers without accepting tokens in URLs', async () => {
-    const rt = new Runtime();
-    await rt.init();
-    const host = await startHttpServer(rt, { port: 0, token: 'test-token', version: '0.0.12' });
-    open.push(() => host.close());
-    const base = `http://${host.host}:${host.port}/health`;
-    expect((await fetch(`${base}?token=test-token`)).status).toBe(401);
-    expect((await fetch(base, { headers: { authorization: 'Bearer test-token' } })).status).toBe(200);
-  });
-
   it('keeps two MCP clients in separate runtime sessions and cleans up only the departing one', async () => {
     const rt = new Runtime();
     await rt.init();

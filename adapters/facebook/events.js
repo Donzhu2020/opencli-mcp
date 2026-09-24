@@ -25,6 +25,7 @@ export function mapEvents(result) {
 }
 
 async function eventForm(tab, limit, cursor) {
+  await tab.goto('https://www.facebook.com/events', { waitUntil: 'load' });
   await tab.network.start('/api/graphql/');
   let networkCursor = (await tab.network.read({ pattern: '/api/graphql/', limit: 1000 })).cursor;
   await tab.goto(`https://www.facebook.com/events?opencli_events=${Date.now()}`, { waitUntil: 'load' });

@@ -17,6 +17,6 @@ export default defineAdapter({
     const { api, route } = await discordClient(tab);
     const { channel } = await channelId(api, args, route);
     await api(`/channels/${channel}/messages/${id}`, { method: 'DELETE' });
-    return { value: { deleted: true, message_id: id, channel_id: channel } };
+    return { deleted: true, message_id: id, channel_id: channel };
   },
 });

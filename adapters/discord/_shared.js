@@ -25,10 +25,12 @@ function authHeader(headers) {
 
 /** Obtain a fresh authorization header from the logged-in app's own API traffic. */
 async function discordHeaders(tab) {
+  const current = await tab.url().catch(() => null);
+  const target = current?.startsWith(`${ORIGIN}/channels/`) ? current : `${ORIGIN}/channels/@me`;
+  await tab.goto(target, { waitUntil: 'load' });
   await tab.network.start('/api/');
   const before = (await tab.network.read({ pattern: '/api/', limit: 1000 })).cursor;
-  const current = await tab.url().catch(() => null);
-  const url = current?.startsWith(`${ORIGIN}/channels/`) ? new URL(current) : new URL(`${ORIGIN}/channels/@me`);
+  const url = new URL(target);
   url.searchParams.set('opencli_mcp_probe', String(Date.now()));
   await tab.goto(url.href, { waitUntil: 'load' });
   let cursor = before;

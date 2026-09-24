@@ -4,9 +4,14 @@ import gmailThread from '../adapters/gmail/thread.js';
 import { parseBatchView, parseBootstrapUserLabels, parseFetchData, parseLabelStatus, syncThreadId } from '../adapters/gmail/_shared.js';
 import facebookSearch from '../adapters/facebook/search.js';
 import facebookEvents, { mapEvents } from '../adapters/facebook/events.js';
+import { mapFeedEdges } from '../adapters/facebook/feed.js';
+import facebookNotifications, { mapNotifications } from '../adapters/facebook/notifications.js';
+import facebookFriends, { mapFriendSuggestions } from '../adapters/facebook/friends.js';
+import { mapGroups } from '../adapters/facebook/groups.js';
 import { parsePostRows, parseProfileSearch } from '../adapters/facebook/_shared.js';
 import { jobCardsPath, mapJobCard } from '../adapters/linkedin/jobs.js';
 import { jobId, mapJobDetail } from '../adapters/linkedin/job-detail.js';
+import { mapConversations } from '../adapters/linkedin/inbox.js';
 import { mapConnection } from '../adapters/linkedin/connections.js';
 import { inboxPath } from '../adapters/linkedin/salesnav-inbox.js';
 import discordSend from '../adapters/discord/send.js';
@@ -156,7 +161,65 @@ describe('Facebook events GraphQL adapter', () => {
   });
 });
 
+describe('Facebook news feed GraphQL adapter', () => {
+  it('maps story edges and skips non-post feed units', () => {
+    const rows = mapFeedEdges([
+      { node: { __typename: 'ShowcaseFeedUnit', id: 'promo' } },
+      { node: { __typename: 'Story', post_id: '123', creation_time: 1_790_000_000,
+        permalink_url: 'https://www.facebook.com/example/posts/123',
+        comet_sections: { content: { story: { actors: [{ id: '42', name: 'Example' }], message: { text: 'Hello' } } } } } },
+    ]);
+    expect(rows).toMatchObject([{ id: '123', author: 'Example', author_id: '42', text: 'Hello' }]);
+  });
+});
+
+describe('Facebook notifications GraphQL adapter', () => {
+  it('maps only notification rows and preserves their cursor', () => {
+    const result = mapNotifications({ data: { viewer: { notifications_page: {
+      edges: [
+        { node: { row_type: 'BUCKET_HEADER' } },
+        { node: { notif: { notif_id: '123', seen_state: 'SEEN_BUT_UNREAD', body: { text: 'A notification' }, creation_time: { timestamp: 1_790_000_000 }, url: 'https://www.facebook.com/photo/?fbid=1', notif_type: 'photo' } } },
+      ], page_info: { has_next_page: true, end_cursor: 'next' },
+    } } } });
+    expect(result.rows).toEqual([{ id: '123', text: 'A notification', unread: true, time: '2026-09-21T14:13:20.000Z', url: 'https://www.facebook.com/photo/?fbid=1', type: 'photo' }]);
+    expect(result.pageInfo.end_cursor).toBe('next');
+    expect(facebookNotifications.access).toBe('read');
+  });
+});
+
+describe('Facebook friend suggestions GraphQL adapter', () => {
+  it('maps suggestions without page extraction', () => {
+    const result = mapFriendSuggestions({ data: { viewer: { pymk_grid: { edges: [{ node: {
+      id: '123', name: 'Alice', social_context: { text: '3 mutual friends' }, friendship_status: 'CAN_REQUEST',
+    } }], page_info: { has_next_page: false } } } } });
+    expect(result.rows[0]).toMatchObject({ id: '123', name: 'Alice', mutual_count: 3, url: 'https://www.facebook.com/profile.php?id=123' });
+    expect(facebookFriends.access).toBe('read');
+  });
+});
+
+describe('Facebook groups GraphQL adapter', () => {
+  it('maps joined and managed groups', () => {
+    const response = { data: {
+      nonAdminGroups: { groups_tab: { tab_groups_list: { edges: [{ node: { id: '123', name: 'Example Group', last_post_time: 1_790_000_000 } }] } } },
+      adminGroups: { groups_tab: { tab_groups_list: { edges: [{ node: { id: '456', name: 'Managed Group' } }] } } },
+    } };
+    expect(mapGroups(response)).toMatchObject([{ id: '123', kind: 'member' }, { id: '456', kind: 'managed' }]);
+    expect(mapGroups(response, 'managed')).toMatchObject([{ id: '456', kind: 'managed' }]);
+  });
+});
+
 describe('LinkedIn Voyager adapters', () => {
+  it('maps messenger conversations from the current category query response', () => {
+    const response = { data: { messengerConversationsByCategoryQuery: {
+      elements: [{ backendUrn: 'urn:li:messagingThread:thread-1',
+        conversationParticipants: [{ hostIdentityUrn: 'other', participantType: { member: { firstName: { text: 'Ada' }, lastName: { text: 'Lovelace' } } } }],
+        messages: { elements: [{ body: { text: 'Hello' } }] }, unreadCount: 1, lastActivityAt: 1_790_000_000_000 }],
+      metadata: { nextCursor: 'next-page' },
+    } } };
+    const mapped = mapConversations(response, 'self');
+    expect(mapped.nextCursor).toBe('next-page');
+    expect(mapped.rows).toMatchObject([{ thread_id: 'thread-1', person_name: 'Ada Lovelace', unread: true, last_message_preview: 'Hello' }]);
+  });
   it('preserves Rest.li job-query punctuation and maps cards', () => {
     const path = jobCardsPath({ query: 'software engineer', workplace: 'remote' }, 25, 10);
     expect(path).toContain('query=(origin:JOB_SEARCH_PAGE_JOB_FILTER,keywords:software%20engineer');
@@ -205,7 +268,7 @@ describe('Discord authenticated API adapters', () => {
       },
     };
     const sent = await discordSend.run({ tab, args: { channel: '1303405787065880576', text: 'test' } });
-    await discordDelete.run({ tab, args: { channel: '1303405787065880576', message_id: sent.value.message_id } });
+    await discordDelete.run({ tab, args: { channel: '1303405787065880576', message_id: sent.message_id } });
     expect(calls.map((item) => item.opts.method)).toEqual(['POST', 'DELETE']);
     expect(calls.every((item) => item.opts.headers.authorization === 'test-token')).toBe(true);
   });

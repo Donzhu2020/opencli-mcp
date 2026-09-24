@@ -18,6 +18,6 @@ export default defineAdapter({
     const opened = await tab.goto(url, { waitUntil: 'load' });
     const actual = discordRoute(opened.url || await tab.url());
     if (actual?.channel !== channel) throw errors.upstream('Discord did not open the requested channel');
-    return { value: { guild_id: actual.guild, channel_id: actual.channel, url } };
+    return { guild_id: actual.guild, channel_id: actual.channel, url };
   },
 });

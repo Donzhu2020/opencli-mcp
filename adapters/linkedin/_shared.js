@@ -12,12 +12,7 @@ export function integer(value, label, fallback, min, max) {
 }
 
 export async function ensureLinkedIn(tab) {
-  const current = await tab.url().catch(() => null);
-  let host = '';
-  try { host = current ? new URL(current).hostname : ''; } catch { /* navigate below */ }
-  if (host !== 'linkedin.com' && host !== 'www.linkedin.com') {
-    await tab.goto(`${ORIGIN}/feed/`, { waitUntil: 'load' });
-  }
+  await tab.goto(`${ORIGIN}/feed/`, { waitUntil: 'load' });
 }
 
 export async function csrf(tab) {

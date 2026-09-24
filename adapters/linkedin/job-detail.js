@@ -44,6 +44,6 @@ export default defineAdapter({
   async run({ tab, args }) {
     const id = jobId(args.job);
     await ensureLinkedIn(tab);
-    return { value: mapJobDetail(await linkedinApi(tab, `/voyager/api/jobs/jobPostings/${id}`), id) };
+    return mapJobDetail(await linkedinApi(tab, `/voyager/api/jobs/jobPostings/${id}`), id);
   },
 });

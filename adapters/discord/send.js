@@ -17,6 +17,6 @@ export default defineAdapter({
     const { api, route } = await discordClient(tab);
     const { channel } = await channelId(api, args, route);
     const message = await api(`/channels/${channel}/messages`, { method: 'POST', body: { content: text, tts: false, nonce: String(Date.now()) } });
-    return { value: messageRow(message) };
+    return messageRow(message);
   },
 });

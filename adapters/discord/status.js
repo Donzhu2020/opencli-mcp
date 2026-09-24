@@ -8,6 +8,6 @@ export default defineAdapter({
   async run({ tab }) {
     const { api, route } = await discordClient(tab);
     const user = await api('/users/@me');
-    return { value: { connected: true, user_id: user.id, username: user.username, display_name: user.global_name || user.username, current_guild: route?.guild || null, current_channel: route?.channel || null } };
+    return { connected: true, user_id: user.id, username: user.username, display_name: user.global_name || user.username, current_guild: route?.guild || null, current_channel: route?.channel || null };
   },
 });

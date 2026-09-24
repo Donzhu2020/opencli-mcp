@@ -36,10 +36,9 @@ async function searchForm(tab, query, type, limit, cursor) {
   if (!normalized) throw errors.argument('query is required');
   if (!['people', 'groups', 'pages'].includes(type)) throw errors.argument('type must be people, groups, or pages');
   const path = '/api/graphql/';
+  await tab.goto(`${ORIGIN}/`, { waitUntil: 'load' });
   await tab.network.start(path);
   const before = (await tab.network.read({ pattern: path, limit: 1000 })).cursor;
-  const current = await tab.url().catch(() => null);
-  if (current?.includes(`/search/${type}/?q=${encodeURIComponent(normalized)}`)) await tab.goto(`${ORIGIN}/`, { waitUntil: 'load' });
   await tab.goto(`${ORIGIN}/search/${type}/?q=${encodeURIComponent(normalized)}`, { waitUntil: 'load' });
   let networkCursor = before;
   let entry;

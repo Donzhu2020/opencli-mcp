@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.19 — 2026-09-24
+
+- chore: bump Chrome extension to 0.0.14
+- feat: improve MCP browser evidence and agent-facing contracts
+- test: focus suite on core agent and browser flows
+- ci: automate npm and GitHub releases
+- feat: make adapter authoring evidence-driven and runtime-aware
+
 ## 0.0.18 — 2026-09-24
 
 - Make site capabilities browsable without a search term and return actionable metadata after defining an adapter. Validate replacements before installing them, refresh discovery and typed tool schemas when definitions change, and reject unknown or malformed command arguments.

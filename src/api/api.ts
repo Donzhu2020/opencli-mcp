@@ -8,7 +8,7 @@ import { argSpec } from '../sites/schema.js';
 import { discoverEndpoints, type DiscoverResult } from '../recon/discover.js';
 import { listDefinedTools, type ToolDefinition } from '../sites/define.js';
 import type { DraftExpectation } from '../sites/drafts.js';
-import { readDoc, listDocs } from '../docs/manifest.js';
+import { readDocForContext } from '../docs/manifest.js';
 import { Tab } from './tab.js';
 import { Browser } from './browser.js';
 import type { SessionContext } from './context.js';
@@ -63,7 +63,7 @@ export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
       // The single default browser, eagerly available (one user, one Chrome) so `browser.tabs/user/...` works in js
       // without a bootstrap line; ops throw browser_unavailable at call time when Chrome isn't connected.
       browser: new Browser('chrome', 'extension', ctx),
-      documentation: { get: (name: string) => listDocs({ backend: rt.backend(), capabilities: rt.features() }).some((entry) => entry.name === name && entry.available) ? readDoc(name) : null },
+      documentation: { get: (name: string) => readDocForContext(name, { backend: rt.backend(), capabilities: rt.features() }) },
     },
     sites,
     recon: { discover: async (tab: Tab, opts) => { const log = await tab.network.read({ limit: 2000 }); return tab.use((page) => discoverEndpoints(page, { ...opts, network: log.entries as Array<Record<string, unknown>> })); } },

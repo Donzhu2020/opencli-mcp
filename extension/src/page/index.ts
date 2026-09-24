@@ -6,7 +6,7 @@
  */
 import {
   ACT_MARK, FRAME_MARK, ENGINE_GLOBAL, PAGE_GLOBAL,
-  type ResolveArgs, type ResolveOutcome, type Candidate, type FindArgs, type FindResult, type FindEntry,
+  type ResolveArgs, type ResolveOutcome, type ResolveFail, type Candidate, type FindArgs, type FindResult, type FindEntry, type QueryFindResult, type UploadTarget,
   type AriaArgs, type PointInfo, type FrameProbeResult, type SettleArgs, type SelectResult, type ElementAtResult, type Box, type Expectation, type CheckResult,
   type ReadTextArgs, type ReadTextResult, type DomClickArgs, type DomClickResult,
 } from '../../../src/shared/page-contract.js';
@@ -187,16 +187,27 @@ export function caretToEnd(): void {
   const el = document.activeElement as HTMLInputElement | null;
   if (el && !(el as HTMLElement).isContentEditable && typeof el.setSelectionRange === 'function') { try { const n = el.value.length; el.setSelectionRange(n, n); } catch { /* not a text control */ } }
 }
-export function isFileInput(): boolean { const el = actEl(); return !!el && el.tagName === 'INPUT' && (el as HTMLInputElement).type === 'file'; }
 /** Re-mark the file input associated with the target (inside it, its label's control, or the nearest form). */
-export function useAssociatedFileInput(): boolean {
-  const el = actEl(); if (!el) return false;
-  const control = (el as HTMLLabelElement).control as HTMLInputElement | null | undefined;
-  const inp = el.querySelector('input[type=file]') || (control && control.type === 'file' ? control : null) || (el.closest('form,body') || document.body).querySelector('input[type=file]');
-  if (!inp) return false;
-  markAct(inp);
-  return true;
+export function resolveUpload(args: { selector: string; fallback: string | null; files: number }): UploadTarget | ResolveFail {
+  let matches = query(args.selector);
+  if (!matches.length && args.fallback) matches = query(args.fallback);
+  if (!matches.length) return { error: { code: 'not_found', message: 'Upload target was not found. Observe again for a fresh file-input ref.' } };
+  if (matches.length !== 1) return { error: { code: 'selector_ambiguous', message: `${matches.length} upload targets match`, candidates: matches.slice(0, 8).map(candidate) } };
+  const el = matches[0];
+  const direct = el instanceof HTMLInputElement && el.type === 'file' ? [el] : [];
+  const controlled = el instanceof HTMLLabelElement && el.control instanceof HTMLInputElement && el.control.type === 'file' ? [el.control] : [];
+  const nested = [...el.querySelectorAll<HTMLInputElement>('input[type=file]')];
+  const inForm = el.closest('form')?.querySelectorAll<HTMLInputElement>('input[type=file]') ?? [];
+  const candidates = [...new Set([...direct, ...controlled, ...nested, ...inForm])];
+  if (!candidates.length) candidates.push(...document.querySelectorAll<HTMLInputElement>('input[type=file]'));
+  if (candidates.length !== 1) return { error: { code: candidates.length ? 'selector_ambiguous' : 'not_a_file_input', message: candidates.length ? 'Several file inputs are available. Target one file-input ref from tab_observe.' : 'No file input is associated with this target.' } };
+  const input = candidates[0];
+  if (input.disabled) return { error: { code: 'not_enabled', message: 'The file input is disabled.' } };
+  if (args.files > 1 && !input.multiple) return { error: { code: 'invalid_args', message: 'This file input accepts only one file.' } };
+  markAct(input);
+  return { ok: true, ref: ariaRefOf(input), selector: replaySelector(input), matches_n: 1 };
 }
+export function fileSelectionCount(): number { const el = actEl(); return el instanceof HTMLInputElement ? el.files?.length ?? 0 : 0; }
 
 /** Wait until the DOM has been quiet for `quietMs` (or `maxMs` elapsed). */
 export function settle(args: SettleArgs): Promise<{ waitedMs: number; quiet: boolean }> {
@@ -315,24 +326,34 @@ function pickPort(): ScrollPort {
   }
   return best;
 }
-function skipRead(el: Element | null): boolean {
+function skipRead(el: Element | null, visible: WeakMap<Element, boolean>): boolean {
   while (el) {
     const tag = el.tagName;
     if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT') return true;
     if (el.id === 'opencli-mcp-annotate') return true;
+    if (el.hasAttribute('hidden')) return true;
+    const cached = visible.get(el);
+    if (cached === false) return true;
+    if (cached === undefined) {
+      const style = getComputedStyle(el);
+      const shown = style.display !== 'none' && style.visibility !== 'hidden' && style.visibility !== 'collapse';
+      visible.set(el, shown);
+      if (!shown) return true;
+    }
     el = el.parentElement;
   }
   return false;
 }
-function pageLines(): string[] {
-  const out: string[] = [];
+function pageLines(): Array<{ node: Node; text: string }> {
+  const out: Array<{ node: Node; text: string }> = [];
   if (!document.body) return out;
+  const visible = new WeakMap<Element, boolean>();
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
   let n: Node | null = walker.nextNode();
   while (n) {
-    if (!skipRead(n.parentElement)) {
+    if (!skipRead(n.parentElement, visible)) {
       const t = (n.textContent || '').replace(/\s+/g, ' ').trim();
-      if (t) out.push(t);
+      if (t) out.push({ node: n, text: t });
     }
     n = walker.nextNode();
   }
@@ -340,30 +361,47 @@ function pageLines(): string[] {
 }
 
 /**
- * Text of a bounded page. Scrolls to mount lazy content, dedupes lines already seen, then restores the scroll position.
+ * Text of a bounded page. Scrolls to mount lazy content, tracks nodes already seen, then restores the scroll position.
  * A feed that grows every time we reach the bottom stops after a few passes: the head already read is the answer.
  */
+const READ_CAPTURE_MAX_CHARS = 240_000;
+const READ_PREFIX = Math.random().toString(36).slice(2);
+let readSeq = 0;
+let lastRead: { id: string; text: string; reachedBottom: boolean; reason?: 'scan_limit' | 'unbounded' } | null = null;
+function sliceRead(capture: NonNullable<typeof lastRead>, start: number, maxChars: number): ReadTextResult {
+  const text = capture.text.slice(start, start + maxChars);
+  const nextStart = start + text.length < capture.text.length ? start + text.length : undefined;
+  const complete = capture.reachedBottom && nextStart === undefined;
+  return { readId: capture.id, text, complete, ...(!complete && { reason: nextStart !== undefined ? 'budget' as const : capture.reason ?? 'scan_limit' as const }), chars: text.length, start, ...(nextStart !== undefined && { nextStart }) };
+}
 export async function readText(args: ReadTextArgs = {}): Promise<ReadTextResult> {
   const maxChars = args.maxChars && args.maxChars > 0 ? Math.round(args.maxChars) : READ_MAX_CHARS;
   const start = args.start && args.start > 0 ? Math.round(args.start) : 0;
-  const stop = start + maxChars;
+  if (args.readId) return lastRead?.id === args.readId ? sliceRead(lastRead, start, maxChars) : { readId: args.readId, text: '', complete: false, reason: 'stale', chars: 0, start };
+  if (start) return { readId: '', text: '', complete: false, reason: 'stale', chars: 0, start };
   const maxSteps = args.maxSteps && args.maxSteps > 0 ? Math.round(args.maxSteps) : READ_MAX_STEPS;
   const waitMs = args.waitMs === undefined ? 40 : Math.max(0, args.waitMs);
   const wait = () => new Promise((r) => setTimeout(r, waitMs));
   const port = pickPort();
   const saved = port.read();
-  const seen = new Set<string>();
+  const seen = new WeakMap<Node, string>();
   const lines: string[] = [];
+  let chars = 0;
   const absorb = () => {
-    for (const line of pageLines()) if (!seen.has(line)) { seen.add(line); lines.push(line); }
+    for (const { node, text } of pageLines()) {
+      if (seen.get(node) === text) continue;
+      seen.set(node, text);
+      const separator = lines.length ? 1 : 0;
+      const remaining = READ_CAPTURE_MAX_CHARS - chars - separator;
+      if (remaining <= 0) break;
+      const kept = text.slice(0, remaining);
+      chars += kept.length + separator;
+      lines.push(kept);
+    }
   };
-  const finish = (reachedBottom: boolean, reason?: ReadTextResult['reason']): ReadTextResult => {
-    const full = lines.join('\n');
-    const text = full.slice(start, stop);
-    const hasMore = full.length > stop;
-    const complete = reachedBottom && !hasMore;
-    const why = reason === 'unbounded' ? 'unbounded' : complete ? undefined : 'budget';
-    return { text, complete, ...(why && { reason: why }), chars: text.length, start, ...(why === 'budget' && text.length > 0 ? { nextStart: start + text.length } : {}) };
+  const finish = (reachedBottom: boolean, reason?: 'scan_limit' | 'unbounded'): ReadTextResult => {
+    lastRead = { id: `${READ_PREFIX}-${++readSeq}`, text: lines.join('\n'), reachedBottom, reason };
+    return sliceRead(lastRead, 0, maxChars);
   };
   try {
     port.scrollTo(saved.x, 0);
@@ -373,7 +411,7 @@ export async function readText(args: ReadTextArgs = {}): Promise<ReadTextResult>
     for (let step = 0; step < maxSteps; step++) {
       await wait();
       absorb();
-      if (lines.join('\n').length >= stop) return finish(false, 'budget');
+      if (chars >= READ_CAPTURE_MAX_CHARS) return finish(false, 'scan_limit');
       const m = port.read();
       // Only a growth at the previous bottom counts. A taller image mid-page does not make this a feed.
       const reachedPriorBottom = m.y + m.height >= lastHeight - 1;
@@ -388,7 +426,7 @@ export async function readText(args: ReadTextArgs = {}): Promise<ReadTextResult>
         port.scrollTo(saved.x, m.y + 1);
         await wait();
         absorb();
-        if (lines.join('\n').length >= stop) return finish(false, 'budget');
+        if (chars >= READ_CAPTURE_MAX_CHARS) return finish(false, 'scan_limit');
         const after = port.read();
         if (after.scrollHeight <= heightBefore + 1) return finish(true);
         grows++;
@@ -398,7 +436,7 @@ export async function readText(args: ReadTextArgs = {}): Promise<ReadTextResult>
       const here = port.read();
       port.scrollTo(saved.x, here.y + Math.max(1, Math.floor(here.height * 0.8)));
     }
-    return finish(false, 'budget');
+    return finish(false, 'scan_limit');
   } finally {
     port.scrollTo(saved.x, saved.y);
   }
@@ -456,6 +494,15 @@ export function aria(args: AriaArgs = {}): string {
     if (m[3]) { const val = m[3].replace(/^:\s*/, '').trim(); if (val && rline.includes('"' + val + '"')) rline = rline.slice(0, rline.length - m[3].length); }
     out.push(rline);
   }
+  // AX snapshots omit hidden file controls. Include them as addressable upload targets.
+  const inAx = new Set([...info.values()].map((entry) => entry.element));
+  const missingFiles = [...document.querySelectorAll<HTMLInputElement>('input[type=file]')].filter((el) => !inAx.has(el));
+  for (const input of missingFiles.slice(0, 20)) {
+    const label = input.labels?.[0]?.textContent?.trim() || input.getAttribute('aria-label') || input.name || 'file upload';
+    const hidden = !is(input, 'visible') || !intersectsViewport(input);
+    out.push(`- file-input "${label.replaceAll('"', '\\"').slice(0, 100)}" [ref=${stableRefOf(input)}]${hidden ? ' (hidden)' : ''}${input.multiple ? ' (multiple)' : ''}${input.accept ? ` accepts ${input.accept.slice(0, 100)}` : ''}`);
+  }
+  if (missingFiles.length > 20) out.push(`- ${missingFiles.length - 20} more file inputs omitted`);
   // the plugin always ends its state with the focused element; ours names the focused ref so the next action can target it
   const active = document.activeElement;
   const focusRef = active && active !== document.body ? ariaRefOf(active) : null;
@@ -484,6 +531,36 @@ export function find(args: FindArgs): FindResult {
   if (!matches.length && args.fallback) { usedSelector = args.fallback; matches = query(args.fallback); }
   const visible_n = matches.filter((m) => is(m, 'visible')).length;
   return { matches_n: matches.length, visible_n, selector: usedSelector, entries: matches.slice(0, Math.max(1, Math.min(args.limit, 100))).map(describe) };
+}
+
+/** Search the current action map without requiring the caller to know a locator first. */
+export function findByQuery(args: { query: string; limit: number }): QueryFindResult {
+  const q = args.query.trim().toLowerCase();
+  if (!q) return { matches_n: 0, entries: [] };
+  const stack: Array<{ indent: number; line: string; ref: string | null }> = [];
+  const entries: QueryFindResult['entries'] = [];
+  const seen = new Set<string>();
+  let matches = 0;
+  for (const line of aria().split('\n')) {
+    if (!line.trimStart().startsWith('- ')) continue;
+    const indent = line.length - line.trimStart().length;
+    while (stack.length && stack[stack.length - 1].indent >= indent) stack.pop();
+    const ref = /\[ref=(e\d+)\]/.exec(line)?.[1] ?? null;
+    const candidateRef = ref ?? [...stack].reverse().find((item) => item.ref)?.ref ?? null;
+    if (line.toLowerCase().includes(q) && candidateRef && !seen.has(candidateRef)) {
+      const el = refToEl.get(candidateRef);
+      if (el?.isConnected) {
+        seen.add(candidateRef);
+        matches++;
+        if (entries.length < Math.max(1, Math.min(args.limit, 50))) {
+          const interactive = [...stack].reverse().find((item) => item.ref && /\b(button|link|textbox|checkbox|radio|combobox|menuitem|file-input)\b/.test(item.line));
+          entries.push({ ...describe(el, matches - 1), path: stack.slice(-4).map((item) => item.line.trim().slice(0, 120)), interactiveAncestorRef: /\b(button|link|textbox|checkbox|radio|combobox|menuitem|file-input)\b/.test(line) ? candidateRef : interactive?.ref ?? null });
+        }
+      }
+    }
+    stack.push({ indent, line, ref });
+  }
+  return { matches_n: matches, entries };
 }
 
 /** The element under a viewport point and up to three ancestors: turns visual evidence into locators. */
@@ -539,7 +616,7 @@ export function check(args: Expectation): CheckResult {
   return { ok: failed.length === 0, failed, url: location.href, title: document.title };
 }
 
-export const api = { check, resolve, pointInfo, focus, readValue, fill, nativeSet, isChecked, select, caretToEnd, isFileInput, useAssociatedFileInput, clearActMark, settle, frameProbe, clearFrameMark, aria, find, elementAt, annotate, unannotate, armClickProbe, readClickProbe, domClick, readText };
+export const api = { check, resolve, resolveUpload, fileSelectionCount, pointInfo, focus, readValue, fill, nativeSet, isChecked, select, caretToEnd, clearActMark, settle, frameProbe, clearFrameMark, aria, find, findByQuery, elementAt, annotate, unannotate, armClickProbe, readClickProbe, domClick, readText };
 export type PageApi = typeof api;
 
 (globalThis as any)[PAGE_GLOBAL] = api;

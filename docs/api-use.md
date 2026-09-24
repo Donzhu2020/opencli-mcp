@@ -26,9 +26,9 @@ families are in the `errors` doc; read the full object model on demand with `doc
    answer a dialog the user didn't ask you to.
 10. **Observe discipline:** one observe to orient, then act on its refs. The snapshot is the action map, not the
     document — read an article, doc, or chat log with `tab_read` (linear text, no refs; scroll is restored). If it returns
-    `nextStart`, pass that value as `start` to continue on an unchanged page. A feed that returns `reason:"unbounded"` is done; do not call `tab_read` again to finish it. Branches marked `(collapsed)`
+    `nextStart`, pass it with `readId` as `start` and `readId` to continue that same capture. `reason:"unbounded"` means a growing feed stopped the scan; `scan_limit` means the scan ended before the page did. Branches marked `(collapsed)`
     keep their ref; `tab_observe` with `{ref:"eN"}` opens that one branch. The snapshot is the full tree unless you pass
-    `diff: true`, and only do that when the previous full snapshot is still in your context. `viewport: true` is the
+    `since` with the `snapshotId` of a state still in your context for an exact diff; otherwise you get the full state. `viewport: true` is the
     on-screen subtree, not a page of the full tree. `click` is a real mouse event and fails with `not_delivered` when
     the page did not receive it, or the element has no box; only then, once, `method:"dom"`. Don't re-verify a fact an authoritative signal already shows
     (checked state, selected option, success toast, URL parameter). No fixed sleeps — `tab_expect` waits for the state

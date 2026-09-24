@@ -86,11 +86,21 @@ describe('readText', () => {
     const p = await page();
     const first = await p.readText({ waitMs: 0, maxChars: 7 });
     expect(first).toMatchObject({ text: 'Alpha\nB', complete: false, reason: 'budget', start: 0, nextStart: 7 });
-    const second = await p.readText({ waitMs: 0, maxChars: 7, start: first.nextStart });
+    const second = await p.readText({ readId: first.readId, maxChars: 7, start: first.nextStart });
     expect(second).toMatchObject({ text: 'ravo\nCh', complete: false, start: 7, nextStart: 14 });
-    const last = await p.readText({ waitMs: 0, maxChars: 7, start: second.nextStart });
+    const last = await p.readText({ readId: second.readId, maxChars: 7, start: second.nextStart });
     expect(last).toMatchObject({ text: 'arlie', complete: true, start: 14 });
     expect(first.text + second.text + last.text).toBe('Alpha\nBravo\nCharlie');
+  });
+  it('keeps repeated visible lines and skips hidden text in one stable capture', async () => {
+    document.body.innerHTML = '<p>Same</p><p>Same</p><p hidden>Secret</p><p aria-hidden="true">Shown</p>';
+    installScroll(100, 100);
+    const p = await page();
+    const first = await p.readText({ waitMs: 0, maxChars: 5 });
+    document.body.innerHTML = '<p>Changed</p>';
+    const rest = await p.readText({ readId: first.readId, start: first.nextStart, maxChars: 20 });
+    expect(first.text + rest.text).toBe('Same\nSame\nShown');
+    expect(rest.complete).toBe(true);
   });
   function installScroll(height: number, scrollHeight0: number, onScroll?: (y: number) => void) {
     let y = 0;
@@ -159,4 +169,24 @@ describe('action map collapse', () => {
     expect(opened).not.toContain('Save');
     expect(p.aria({ ref: 'e9', budget: 5000 })).toContain('No node [ref=e9]');
   });
+});
+
+it('exposes a hidden file input and resolves it without a layout box', async () => {
+  document.body.innerHTML = '<input id="upload" type="file" hidden accept="image/png">';
+  stubEngine();
+  const p = await page();
+  const state = p.aria();
+  expect(state).toContain('file-input "file upload" [ref=e1] (hidden)');
+  expect(p.resolveUpload({ selector: 'aria-ref=e1', fallback: null, files: 1 })).toMatchObject({ ok: true, ref: 'e1' });
+  expect(document.getElementById('upload')?.hasAttribute('data-opencli-act')).toBe(true);
+  expect(p.resolveUpload({ selector: 'aria-ref=e1', fallback: null, files: 2 })).toMatchObject({ error: { code: 'invalid_args' } });
+});
+
+it('finds a named control in the action map without a locator', async () => {
+  document.body.innerHTML = '<main id="m"><button id="save">Save draft</button></main>';
+  const main = document.getElementById('m')!;
+  const save = document.getElementById('save')!;
+  stubEngine({ ariaText: '- main [ref=e1]\n  - button "Save draft" [ref=e2]', refs: { e1: main, e2: save } });
+  const p = await page();
+  expect(p.findByQuery({ query: 'save', limit: 10 })).toMatchObject({ matches_n: 1, entries: [expect.objectContaining({ ref: 'e2', interactiveAncestorRef: 'e2', path: ['- main [ref=e1]'] })] });
 });

@@ -42,7 +42,8 @@ export interface SessionState {
   enabledSites: Map<string, { write: boolean }>;
   capabilities: Set<string>;
   js?: JsSession;
-  lastObserve: Map<string, string>;
+  observationSeq: number;
+  lastObserve: Map<string, { id: string; text: string }>;
   /** Network entries seen per tab, with monotonically increasing sequence numbers for cursor-based reads. */
   netLog: Map<string, { seq: number; entries: Array<Record<string, unknown> & { seq: number }>; seen: Set<string>; bodyChars: number }>;
   finalized: boolean;
@@ -106,7 +107,7 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
   session(id: string): SessionState {
     let s = this.sessions.get(id);
     if (!s) {
-      s = { id, createdAt: Date.now(), pages: new Map(), tabLocks: new Map(), enabledSites: new Map(), capabilities: new Set(), lastObserve: new Map(), netLog: new Map(), finalized: false };
+      s = { id, createdAt: Date.now(), pages: new Map(), tabLocks: new Map(), enabledSites: new Map(), capabilities: new Set(), observationSeq: 0, lastObserve: new Map(), netLog: new Map(), finalized: false };
       this.sessions.set(id, s);
     }
     return s;
@@ -131,7 +132,7 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
     s.pages.set(pageId, page);
     return page;
   }
-  forgetPage(sessionId: string, pageId: string): void { const s = this.sessions.get(sessionId); s?.pages.delete(pageId); s?.tabLocks.delete(pageId); if (s?.selected === pageId) s.selected = undefined; }
+  forgetPage(sessionId: string, pageId: string): void { const s = this.sessions.get(sessionId); s?.pages.delete(pageId); s?.tabLocks.delete(pageId); if (s) for (const key of s.lastObserve.keys()) if (key.startsWith(`${pageId}:`)) s.lastObserve.delete(key); if (s?.selected === pageId) s.selected = undefined; }
 
   /** Background adapter page per site (shared by all MCP sessions). */
   async getAdapterPage(site: string): Promise<RuntimePage> {

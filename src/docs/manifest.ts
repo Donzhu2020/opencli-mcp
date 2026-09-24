@@ -6,6 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { BROWSER_CAPABILITIES, projectApiReference } from './surface.js';
 
 export type DocMode = 'included' | 'model' | 'lookup';
 export interface DocEntry {
@@ -27,9 +28,7 @@ export const DOCS_MANIFEST: DocEntry[] = [
   { name: 'errors', mode: 'lookup', description: 'error code families and what to do for each' },
   { name: 'recon', mode: 'lookup', description: 'read before discovering a site’s API endpoints' },
   { name: 'define-tools', mode: 'lookup', description: 'read before defining a site adapter' },
-  { name: 'capabilities/cdp', mode: 'model', when: { capabilities: ['cdp'] } },
-  { name: 'capabilities/webmcp', mode: 'model', when: { capabilities: ['webmcp'] } },
-  { name: 'capabilities/visibility', mode: 'model', when: { capabilities: ['visibility'] } },
+  ...BROWSER_CAPABILITIES.filter((entry) => entry.doc).map((entry): DocEntry => ({ name: entry.doc!, mode: 'model', when: { capabilities: [entry.id] } })),
   { name: 'troubleshooting', mode: 'lookup', description: 'read when the browser bridge fails' },
 ];
 
@@ -53,6 +52,12 @@ export function readDoc(name: string): string | null {
   const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
   docCache.set(name, text);
   return text;
+}
+
+export function readDocForContext(name: string, ctx: DocContext): string | null {
+  if (!listDocs(ctx).some((entry) => entry.name === name && entry.available)) return null;
+  const source = readDoc(name);
+  return source && name === 'api-reference' ? projectApiReference(source, ctx.capabilities as import('../protocol.js').BrowserFeature[]) : source;
 }
 
 export function listDocs(ctx: DocContext): Array<DocEntry & { available: boolean }> {

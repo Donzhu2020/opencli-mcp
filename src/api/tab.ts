@@ -8,7 +8,7 @@ import { ariaDiff } from './diff.js';
 import { networkDetail, networkSummary } from './network.js';
 import { ARIA_BUDGET, collapseAria } from '../shared/aria-collapse.js';
 import { targetToSelector, fallbackSelector } from '../shared/engine.js';
-import type { FindEntry, FindResult, ElementAtResult, Expectation, CheckResult, ReadTextResult } from '../shared/page-contract.js';
+import type { FindEntry, FindResult, QueryFindResult, ElementAtResult, Expectation, CheckResult, ReadTextResult } from '../shared/page-contract.js';
 import type { DialogInfo, FrameStep } from '../protocol.js';
 import type { SessionContext } from './context.js';
 
@@ -22,9 +22,9 @@ export type ActAction = 'click' | 'dblclick' | 'hover' | 'focus' | 'fill' | 'typ
 
 export interface ActOptions { target?: Target; action: ActAction; value?: string; files?: string[]; to?: Target; direction?: 'up' | 'down' | 'left' | 'right'; amount?: number; timeoutMs?: number; settleMs?: number; /** click only. `dom` runs HTMLElement.click() and sends no mouse event. Default is a real mouse event. */ method?: 'cdp' | 'dom' }
 
-export interface ObserveOptions { mode?: 'state' | 'screenshot' | 'both'; /** diff against the previous observe. Off unless explicitly true — a diff is useless when the caller no longer has the base snapshot. */ diff?: boolean; /** only the subtree on screen right now (what a screenshot shows). Not a page of the full tree. */ viewport?: boolean; /** open one branch of the action map (`eN` from a collapsed line). Ignores viewport. */ ref?: string; /** overlay eN labels on the screenshot */ annotate?: boolean; fullPage?: boolean }
+export interface ObserveOptions { mode?: 'state' | 'screenshot' | 'both'; /** Return a diff only against this exact snapshot id; otherwise return the full state. */ since?: string; /** only the subtree on screen right now (what a screenshot shows). Not a page of the full tree. */ viewport?: boolean; /** open one branch of the action map (`eN` from a collapsed line). Ignores viewport. */ ref?: string; /** overlay eN labels on the screenshot */ annotate?: boolean; fullPage?: boolean }
 
-export interface ReadOptions { /** stop after this many characters. Default 60000. */ maxChars?: number; /** character offset from the beginning of the document scan */ start?: number }
+export interface ReadOptions { /** stop after this many characters. Default 60000. */ maxChars?: number; /** character offset returned as nextStart by a previous read */ start?: number; /** capture id returned by that same read */ readId?: string }
 
 export interface ImageValue { __image: true; mimeType: string; base64: string }
 
@@ -102,21 +102,23 @@ export class Tab {
   /** Keep this tab open and give up this session's control of it. */
   async release(): Promise<void> { await this.use((p) => p.releaseTab(this.id)); this.closed = true; this.ctx.rt.forgetPage(this.ctx.sessionId, this.id); }
 
-  async observe(opts: ObserveOptions = {}): Promise<{ url: string | null; title: string | null; state?: string; diff?: boolean; changed?: { added: number; removed: number; changed?: number }; image?: ImageValue }> {
+  async observe(opts: ObserveOptions = {}): Promise<{ url: string | null; title: string | null; state?: string; snapshotId?: string; diff?: boolean; changed?: { added: number; removed: number; changed?: number }; image?: ImageValue }> {
     const mode = opts.mode ?? 'state';
     return this.use(async (page) => {
       const meta = await this.info(page);
-      const out: { url: string | null; title: string | null; state?: string; diff?: boolean; changed?: { added: number; removed: number; changed?: number }; image?: ImageValue } = { ...meta };
+      const out: { url: string | null; title: string | null; state?: string; snapshotId?: string; diff?: boolean; changed?: { added: number; removed: number; changed?: number }; image?: ImageValue } = { ...meta };
       if (mode === 'state' || mode === 'both') {
         // one state source: Playwright's aria snapshot (credential values redacted); its [ref=eN] are the act targets
         let text = String(await page.pageCall('aria', { viewport: Boolean(opts.viewport) && !opts.ref, ...(opts.ref ? { ref: opts.ref } : {}) }));
         const key = `${this.id}:${opts.viewport && !opts.ref ? 'vp' : 'all'}:${opts.ref ?? ''}`;
         const prev = this.ctx.state.lastObserve.get(key);
-        this.ctx.state.lastObserve.set(key, text);
-        const diffOn = opts.diff === true;
+        const snapshotId = `${++this.ctx.state.observationSeq}`;
+        this.ctx.state.lastObserve.set(key, { id: snapshotId, text });
+        out.snapshotId = snapshotId;
+        const diffOn = Boolean(opts.since && prev?.id === opts.since);
         // the tail line ("Focused: …") is state, not structure: diff the tree, then re-append the current focus
         const split = (t: string) => { const i = t.lastIndexOf('\nFocused: '); return i >= 0 ? [t.slice(0, i), t.slice(i + 1)] : [t, '']; };
-        const [tree, focus] = split(text); const [prevTree] = prev ? split(prev) : [''];
+        const [tree, focus] = split(text); const [prevTree] = prev ? split(prev.text) : [''];
         if (diffOn && prev && prevTree !== tree) {
           const d = ariaDiff(prevTree, tree);
           if (d.changedRatio < 0.6) { out.diff = true; out.changed = { added: d.added, removed: d.removed, changed: d.changed }; text = `${d.text || '(no visible change)'}${focus ? `\n${focus}` : ''}`; }
@@ -142,8 +144,9 @@ export class Tab {
     } finally { if (opts.annotate) await page.pageCall('unannotate').catch(() => {}); }
   }
 
-  async find(target: Target & { limit?: number }): Promise<FindResult | ElementAtResult> {
+  async find(target: (Target & { limit?: number }) | { query: string; limit?: number }): Promise<FindResult | ElementAtResult | QueryFindResult> {
     return this.use(async (page) => {
+      if ('query' in target) return await page.pageCall('findByQuery', { query: target.query, limit: target.limit ?? 20 }) as QueryFindResult;
       // a viewport point (screenshot coordinates) → the element there and its ancestors, as locators
       if ('x' in target) return await page.pageCall('elementAt', { x: target.x, y: target.y }) as ElementAtResult;
       // same engine and the same compiled selector as act: what find lists is exactly what act would resolve
@@ -155,12 +158,14 @@ export class Tab {
   }
 
   /**
-   * Linear text of a bounded document. Scrolls to mount lazy content, dedupes, restores the scroll position.
+   * Linear text of a bounded document. Scrolls to mount lazy content, retains repeated text from distinct nodes, restores the scroll position.
    * No refs. A feed that grows without a bottom returns reason `unbounded` and the head already read — do not call it again to finish the feed.
    */
   async read(opts: ReadOptions = {}): Promise<ReadTextResult> {
     return this.use(async (page) => {
+      if (opts.start !== undefined && !opts.readId) throw new ActionError('invalid_args', 'Continuing a read requires both readId and start.', 'Copy readId and nextStart from the previous tab_read result.');
       const r = await page.pageCall('readText', opts) as ReadTextResult;
+      if (r.reason === 'stale') throw new ActionError('stale_read', 'This page no longer has that text capture.', 'Call tab_read without readId to start a new capture.');
       return r;
     });
   }
@@ -170,8 +175,15 @@ export class Tab {
     const { action } = opts;
     return this.use(async (page) => {
       try {
+        const capture = this.ctx.rt.hasFeature('network');
+        if (capture) await this.harvest(page);
+        const networkFrom = this.ctx.state.netLog.get(this.id)?.seq ?? 0;
         // use the page already held by this.use(): calling this.reload()/back()/forward() here would re-enter the session lock and deadlock
-        if (action === 'back' || action === 'forward' || action === 'reload') { const h = await page.history(action); return { action, ...h }; }
+        if (action === 'back' || action === 'forward' || action === 'reload') {
+          const h = await page.history(action);
+          if (capture) await this.harvest(page);
+          return { action, ...h, delivery: 'applied', controlState: 'unverified', ...(capture && { network: { afterSequence: networkFrom, cursor: this.ctx.state.netLog.get(this.id)?.seq ?? networkFrom } }) };
+        }
         if (action === 'scroll' && !opts.target) {
           // no target: wheel at the viewport centre
           const vp = await page.evaluate<{ x: number; y: number }>('({ x: innerWidth / 2, y: innerHeight / 2 })');
@@ -179,10 +191,15 @@ export class Tab {
         }
         if (!opts.target) throw new ActionError('missing_target', `action "${action}" needs a target`, 'Pass a target: a {ref} from observe, or a selector/role+name/label/text/testid.');
         const r = await page.act({ kind: action, target: opts.target as Record<string, unknown>, value: opts.value, files: opts.files, to: opts.to as Record<string, unknown> | undefined, direction: opts.direction, amount: opts.amount, timeoutMs: opts.timeoutMs, settleMs: opts.settleMs ?? 600, cursor: this.ctx.rt.cursorEnabled, ...(opts.method ? { method: opts.method } : {}) });
-        await this.harvest(page);
+        if (capture) await this.harvest(page);
+        const delivery = r.method === 'dom' || ['fill', 'check', 'uncheck', 'select', 'upload', 'focus'].includes(action) ? 'applied' : action === 'click' || action === 'dblclick' ? 'received' : 'dispatched';
+        const controlVerified = r.verified === true || (action === 'check' && r.checked === true) || (action === 'uncheck' && r.checked === false) || (action === 'select' && Array.isArray(r.selected) && r.selected.length > 0);
         // Return the outcome and the fields needed to choose the next action.
         return {
           action,
+          delivery,
+          controlState: controlVerified ? 'verified' : 'unverified',
+          ...(capture && { network: { afterSequence: networkFrom, cursor: this.ctx.state.netLog.get(this.id)?.seq ?? networkFrom } }),
           ...(r.matches_n > 1 ? { matches_n: r.matches_n } : {}),
           ...(r.navigated ? { navigated: true, ...(r.url !== undefined && { url: r.url }) } : {}),
           ...(r.ref ? { ref: r.ref } : {}),

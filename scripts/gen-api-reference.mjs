@@ -5,7 +5,7 @@ import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
-const entries = ['src/api/api.ts', 'src/api/browser.ts', 'src/api/tab.ts'].map((f) => resolve(root, f));
+const entries = ['src/api/api.ts', 'src/api/browser.ts', 'src/api/tab.ts', 'src/shared/page-contract.ts', 'src/protocol.ts'].map((f) => resolve(root, f));
 const program = ts.createProgram(entries, {
   target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.NodeNext, moduleResolution: ts.ModuleResolutionKind.NodeNext,
   strict: true, exactOptionalPropertyTypes: true, skipLibCheck: true, noEmit: true, lib: ['lib.es2022.d.ts', 'lib.dom.d.ts'],
@@ -48,7 +48,7 @@ function memberLines(type, indent, depth) {
 }
 const sections = [];
 const wanted = new Map([['AgentApi', 'interface'], ['Browser', 'class'], ['Tab', 'class']]);
-const aliases = ['Target', 'ActAction', 'ActOptions', 'ObserveOptions', 'ReadOptions'];
+const aliases = ['Target', 'ActAction', 'ActOptions', 'ObserveOptions', 'ReadOptions', 'ImageValue', 'Box', 'FindEntry', 'FindResult', 'QueryFindResult', 'ElementAtResult', 'ReadTextResult', 'Expectation', 'CheckResult', 'FrameStep', 'DialogInfo', 'ConsoleEntry'];
 for (const entry of entries) { sf = program.getSourceFile(entry); ts.forEachChild(sf, (node) => {
   if ((ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node)) && node.name && wanted.has(node.name.text)) {
     const sym = checker.getSymbolAtLocation(node.name);
@@ -61,14 +61,14 @@ for (const entry of entries) { sf = program.getSourceFile(entry); ts.forEachChil
   }
 }); }
 // keep a stable order: the entry object first, then Browser, Tab, then the value types
-const order = ['interface AgentApi', 'class Browser', 'class Tab', 'type Target', 'type ActAction', 'interface ActOptions', 'interface ObserveOptions', 'interface ReadOptions'];
+const order = ['interface AgentApi', 'class Browser', 'class Tab', 'type Target', 'type FrameStep', 'type ActAction', 'interface ActOptions', 'interface ObserveOptions', 'interface ReadOptions', 'interface ImageValue', 'interface Box', 'interface FindEntry', 'interface FindResult', 'interface QueryFindResult', 'interface ElementAtResult', 'interface ReadTextResult', 'interface Expectation', 'interface CheckResult', 'interface DialogInfo', 'interface ConsoleEntry'];
 const key = (s) => s.replace(/^\/\/.*\n/, '').replace(/^export /, '');
 sections.sort((a, b) => order.findIndex((k) => key(a).startsWith(k)) - order.findIndex((k) => key(b).startsWith(k)));
 // `?` already says undefined for parameters (also inside type-literal method signatures); real `T | undefined` results and properties stay
 const clean = (s) => s.replace(/^export /gm, '').replace(/ \| undefined(?=[,)])/g, '');
-const md = `## API reference (generated from src/api/{api,browser,tab}.ts — do not edit)
+const md = `## API reference (generated from the public TypeScript declarations — do not edit)
 
-In \`js\` the globals are \`agent\`, \`sites\`, \`recon\`, \`tools\`, \`session\` (the members of \`AgentApi\`) plus \`nodeRepl\` and \`Tab\`. Everything below is the whole model-facing surface; typed entry tools are projections of it.
+In \`js\` the globals are \`agent\`, \`sites\`, \`recon\`, \`tools\`, \`session\` (the members of \`AgentApi\`) plus \`nodeRepl\` and \`Tab\`. This is the object-model signature reference; typed entry tools are projections of it. Site adapter definitions are documented in \`define-tools\`.
 
 \`\`\`ts
 ${sections.map(clean).join('\n\n')}

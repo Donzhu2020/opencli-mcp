@@ -34,7 +34,7 @@ export interface ActToolInput {
 
 type Need = 'required' | 'nonempty' | 'present' | 'optional' | 'forbidden';
 
-const RULES: Record<ActAction, { target: Need; value: Need; files: Need; to: Need; scroll: boolean }> = {
+export const ACTION_RULES: Record<ActAction, { target: Need; value: Need; files: Need; to: Need; scroll: boolean }> = {
   click: { target: 'required', value: 'forbidden', files: 'forbidden', to: 'forbidden', scroll: false },
   dblclick: { target: 'required', value: 'forbidden', files: 'forbidden', to: 'forbidden', scroll: false },
   hover: { target: 'required', value: 'forbidden', files: 'forbidden', to: 'forbidden', scroll: false },
@@ -57,7 +57,7 @@ const TARGET_HELP = 'Exactly one of {ref}, {selector}, {role, name?}, {name}, {l
 
 /** What the model can copy into the next call. Wire shape is error.details.expected. */
 export function expectedAct(action: ActAction): Record<string, string> {
-  const rule = RULES[action];
+  const rule = ACTION_RULES[action];
   return {
     action,
     tab: 'session tab id; required when more than one tab is open',
@@ -120,7 +120,7 @@ function present(value: unknown): boolean {
 }
 
 export function checkActInput(input: ActToolInput): { target?: Target; to?: Target; method?: 'cdp' | 'dom' } {
-  const rule = RULES[input.action];
+  const rule = ACTION_RULES[input.action];
   const target = pickTarget(input.target, input.action, 'target');
   const to = pickTarget(input.to, input.action, 'to');
   if (rule.target === 'required' && !target) reject(input.action, `action "${input.action}" needs a target.`);

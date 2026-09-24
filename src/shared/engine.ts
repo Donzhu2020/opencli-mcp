@@ -139,7 +139,7 @@ async function resolve(io: ActIO, spec: ActSpec, target: ActTarget, timeoutMs: n
     for (const align of spec.force ? [ALIGNMENTS[0]] : ALIGNMENTS) {
       const res = await io.call('resolve', { selector, fallback, strict, states, align }, timeoutMs + 2000) as ResolveOutcome;
       if ('ok' in res && res.ok) {
-        if (res.hit === 'other' && !spec.force) { last = { error: { code: 'intercepted', message: `${res.blocker ?? 'another element'} intercepts the ${spec.kind} point`, hint: 'Dismiss the overlay/modal first, or pass force:true.' }, retry: true }; continue; }
+        if (res.hit === 'other' && !spec.force) { last = { error: { code: 'intercepted', message: `${res.blocker ?? 'another element'} intercepts the ${spec.kind} point`, hint: 'Dismiss the overlay or use a different target from tab_find.' }, retry: true }; continue; }
         return res;
       }
       const fail = res as Exclude<ResolveOutcome, Resolved>;
@@ -157,6 +157,7 @@ async function resolve(io: ActIO, spec: ActSpec, target: ActTarget, timeoutMs: n
 export async function performAct(io: ActIO, spec: ActSpec): Promise<ActResult> {
   if (spec.method === 'dom') return performDomClick(io, spec);
   if (spec.method !== undefined && spec.method !== 'cdp') throw new ActError('invalid_args', `method "${spec.method}" is not a click method.`, 'method is "cdp" (default) or "dom".');
+  if (spec.kind === 'upload') return performUpload(io, spec);
   const timeoutMs = spec.timeoutMs ?? 3000;
   const started = Date.now();
   const r = await resolve(io, spec, spec.target, timeoutMs, started);
@@ -250,18 +251,6 @@ export async function performAct(io: ActIO, spec: ActSpec): Promise<ActResult> {
       Object.assign(base, { direction: dir, amount });
       break;
     }
-    case 'upload': {
-      const files = spec.files ?? [];
-      if (!files.length) throw new ActError('missing_files', 'upload needs files');
-      if (!(await io.call('isFileInput'))) {
-        if (!(await io.call('useAssociatedFileInput'))) throw new ActError('not_a_file_input', 'no file input associated with the target', 'Target the <input type=file> directly.');
-      }
-      const doc = await io.cdp('DOM.getDocument', { depth: 0 }) as { root: { nodeId: number } };
-      const q = await io.cdp('DOM.querySelector', { nodeId: doc.root.nodeId, selector: '[data-opencli-act]' }) as { nodeId: number };
-      await io.cdp('DOM.setFileInputFiles', { files, nodeId: q.nodeId });
-      Object.assign(base, { files: files.length });
-      break;
-    }
     case 'drag': {
       if (!spec.to) throw new ActError('missing_target', 'drag needs `to`');
       const dest = await resolve(io, { ...spec, kind: 'hover' }, spec.to, timeoutMs, Date.now());
@@ -281,6 +270,24 @@ export async function performAct(io: ActIO, spec: ActSpec): Promise<ActResult> {
   Object.assign(base, { elapsedMs: settled - started, timings: { resolveMs: base.waitedMs, actionMs: actionDone - started - base.waitedMs, settleMs: settled - actionDone } });
   try { await io.call('clearActMark', undefined, 1000); } catch { /* page changed */ }
   return base;
+}
+
+/** File controls may be hidden by the site's own upload button; no pointer target or layout box is required. */
+async function performUpload(io: ActIO, spec: ActSpec): Promise<ActResult> {
+  const files = spec.files ?? [];
+  if (!files.length) throw new ActError('missing_files', 'upload needs files');
+  const selector = targetToSelector(spec.target);
+  if (!selector) throw new ActError('invalid_target', 'upload needs a file-input ref or a locator associated with one');
+  const started = Date.now();
+  const resolved = await io.call('resolveUpload', { selector, fallback: fallbackSelector(spec.target), files: files.length }) as import('./page-contract.js').UploadTarget | import('./page-contract.js').ResolveFail;
+  if (!('ok' in resolved)) throw new ActError(resolved.error.code, resolved.error.message, resolved.error.hint, resolved.error.candidates ? { candidates: resolved.error.candidates } : undefined);
+  try {
+    const doc = await io.cdp('DOM.getDocument', { depth: 0 }) as { root: { nodeId: number } };
+    const q = await io.cdp('DOM.querySelector', { nodeId: doc.root.nodeId, selector: '[data-opencli-act]' }) as { nodeId: number };
+    await io.cdp('DOM.setFileInputFiles', { files, nodeId: q.nodeId });
+    const count = await io.call('fileSelectionCount') as number;
+    return { ok: true, kind: 'upload', ref: resolved.ref, matches_n: resolved.matches_n, visible_n: 0, match_level: 'exact', point: { x: 0, y: 0 }, method: 'cdp', hit: 'target', tag: 'input', waitedMs: Date.now() - started, selector: resolved.selector ?? undefined, files: count, verified: count === files.length };
+  } finally { await io.call('clearActMark').catch(() => {}); }
 }
 
 /** Explicit DOM activation. No mouse event is sent, so this cannot be a second click after a delivered one unless the caller asks again. */

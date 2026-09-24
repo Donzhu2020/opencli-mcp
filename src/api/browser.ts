@@ -5,7 +5,8 @@
 import type { RuntimePage } from '../backends/page-types.js';
 import type { ExtensionRuntimePage, UserTabInfo } from '../backends/extension-page.js';
 import { ActionError } from './errors.js';
-import { buildInstructions, readDoc, type DocContext } from '../docs/manifest.js';
+import { buildInstructions, readDocForContext, type DocContext } from '../docs/manifest.js';
+import { BROWSER_CAPABILITIES } from '../docs/surface.js';
 import { Tab } from './tab.js';
 import type { SessionContext } from './context.js';
 
@@ -71,28 +72,22 @@ export class Browser {
 
   readonly capabilities = {
     list: async (): Promise<Array<{ id: string; description: string }>> => {
-      const base = [
-        { id: 'cdp', description: 'Raw Chrome DevTools Protocol on the current tab (allowlisted methods).' },
-        { id: 'viewport', description: 'Temporarily override the viewport size for responsive checks; reset when done.' },
-        { id: 'webmcp', description: 'Tools the current page registers itself (navigator.modelContext); prefer them over clicking through the DOM.' },
-      ];
-      base.push({ id: 'visibility', description: 'Show or hide the session window to the user. Default: background.' });
-      return base.filter((capability) => this.ctx.rt.hasFeature(capability.id as import('../protocol.js').BrowserFeature));
+      return BROWSER_CAPABILITIES.filter((capability) => this.ctx.rt.hasFeature(capability.id)).map(({ id, description }) => ({ id, description }));
     },
     get: async (id: string): Promise<Record<string, unknown>> => {
       const page = await this.page();
       if (!this.ctx.rt.hasFeature(id as import('../protocol.js').BrowserFeature)) throw new ActionError('capability_unavailable', `${id} is not advertised by the connected extension.`, 'Call browser.capabilities.list() or doctor for current capabilities.');
       this.ctx.state.capabilities.add(id);
-      if (id === 'cdp') return { send: (method: string, params?: Record<string, unknown>) => page.cdp(method, params), documentation: () => readDoc('capabilities/cdp') };
+      if (id === 'cdp') return { send: (method: string, params?: Record<string, unknown>) => page.cdp(method, params), documentation: () => readDocForContext('capabilities/cdp', { backend: this.ctx.rt.backend(), capabilities: this.ctx.rt.features() }) };
       if (id === 'viewport') return { set: ({ width, height }: { width: number; height: number }) => page.cdp('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false }), reset: () => page.cdp('Emulation.clearDeviceMetricsOverride', {}) };
-      if (id === 'visibility') { const ext = this.ext(page); return { get: () => ext.getVisibility(), set: (v: boolean) => ext.setVisibility(v), documentation: () => readDoc('capabilities/visibility') }; }
-      if (id === 'webmcp') { const sel = await this.tabs.selected(); if (!sel) throw new ActionError('no_tab', 'Open a tab first', 'Call tab_open (or tab_claim a user tab) before using this capability.'); return { list: () => sel.webmcp.list(), call: (name: string, input?: Record<string, unknown>) => sel.webmcp.call(name, input), documentation: () => readDoc('capabilities/webmcp') }; }
+      if (id === 'visibility') { const ext = this.ext(page); return { get: () => ext.getVisibility(), set: (v: boolean) => ext.setVisibility(v), documentation: () => readDocForContext('capabilities/visibility', { backend: this.ctx.rt.backend(), capabilities: this.ctx.rt.features() }) }; }
+      if (id === 'webmcp') { const sel = await this.tabs.selected(); if (!sel) throw new ActionError('no_tab', 'Open a tab first', 'Call tab_open (or tab_claim a user tab) before using this capability.'); return { list: () => sel.webmcp.list(), call: (name: string, input?: Record<string, unknown>) => sel.webmcp.call(name, input), documentation: () => readDocForContext('capabilities/webmcp', { backend: this.ctx.rt.backend(), capabilities: this.ctx.rt.features() }) }; }
       throw new ActionError('unknown_capability', `no capability "${id}"`, 'Use browser.capabilities to see what this backend supports.');
     },
   };
 
   documentation(): string {
     const ctx: DocContext = { backend: this.type, capabilities: this.ctx.rt.features() };
-    return `${buildInstructions(ctx)}\n\n${readDoc('js-tool') ?? ''}\n\n${readDoc('api-reference') ?? ''}`;
+    return `${buildInstructions(ctx)}\n\n${readDocForContext('js-tool', ctx) ?? ''}\n\n${readDocForContext('api-reference', ctx) ?? ''}`;
   }
 }

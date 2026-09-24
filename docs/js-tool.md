@@ -7,9 +7,9 @@ Pre-bound session globals (no import/bootstrap): `browser` (the default Chrome),
 
 ```js
 const tab = await browser.tabs.new('https://news.ycombinator.com');
-const state = await tab.observe();            // action map with [ref=eN] refs; { diff: true } only if you still have the previous snapshot; { ref: 'e12' } opens one collapsed branch
+const state = await tab.observe();            // action map with [ref=eN] refs and snapshotId; { since: state.snapshotId } requests an exact diff
 const article = await tab.read();              // linear text of a bounded document, no refs; scroll is restored
-if (article.nextStart !== undefined) await tab.read({ start: article.nextStart }); // continue on an unchanged page
+if (article.nextStart !== undefined) await tab.read({ readId: article.readId, start: article.nextStart }); // continue the same capture
 await tab.act({ target: { text: 'new' }, action: 'click' });
 const titles = await tab.evaluate('[...document.querySelectorAll(".titleline a")].map(a => a.textContent)');
 // define an explicit adapter using the same tab API; the draft is inactive until verified and activated

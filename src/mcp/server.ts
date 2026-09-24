@@ -8,28 +8,14 @@ import type { Runtime } from '../runtime/runtime.js';
 import { createAgentApi, Tab, type AgentApi, type ActAction } from '../api/agent.js';
 import { ActionError, errorEnvelope } from '../api/errors.js';
 import { JsSession, safeStringify } from './js-session.js';
-import { buildInstructions, listDocs, readDoc, type DocContext } from '../docs/manifest.js';
+import { buildInstructions, listDocs, readDocForContext, type DocContext } from '../docs/manifest.js';
 import { argsToShape, argSpec, coerceArgs } from '../sites/schema.js';
 import { listDefinedTools } from '../sites/define.js';
-import { checkActInput, checkExpect } from './act-input.js';
+import { checkActInput, checkExpect, type ActToolInput } from './act-input.js';
+import { actionSchema, targetSchema } from './action-schema.js';
 
 type Content = Array<{ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }>;
 type ToolResult = { content: Content; structuredContent?: Record<string, unknown>; isError?: boolean };
-
-const targetSchema = z.object({
-  ref: z.string().optional().describe('eN ref from tab_observe. Do not combine with another locator'),
-  selector: z.string().optional().describe('Playwright selector. Do not combine with ref, role, or x/y'),
-  within: z.string().optional().describe('scope: selector of a container or an eN ref; the target is resolved inside it'),
-  nth: z.number().int().optional(),
-  role: z.string().optional().describe('ARIA role, e.g. button, link, textbox'),
-  name: z.string().optional().describe('accessible name (with role)'),
-  label: z.string().optional().describe('form label text'),
-  text: z.string().optional().describe('visible text'),
-  testid: z.string().optional().describe('data-testid'),
-  x: z.number().optional().describe('viewport x; y is required with it'),
-  y: z.number().optional(),
-  frame: z.union([z.string(), z.number().int(), z.array(z.union([z.string(), z.number().int()]))]).optional().describe('iframe(s) to enter first, outermost first'),
-}).strict().describe('Exactly one locator: {ref} | {selector} | {role,name?} | {label} | {text} | {testid} | {x,y}. frame/within/nth only narrow it');
 
 function text(s: string): Content[number] { return { type: 'text', text: s }; }
 // One result envelope everywhere: success is `{ ok:true, …data }`, failure is `{ ok:false, error:{…} }` — compact JSON,
@@ -123,7 +109,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     if (sessionName) await b.nameSession(sessionName);
     const tab = await b.tabs.new(url);
     if (!observe) return ok({ tab: tab.id, url });
-    const { data, images } = stripImage({ tab: tab.id, ...(await tab.observe({ diff: false })) });
+    const { data, images } = stripImage({ tab: tab.id, ...(await tab.observe()) });
     return ok(data, images);
   }));
   server.registerTool('tab_claim', { title: 'Claim a user tab', description: 'Take control of a tab the user already has open. Use tab_list with user:true to find tabId, or give url (exact or prefix) and/or title (substring) to find a unique match. url/title together with tabId are guards that fail if the tab changed. Claimed user tabs are not moved into the agent group or closed by finalize.',
@@ -133,7 +119,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     const b = await api.agent.browsers.getDefault();
     const tab = await b.user.claimTab({ tabId, title, url });
     if (!observe) return ok({ tab: tab.id });
-    const { data, images } = stripImage({ tab: tab.id, ...(await tab.observe({ diff: false })) });
+    const { data, images } = stripImage({ tab: tab.id, ...(await tab.observe()) });
     return ok(data, images);
   }));
   server.registerTool('tab_close', { title: 'Close a tab', description: 'Close a tab controlled by this session, including a claimed user tab. To leave the tab open, use tab_release.',
@@ -143,17 +129,21 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   server.registerTool('tab_release', { title: 'Release a tab', description: 'Keep a controlled tab open and give up this session’s control. Works for both agent-created and claimed user tabs.',
     inputSchema: { tab: z.string().optional().describe('required when the session has more than one tab') },
   }, async ({ tab }) => run(async () => { const t = await tabOf(tab); await t.release(); return ok({ tab: t.id, released: true }); }));
-  server.registerTool('tab_observe', { title: 'Observe a tab', description: 'Action map: an accessibility snapshot with [ref=eN] refs for tab_act, and/or a screenshot. Not the document — long text is tab_read. A branch marked (collapsed) still has its ref; pass ref:"eN" to open that one branch. viewport:true is only the on-screen subtree, not the next page of the tree. diff defaults off: pass diff:true only when you still have the previous snapshot in context. A diff is against the server cache, not against what you remember.',
-    inputSchema: { tab: z.string().optional().describe('required when the session has more than one tab'), mode: z.enum(['state', 'screenshot', 'both']).default('state'), diff: z.boolean().default(false).describe('true only if the previous full snapshot is still in your context'), viewport: z.boolean().optional().describe('only the subtree on screen right now (what a screenshot shows)'), ref: z.string().optional().describe('open one collapsed branch (eN). Ignores viewport'), annotate: z.boolean().default(false).describe('overlay eN labels on the screenshot'), fullPage: z.boolean().default(false) },
+  server.registerTool('tab_observe', { title: 'Observe a tab', description: 'Action map with [ref=eN] refs, or a screenshot. Returns snapshotId. Pass since with an id you still have to receive a diff against exactly that state; otherwise a full state is returned. Long document text is tab_read. A collapsed branch keeps its ref; pass ref to open it.',
+    inputSchema: { tab: z.string().optional().describe('required when the session has more than one tab'), mode: z.enum(['state', 'screenshot', 'both']).default('state'), since: z.string().optional().describe('snapshotId from the state still in your context'), viewport: z.boolean().optional().describe('only the subtree on screen right now'), ref: z.string().optional().describe('open one collapsed branch (eN); ignores viewport'), annotate: z.boolean().default(false).describe('overlay eN labels on the screenshot'), fullPage: z.boolean().default(false) },
     annotations: { readOnlyHint: true },
   }, async ({ tab, ...o }) => run(async () => { const t = await tabOf(tab); const { data, images } = stripImage({ tab: t.id, ...(await t.observe(o)) }); return ok(data, images); }));
-  server.registerTool('tab_read', { title: 'Read page text', description: 'Linear text of a bounded document, article, or chat log. Scrolls internally to mount lazy content, deduplicates lines, then restores the scroll position. No refs — this is not the action map (that is tab_observe). When nextStart is returned, pass it as start to continue on an unchanged page. reason:"unbounded" is a feed with no bottom; reason:"budget" is the character or step cap.',
-    inputSchema: { tab: z.string().optional().describe('required when the session has more than one tab'), maxChars: z.number().int().min(200).max(80_000).optional().describe('stop after this many characters (default 60000)'), start: z.number().int().min(0).optional().describe('character offset returned as nextStart by a previous read') },
+  server.registerTool('tab_read', { title: 'Read page text', description: 'Linear rendered text of one bounded page scan. No action refs; use tab_observe to act. To continue, pass both readId and nextStart from the previous result, so a changing page cannot shift the offset. When no nextStart remains, scan_limit or unbounded means the scan stopped before the page ended.',
+    inputSchema: { tab: z.string().optional().describe('required when the session has more than one tab'), maxChars: z.number().int().min(200).max(80_000).optional().describe('maximum characters in this response (default 60000)'), start: z.number().int().min(0).optional().describe('nextStart from the previous result'), readId: z.string().optional().describe('readId from the same previous result') },
     annotations: { readOnlyHint: true },
-  }, async ({ tab, maxChars, start }) => run(async () => { const t = await tabOf(tab); return ok({ tab: t.id, ...(await t.read({ maxChars, start })) }); }));
-  server.registerTool('tab_find', { title: 'Find page elements', description: 'Inspect exact candidates for a target using the same locator engine as tab_act. Use after selector_ambiguous/not_found, then copy a returned selector or scope the target.',
-    inputSchema: { tab: z.string().optional(), target: targetSchema, limit: z.number().int().min(1).max(50).default(20) }, annotations: { readOnlyHint: true },
-  }, async ({ tab, target, limit }) => run(async () => { const t = await tabOf(tab); return ok({ tab: t.id, result: await t.find({ ...target, limit } as Parameters<Tab['find']>[0]) }); }));
+  }, async ({ tab, maxChars, start, readId }) => run(async () => { const t = await tabOf(tab); return ok({ tab: t.id, ...(await t.read({ maxChars, start, readId })) }); }));
+  server.registerTool('tab_find', { title: 'Find page elements', description: 'Use query to search the action map by accessible text and get replayable refs plus ancestor context; or use target to inspect exact locator candidates with the same engine as tab_act. Pass exactly one.',
+    inputSchema: { tab: z.string().optional(), query: z.string().min(1).optional(), target: targetSchema.optional(), limit: z.number().int().min(1).max(50).default(20) }, annotations: { readOnlyHint: true },
+  }, async ({ tab, query, target, limit }) => run(async () => {
+    if (Boolean(query) === Boolean(target)) throw new ActionError('invalid_args', 'tab_find needs exactly one of query or target.');
+    const t = await tabOf(tab);
+    return ok({ tab: t.id, result: await t.find(query ? { query, limit } : { ...target, limit } as Parameters<Tab['find']>[0]) });
+  }));
   const networkTool = server.registerTool('network_inspect', { title: 'Inspect captured requests', description: 'list returns compact request summaries; detail returns headers and a bounded request or response body for one seq. Capture starts when a session tab is attached. Use list after the page performs the operation, then detail on the relevant seq. Copy body.nextStart to continue reading.',
     inputSchema: { tab: z.string().optional(), action: z.enum(['list', 'detail']).default('list'), filter: z.string().optional().describe('URL substring for list'), afterSequence: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).default(30), seq: z.number().int().positive().optional().describe('required for detail; copy from list'), part: z.enum(['request', 'response']).default('response'), start: z.number().int().min(0).default(0), maxChars: z.number().int().min(200).max(100_000).default(8_000) }, annotations: { readOnlyHint: true },
   }, async ({ tab, action, filter, afterSequence, limit, seq, part, start, maxChars }) => run(async () => {
@@ -169,10 +159,11 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     if (server.isConnected()) server.sendResourceListChanged();
   };
   if (persistent) rt.on('features-changed', onFeaturesChanged);
-  server.registerTool('tab_act', { title: 'Act on a tab', description: 'One action. click/dblclick/hover/focus/check/uncheck need target; fill/type/press/select need target+value (press has no default key; value:"" clears with fill); upload needs target+files; drag needs target+to; scroll takes direction/amount and optional target; back/forward/reload take no target. Invalid combinations return invalid_args with details.expected. click sends a real mouse event; method:"dom" is click-only and only after not_delivered or no box. Do not repeat a click that returned ok.',
-    inputSchema: { tab: z.string().optional().describe('required when the session has more than one tab'), action: z.enum(['click', 'dblclick', 'hover', 'focus', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'upload', 'drag', 'scroll', 'back', 'forward', 'reload']), target: targetSchema.optional(), value: z.string().optional().describe('fill/type text, press key, or select option. Required for those actions; "" fill clears'), files: z.array(z.string()).optional().describe('upload only'), to: targetSchema.optional().describe('drag only'), direction: z.enum(['up', 'down', 'left', 'right']).optional().describe('scroll only'), amount: z.number().optional().describe('scroll only'), method: z.enum(['cdp', 'dom']).optional().describe('click only. dom = HTMLElement.click(), no mouse event. Default cdp = real mouse event'), settleMs: z.number().int().min(0).max(10_000).default(600).describe('wait for the DOM to settle after the action'), observe: z.boolean().default(false).describe('also return the page state after the action') },
+  server.registerTool('tab_act', { title: 'Act on a tab', description: 'One action. The action-specific schema permits only its parameters. The result distinguishes input delivery from verified control state and, when Network capture is available, returns a cursor for evidence inspection. A successful click means the mouse reached the page, not that the site completed the task; use tab_expect for the desired effect. method:"dom" is a click-only fallback after not_delivered or no box.',
+    inputSchema: actionSchema,
     annotations: { destructiveHint: true, openWorldHint: true },
-  }, async ({ tab, action, target, to, observe, value, files, direction, amount, settleMs, method }) => run(async () => {
+  }, async (input) => run(async () => {
+    const { tab, action, target, to, observe, value, files, direction, amount, settleMs, method } = input as unknown as ActToolInput & { tab?: string; observe?: boolean; settleMs?: number };
     const checked = checkActInput({ action: action as ActAction, target, to, value, files, direction, amount, method });
     const t = await tabOf(tab);
     const r = await t.act({ action: action as ActAction, target: checked.target, to: checked.to, value, files, direction, amount, settleMs, method: checked.method });
@@ -223,7 +214,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   server.registerTool('docs_list', { title: 'List docs', description: 'Documentation available for this backend.', inputSchema: {}, annotations: { readOnlyHint: true } }, async () => run(async () => ok({ docs: listDocs(docCtx()).filter((d) => d.available).map(({ name, mode, description }) => ({ name, mode, description })) })));
   server.registerTool('docs_get', { title: 'Read a doc', description: 'Read an available documentation page by name (see docs_list).', inputSchema: { name: z.string() }, annotations: { readOnlyHint: true } }, async ({ name }) => run(async () => {
     if (!listDocs(docCtx()).some((entry) => entry.name === name && entry.available)) throw new ActionError('unknown_doc', `no available doc "${name}"`, 'Call docs_list to see docs for the connected runtime.');
-    const d = readDoc(name);
+    const d = readDocForContext(name, docCtx());
     if (!d) throw new ActionError('unknown_doc', `no doc "${name}"`, 'Call docs_list to see available docs.');
     return ok(d);
   }));
@@ -313,7 +304,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   // ── resources ──
   server.registerResource('docs', new ResourceTemplate('opencli://docs/{name}', { list: async () => ({ resources: listDocs(docCtx()).filter((d) => d.available).map((d) => ({ uri: `opencli://docs/${d.name}`, name: d.name, description: d.description, mimeType: 'text/markdown' })) }) }), { title: 'Documentation', description: 'Agent-facing docs' }, async (uri, { name }) => {
     if (!listDocs(docCtx()).some((entry) => entry.name === String(name) && entry.available)) throw new ActionError('unknown_doc', `no available doc "${String(name)}"`);
-    return { contents: [{ uri: uri.href, mimeType: 'text/markdown', text: readDoc(String(name)) ?? `no doc ${String(name)}` }] };
+    return { contents: [{ uri: uri.href, mimeType: 'text/markdown', text: readDocForContext(String(name), docCtx()) ?? `no doc ${String(name)}` }] };
   });
   server.registerResource('sites', 'opencli://sites', { title: 'Sites', description: 'All sites with command counts', mimeType: 'application/json' }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(api.sites.list(), null, 2) }] }));
   server.registerResource('site', new ResourceTemplate('opencli://sites/{site}', { list: undefined }), { title: 'Site commands', mimeType: 'application/json' }, async (uri, { site }) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify((await rt.registry.commands(String(site))).map((c) => ({ name: c.name, description: c.description, access: c.access, domain: c.domain, args: c.args, result: c.result })), null, 2) }] }));

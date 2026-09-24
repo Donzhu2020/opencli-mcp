@@ -51,6 +51,7 @@ export interface FindEntry {
   box: Box;
 }
 export interface FindResult { matches_n: number; visible_n: number; selector: string; entries: FindEntry[] }
+export interface QueryFindResult { matches_n: number; entries: Array<FindEntry & { path: string[]; interactiveAncestorRef: string | null }> }
 
 export interface AriaArgs {
   /** only the subtree of elements intersecting the viewport */
@@ -61,11 +62,12 @@ export interface AriaArgs {
   budget?: number;
 }
 
-export interface ReadTextArgs { maxChars?: number; start?: number; maxSteps?: number; waitMs?: number }
-/** Linear document text. `nextStart` continues a bounded read on an unchanged page. `unbounded` means a feed grew on every pass. */
-export interface ReadTextResult { text: string; complete: boolean; reason?: 'budget' | 'unbounded'; chars: number; start: number; nextStart?: number }
+export interface ReadTextArgs { maxChars?: number; start?: number; readId?: string; maxSteps?: number; waitMs?: number }
+/** Linear document text from one bounded scan. `readId` and `nextStart` continue that same capture. */
+export interface ReadTextResult { readId: string; text: string; complete: boolean; reason?: 'budget' | 'scan_limit' | 'unbounded' | 'stale'; chars: number; start: number; nextStart?: number }
 
 export interface DomClickArgs { selector: string; fallback: string | null }
+export interface UploadTarget { ok: true; ref: string | null; selector: string | null; matches_n: number }
 export interface DomClickOk { ok: true; ref: string | null; tag: string; selector: string | null; x: number; y: number }
 export type DomClickResult = DomClickOk | ResolveFail
 

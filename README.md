@@ -78,7 +78,7 @@ For integrations and custom workflows, the main tools are:
 | Keep a tab open or close it | `tab_release`, `tab_close` |
 | Finish a browser session | `session_finalize` |
 | Discover and run site commands | `sites_search`, `site_run` |
-| Define a site adapter | `tools_define` |
+| Define and verify a site adapter | `tools_define`, `tools_try`, `tools_activate` |
 | Run multi-step JavaScript | `js`, `js_reset` |
 | Read built-in documentation | `docs_list`, `docs_get` |
 

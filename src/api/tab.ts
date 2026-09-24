@@ -5,6 +5,7 @@
 import type { RuntimePage } from '../backends/page-types.js';
 import { ActionError } from './errors.js';
 import { ariaDiff } from './diff.js';
+import { networkDetail, networkSummary } from './network.js';
 import { ARIA_BUDGET, collapseAria } from '../shared/aria-collapse.js';
 import { targetToSelector, fallbackSelector } from '../shared/engine.js';
 import type { FindEntry, FindResult, ElementAtResult, Expectation, CheckResult, ReadTextResult } from '../shared/page-contract.js';
@@ -70,15 +71,19 @@ export class Tab {
   }
   private logNetwork(entries: Array<Record<string, unknown>>): Array<Record<string, unknown> & { seq: number }> {
     let log = this.ctx.state.netLog.get(this.id);
-    if (!log) { log = { seq: 0, entries: [], seen: new Set() }; this.ctx.state.netLog.set(this.id, log); }
+    if (!log) { log = { seq: 0, entries: [], seen: new Set(), bodyChars: 0 }; this.ctx.state.netLog.set(this.id, log); }
     const fresh: Array<Record<string, unknown> & { seq: number }> = [];
     for (const e of entries) {
       const key = String(e.requestId ?? `${e.method ?? 'GET'} ${e.url ?? e.name ?? ''} ${e.timestamp ?? e.startTime ?? e.ts ?? ''}`);
       if (log.seen.has(key)) continue;
       log.seen.add(key);
-      const entry = { ...e, seq: ++log.seq }; log.entries.push(entry); fresh.push(entry);
+      const entry: Record<string, unknown> & { seq: number } = { ...e, seq: ++log.seq }; log.entries.push(entry); fresh.push(entry);
+      log.bodyChars += String(entry.requestBodyPreview ?? '').length + String(entry.responsePreview ?? '').length;
     }
-    if (log.entries.length > 2000) log.entries.splice(0, log.entries.length - 2000);
+    while (log.entries.length > 2000 || log.bodyChars > 32_000_000 && log.entries.length > 1) {
+      const oldest = log.entries.shift()! as Record<string, unknown>;
+      log.bodyChars -= String(oldest.requestBodyPreview ?? '').length + String(oldest.responsePreview ?? '').length;
+    }
     if (log.seen.size > 8000) log.seen.clear(); // bounded: the extension drains captured entries, so re-dup is rare
     return fresh;
   }
@@ -236,6 +241,17 @@ export class Tab {
 
   readonly network = {
     start: async (pattern = ''): Promise<boolean> => this.use((p) => p.startNetworkCapture(pattern)),
+    list: async (opts: { filter?: string; limit?: number; afterSequence?: number } = {}): Promise<{ cursor: number; entries: Record<string, unknown>[]; hasMore: boolean }> => {
+      const raw = await this.network.read({ pattern: opts.filter, limit: opts.limit ?? 30, afterSequence: opts.afterSequence });
+      return { ...raw, entries: (raw.entries as Array<Record<string, unknown> & { seq: number }>).map(networkSummary) };
+    },
+    detail: async (opts: { seq?: number; requestId?: string; part?: 'request' | 'response'; start?: number; maxChars?: number }): Promise<Record<string, unknown>> => this.use(async (p) => {
+      await this.harvest(p);
+      const log = this.ctx.state.netLog.get(this.id);
+      const entry = log?.entries.find((e) => opts.seq !== undefined ? e.seq === opts.seq : opts.requestId !== undefined && e.requestId === opts.requestId);
+      if (!entry) throw new ActionError('network_entry_not_found', 'No captured request matches this seq or requestId.', 'Call network.list() and copy its seq.');
+      return networkDetail(entry, opts);
+    }),
     /**
      * Cursor-paged read: pass `afterSequence` from the previous result to get only new requests. Returns network rows
      * only; endpoint candidates come from the explicit `recon.discover(tab)` (not a hidden side effect of reading).
@@ -243,10 +259,11 @@ export class Tab {
     read: async (opts: { pattern?: string; limit?: number; includeStatic?: boolean; afterSequence?: number } = {}): Promise<{ cursor: number; entries: unknown[]; hasMore: boolean }> => this.use(async (p) => {
       await this.harvest(p);
       let log = this.ctx.state.netLog.get(this.id);
-      // no capture (adapter tab, or a tab attached before this host): the page's performance entries are all there is
-      if (!log || !log.entries.length) { this.logNetwork(await p.networkRequests(opts.includeStatic ?? false).catch(() => []) as Array<Record<string, unknown>>); log = this.ctx.state.netLog.get(this.id)!; }
+      // Interactive tabs use CDP capture as the authoritative log. Adapter tabs are not armed by default,
+      // so they may fall back to Performance entries when their capture is empty.
+      if ((!log || !log.entries.length) && p.surface === 'adapter') { this.logNetwork(await p.networkRequests(opts.includeStatic ?? false).catch(() => []) as Array<Record<string, unknown>>); log = this.ctx.state.netLog.get(this.id)!; }
       const after = opts.afterSequence ?? 0;
-      const matching = log.entries.filter((e) => e.seq > after && (!opts.pattern || String(e.url ?? e.name ?? '').includes(opts.pattern)));
+      const matching = (log?.entries ?? []).filter((e) => e.seq > after && (!opts.pattern || String(e.url ?? e.name ?? '').includes(opts.pattern)));
       const limit = opts.limit ?? 100;
       const page = matching.slice(0, limit);
       return { cursor: page.length ? page[page.length - 1].seq : after, entries: page, hasMore: matching.length > limit };

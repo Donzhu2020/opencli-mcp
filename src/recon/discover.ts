@@ -15,7 +15,7 @@ export interface EndpointCandidate {
   queryParams: string[];
   bodyParams: string[];
   evidence: 'network+static' | 'network' | 'static';
-  network?: { status?: number; contentType?: string; count: number };
+  network?: { status?: number; contentType?: string; count: number; requestId?: string };
   sources: Array<{ script: string; line: number; snippet: string }>;
   score: number;
 }
@@ -29,75 +29,89 @@ export interface DiscoverResult {
 
 const THIRD_PARTY_NOISE = /(googletagmanager|google-analytics|doubleclick|facebook\.net|hotjar|sentry|segment\.com|intercom|crazyegg|clarity\.ms|cloudflareinsights|hcaptcha|recaptcha|amazon-adsystem|newrelic|datadoghq)/i;
 
-function normalizeKey(method: string, url: string): string {
+function normalizeKey(method: string, url: string, pageUrl?: string | null): string {
   let u = url.replaceAll(EXPR, '*');
-  try { const p = new URL(u, 'http://placeholder.invalid/'); u = (p.hostname === 'placeholder.invalid' ? '' : p.hostname) + p.pathname.replace(/\/\d+(?=\/|$)/g, '/*'); } catch { /* keep */ }
+  try {
+    const p = new URL(u, pageUrl || 'http://placeholder.invalid/');
+    u = (p.hostname === 'placeholder.invalid' ? '' : p.hostname) + p.pathname.replace(/\/\d+(?=\/|$)/g, '/*');
+  } catch { /* keep */ }
   return `${method} ${u}`;
 }
 
-export async function discoverEndpoints(page: RuntimePage, opts: { maxScripts?: number; includeAssets?: boolean; includeInline?: boolean; fetchTimeoutMs?: number; /** network entries already harvested by the session (Tab.network); when given the page's capture is not drained */ network?: Array<Record<string, unknown>> } = {}): Promise<DiscoverResult> {
+function templateMatches(template: string, key: string): boolean {
+  if (!template.includes('*')) return template === key;
+  const escaped = template.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[^/]+');
+  return new RegExp(`^${escaped}$`).test(key);
+}
+
+export async function discoverEndpoints(page: RuntimePage, opts: { maxScripts?: number; includeStatic?: boolean; includeAssets?: boolean; includeInline?: boolean; fetchTimeoutMs?: number; /** network entries already harvested by the session (Tab.network); when given the page's capture is not drained */ network?: Array<Record<string, unknown>> } = {}): Promise<DiscoverResult> {
   const maxScripts = opts.maxScripts ?? 40;
-  const analyzer = await JsAnalyzer.create();
   const pageUrl = await page.getCurrentUrl().catch(() => null);
-  const listed = await page.evaluate<Array<{ src: string; inline: string | null }>>(
+  const listed = opts.includeStatic ? await page.evaluate<Array<{ src: string; inline: string | null }>>(
     `[...document.scripts].map(s => ({ src: s.src || '', inline: s.src ? null : (s.textContent || '').slice(0, 2000000) }))`,
-  ).catch(() => [] as Array<{ src: string; inline: string | null }>);
+  ).catch(() => [] as Array<{ src: string; inline: string | null }>) : [];
+  const analyzer = listed.length ? await JsAnalyzer.create() : null;
 
   const scripts: DiscoverResult['scripts'] = [];
   const urls: UrlMatch[] = [];
   let inlineIdx = 0;
-  const external = listed.filter((s) => s.src && !THIRD_PARTY_NOISE.test(s.src)).slice(0, maxScripts);
-  const inline = opts.includeInline === false ? [] : listed.filter((s) => !s.src && s.inline && s.inline.length > 50);
+  const inline = opts.includeInline === false ? [] : listed.filter((s) => !s.src && s.inline && s.inline.length > 50).slice(0, maxScripts);
+  const external = listed.filter((s) => s.src && !THIRD_PARTY_NOISE.test(s.src)).slice(0, Math.max(0, maxScripts - inline.length));
 
   for (const s of inline) {
     const name = `inline#${++inlineIdx}`;
-    const r = analyzer.analyze(s.inline!, { filename: name });
+    const r = analyzer!.analyze(s.inline!, { filename: name });
     scripts.push({ url: name, bytes: s.inline!.length, analyzed: true });
     urls.push(...r.urls);
   }
   await Promise.all(external.map(async (s) => {
     const entry: DiscoverResult['scripts'][number] = { url: s.src, bytes: 0, analyzed: false };
     scripts.push(entry);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), opts.fetchTimeoutMs ?? 15_000);
     try {
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), opts.fetchTimeoutMs ?? 15_000);
       const res = await fetch(s.src, { signal: ctrl.signal, headers: { 'user-agent': 'Mozilla/5.0 (opencli-mcp recon)' } });
-      clearTimeout(timer);
       if (!res.ok) { entry.error = `HTTP ${res.status}`; return; }
       const text = await res.text();
       entry.bytes = text.length;
-      const r = analyzer.analyze(text, { filename: s.src });
+      const r = analyzer!.analyze(text, { filename: s.src });
       entry.analyzed = true;
       urls.push(...r.urls);
     } catch (err) {
       entry.error = (err as Error).message;
+    } finally {
+      clearTimeout(timer);
     }
   }));
 
   // Dynamic evidence: network capture (if armed) and performance resource entries.
-  const netByKey = new Map<string, { status?: number; contentType?: string; count: number }>();
+  const netByKey = new Map<string, { status?: number; contentType?: string; count: number; requestId?: string; url: string }>();
   let networkEntries = 0;
   const captured = opts.network ?? await page.readNetworkCapture().catch(() => [] as unknown[]);
-  const perf = await page.networkRequests(false).catch(() => [] as unknown[]);
-  // (the session-level cursor log lives on Tab.network; recon merges what the page reports now)
-  for (const e of [...captured, ...perf] as Array<Record<string, unknown>>) {
+  // CDP capture has method, status, headers and request identity. Performance entries are only a fallback:
+  // appending them would count the same observed request twice and overwrite its stronger evidence.
+  const observed = captured.length ? captured : await page.networkRequests(false).catch(() => [] as unknown[]);
+  for (const e of observed as Array<Record<string, unknown>>) {
     const url = String(e.url ?? e.name ?? '');
     if (!url) continue;
     networkEntries++;
     const method = String(e.method ?? 'GET').toUpperCase();
-    const key = normalizeKey(method, url);
-    const cur = netByKey.get(key) ?? { count: 0 };
+    const key = normalizeKey(method, url, pageUrl);
+    const cur = netByKey.get(key) ?? { count: 0, url };
     cur.count++;
-    if (e.status !== undefined) cur.status = Number(e.status);
-    const ct = (e.contentType ?? e.mimeType ?? (e.responseHeaders as Record<string, string> | undefined)?.['content-type']) as string | undefined;
+    const status = e.responseStatus ?? e.status;
+    if (status !== undefined) cur.status = Number(status);
+    const headerContentType = Object.entries((e.responseHeaders ?? {}) as Record<string, unknown>).find(([name]) => name.toLowerCase() === 'content-type')?.[1];
+    const ct = (e.responseContentType ?? e.contentType ?? e.mimeType ?? headerContentType) as string | undefined;
     if (ct) cur.contentType = ct;
+    if (typeof e.requestId === 'string') cur.requestId = e.requestId;
     netByKey.set(key, cur);
   }
 
   const merged = new Map<string, EndpointCandidate>();
   for (const u of urls) {
     if (!opts.includeAssets && u.kind === 'asset') continue;
-    const key = normalizeKey(u.method, u.url);
+    const key = normalizeKey(u.method, u.url, pageUrl);
     const net = netByKey.get(key);
     const existing = merged.get(key);
     if (existing) {
@@ -111,10 +125,21 @@ export async function discoverEndpoints(page: RuntimePage, opts: { maxScripts?: 
   }
   for (const [key, net] of netByKey) {
     if (merged.has(key)) continue;
+    const candidate = [...merged.entries()]
+      .filter(([template]) => template.includes('*') && templateMatches(template, key))
+      .sort(([a], [b]) => b.replaceAll('*', '').length - a.replaceAll('*', '').length)[0]?.[1];
+    if (candidate) {
+      candidate.score += candidate.network ? 0 : 100;
+      candidate.evidence = 'network+static';
+      candidate.network = candidate.network
+        ? { ...candidate.network, count: candidate.network.count + net.count, status: net.status ?? candidate.network.status, contentType: net.contentType ?? candidate.network.contentType, requestId: net.requestId ?? candidate.network.requestId }
+        : net;
+      continue;
+    }
     const [method, ...rest] = key.split(' ');
     const ct = net.contentType ?? '';
     if (!/json|javascript|xml|x-component|text\/plain|graphql/.test(ct) && net.status === undefined) continue;
-    merged.set(key, { url: rest.join(' '), method, type: 'network', kind: /json|graphql|x-component/.test(ct) ? 'api' : 'unknown', queryParams: [], bodyParams: [], evidence: 'network', network: net, sources: [], score: 90 });
+    merged.set(key, { url: net.url || rest.join(' '), method, type: 'network', kind: /json|graphql|x-component/.test(ct) ? 'api' : 'unknown', queryParams: [], bodyParams: [], evidence: 'network', network: net, sources: [], score: 90 });
   }
   const endpoints = [...merged.values()].sort((a, b) => b.score - a.score).slice(0, 300);
   return { pageUrl, scripts, endpoints, networkEntries };

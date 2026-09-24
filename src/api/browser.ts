@@ -76,11 +76,12 @@ export class Browser {
         { id: 'viewport', description: 'Temporarily override the viewport size for responsive checks; reset when done.' },
         { id: 'webmcp', description: 'Tools the current page registers itself (navigator.modelContext); prefer them over clicking through the DOM.' },
       ];
-      if (this.type === 'extension') base.push({ id: 'visibility', description: 'Show or hide the session window to the user. Default: background.' });
-      return base;
+      base.push({ id: 'visibility', description: 'Show or hide the session window to the user. Default: background.' });
+      return base.filter((capability) => this.ctx.rt.hasFeature(capability.id as import('../protocol.js').BrowserFeature));
     },
     get: async (id: string): Promise<Record<string, unknown>> => {
       const page = await this.page();
+      if (!this.ctx.rt.hasFeature(id as import('../protocol.js').BrowserFeature)) throw new ActionError('capability_unavailable', `${id} is not advertised by the connected extension.`, 'Call browser.capabilities.list() or doctor for current capabilities.');
       this.ctx.state.capabilities.add(id);
       if (id === 'cdp') return { send: (method: string, params?: Record<string, unknown>) => page.cdp(method, params), documentation: () => readDoc('capabilities/cdp') };
       if (id === 'viewport') return { set: ({ width, height }: { width: number; height: number }) => page.cdp('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false }), reset: () => page.cdp('Emulation.clearDeviceMetricsOverride', {}) };
@@ -91,7 +92,7 @@ export class Browser {
   };
 
   documentation(): string {
-    const ctx: DocContext = { backend: this.type, capabilities: [...this.ctx.state.capabilities] };
+    const ctx: DocContext = { backend: this.type, capabilities: this.ctx.rt.features() };
     return `${buildInstructions(ctx)}\n\n${readDoc('js-tool') ?? ''}\n\n${readDoc('api-reference') ?? ''}`;
   }
 }

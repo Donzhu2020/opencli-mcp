@@ -8,6 +8,7 @@ export function defineAdapter(descriptor) {
   if (typeof d.description !== 'string' || !d.description.trim()) throw new Error('adapter: `description` (non-empty string) is required');
   if (!ACCESS.has(d.access)) throw new Error("adapter: `access` must be 'read' or 'write'");
   if (typeof d.run !== 'function') throw new Error('adapter: `run` must be a function (ctx) => data');
+  if (d.result !== undefined && (!['rows', 'value'].includes(d.result?.kind) || typeof d.result?.description !== 'string' || !d.result.description.trim() || d.result.fields !== undefined && (!d.result.fields || typeof d.result.fields !== 'object' || Object.values(d.result.fields).some((v) => typeof v !== 'string')) || d.result.paginated && d.result.kind !== 'rows')) throw new Error('adapter: `result` needs kind rows|value and a description; fields must be text and paginated applies to rows');
   if (d.args !== undefined) {
     if (!Array.isArray(d.args)) throw new Error('adapter: `args` must be an array');
     for (const a of d.args) if (!a || typeof a.name !== 'string' || !/^[a-z][a-z0-9_]*$/.test(a.name)) throw new Error(`adapter: arg name "${a?.name}" must be snake_case (agent-native)`);

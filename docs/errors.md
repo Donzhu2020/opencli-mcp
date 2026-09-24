@@ -10,6 +10,8 @@ Every error has `code`, `message`, optional `hint`, and any structured data spre
 | frames | `frame_not_found` (which level is named), `frame_unreachable` | check the chain outermost-first; the frame may still be loading |
 | dialogs | `dialog_open` (+`dialog`), `no_dialog`, `dialog_answer_timeout` | read with `tab.dialog.get()`, answer with accept/dismiss, then retry |
 | expectations & adapters | `expectation_failed` (+`expect`, `failed`, `state`), `invalid_definition`, `unknown_site`, `unknown_command`, `adapter_load` | inspect the failed expectation or adapter definition |
+| adapter drafts | `unknown_draft`, `draft_in_use`, `draft_not_verified`, `draft_changed`, `draft_conflict`, `adapter_result_mismatch` | wait for a running trial, run `tools_try` with a result assertion, or create a new draft from the current adapter; inspect the declared result shape |
+| network evidence | `network_entry_not_found`, `capability_unavailable` | call `network_inspect` list for a current `seq`; inspect `doctor` for extension features |
 | claiming tabs | `claim_not_found`, `claim_ambiguous` (+candidates), `claim_identity_mismatch`, `claim_not_allowed`, `already_claimed` | call `tab_list` with `user:true` and claim by `tabId` |
 | ending tabs | `tab_close_failed`, `tab_release_failed` | Chrome refused to close or release the tab; its lease remains active, so retry `tab_close`, `tab_release`, or `session_finalize` |
 | host unavailable | `host_unavailable` | Chrome or the extension is not connected yet. Keep the MCP session open, start Chrome, and retry the call |

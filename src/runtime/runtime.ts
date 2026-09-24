@@ -5,10 +5,12 @@
 import { EventEmitter } from 'node:events';
 import type { ExtensionBridge } from '../host/bridge.js';
 import type { BrowserEvent } from '../protocol.js';
-import { SiteRegistry } from '../sites/loader.js';
+import type { BrowserFeature } from '../protocol.js';
+import { SiteRegistry, type AdapterCommand } from '../sites/loader.js';
 import { runAdapter, type CommandRunResult, type CommandRunError, type PageProvider } from '../sites/executor.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { listDefinedTools, ensureUserSource, saveTool, deleteTool, type ToolDefinition } from '../sites/define.js';
+import { listDefinedTools, ensureUserSource, deleteTool, type ToolDefinition } from '../sites/define.js';
+import { createDraft, tryDraft, activateDraft, discardDraft, type DraftExpectation } from '../sites/drafts.js';
 import { defaultSources } from '../lib/sources.js';
 import { createExtensionPage, type ExtensionRuntimePage } from '../backends/extension-page.js';
 import type { RuntimePage } from '../backends/page-types.js';
@@ -42,13 +44,13 @@ export interface SessionState {
   js?: JsSession;
   lastObserve: Map<string, string>;
   /** Network entries seen per tab, with monotonically increasing sequence numbers for cursor-based reads. */
-  netLog: Map<string, { seq: number; entries: Array<Record<string, unknown> & { seq: number }>; seen: Set<string> }>;
+  netLog: Map<string, { seq: number; entries: Array<Record<string, unknown> & { seq: number }>; seen: Set<string>; bodyChars: number }>;
   finalized: boolean;
 }
 
 export interface DoctorReport {
   backend: Backend;
-  extension: { connected: boolean; version: string | null };
+  extension: { connected: boolean; version: string | null; features: BrowserFeature[] };
   sites: number;
   commands: number;
   definedTools: number;
@@ -58,6 +60,7 @@ export interface DoctorReport {
 
 export interface RuntimeEvents {
   'browser-event': [BrowserEvent];
+  'features-changed': [BrowserFeature[]];
   'tools-changed': [{ site?: string }];
   log: [string];
 }
@@ -83,7 +86,8 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
     this.configSitesWrite = opts.sitesWrite ?? [];
     if (opts.log) this.on('log', opts.log);
     this.bridge?.on('event', (e) => this.emit('browser-event', e));
-    this.bridge?.on('close', () => { this.adapterPages.clear(); for (const s of this.sessions.values()) { s.browserPage = undefined; s.pages.clear(); } });
+    this.bridge?.on('hello', () => this.emit('features-changed', this.features()));
+    this.bridge?.on('close', () => { this.adapterPages.clear(); for (const s of this.sessions.values()) { s.browserPage = undefined; s.pages.clear(); } this.emit('features-changed', []); });
   }
 
   async init(): Promise<void> {
@@ -96,6 +100,8 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
     return 'none';
   }
   browserAvailable(): boolean { return this.backend() !== 'none'; }
+  features(): BrowserFeature[] { return this.bridge?.connected ? this.bridge.extensionFeatures : []; }
+  hasFeature(feature: BrowserFeature): boolean { return this.features().includes(feature); }
 
   session(id: string): SessionState {
     let s = this.sessions.get(id);
@@ -159,6 +165,12 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
 
   async runSite(site: string, name: string, args: Record<string, unknown>, opts: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<CommandRunResult | CommandRunError> {
     const cmd = await this.registry.resolve(site, name);
+    return this.runCommand(cmd, args, opts);
+  }
+
+  private async runCommand(cmd: AdapterCommand, args: Record<string, unknown>, opts: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<CommandRunResult | CommandRunError> {
+    const site = cmd.site;
+    const name = cmd.name;
     const active = this.adapterCallContext.getStore();
     if (active?.retired) return { ok: false, site, name, error: { code: 'command_outcome_unknown', message: 'The parent adapter call has timed out or been cancelled', hint: 'Inspect browser or site state before retrying.' }, elapsedMs: 0 };
     // A nested call into the same site is part of the current workflow and already owns its page.
@@ -186,14 +198,22 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
     }
   }
 
-  async defineTool(def: ToolDefinition): Promise<{ file: string; site: string; name: string }> {
-    const saved = await saveTool(def);
-    this.emit('tools-changed', { site: def.site });
-    return saved;
+  async defineTool(def: ToolDefinition): ReturnType<typeof createDraft> {
+    return createDraft(def, this.registry.sourceFile(def.site, def.name));
   }
-  removeTool(site: string, name: string): boolean {
+  async tryToolDraft(id: string, args: Record<string, unknown>, expect: DraftExpectation): ReturnType<typeof tryDraft> {
+    return tryDraft((cmd, sample) => this.runCommand(cmd, sample), id, args, expect);
+  }
+  async activateToolDraft(id: string): Promise<ReturnType<typeof activateDraft>> {
+    const active = activateDraft(id, (site, name) => this.registry.sourceFile(site, name));
+    await this.registry.load();
+    this.emit('tools-changed', { site: active.site });
+    return active;
+  }
+  discardToolDraft(id: string): ReturnType<typeof discardDraft> { return discardDraft(id); }
+  async removeTool(site: string, name: string): Promise<boolean> {
     const ok = deleteTool(site, name);
-    if (ok) this.emit('tools-changed', { site });
+    if (ok) { await this.registry.load(); this.emit('tools-changed', { site }); }
     return ok;
   }
 
@@ -218,7 +238,7 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
     const list = this.registry.sites();
     return {
       backend: this.backend(),
-      extension: { connected: Boolean(this.bridge?.connected), version: this.bridge?.extensionVersion ?? null },
+      extension: { connected: Boolean(this.bridge?.connected), version: this.bridge?.extensionVersion ?? null, features: this.features() },
       sites: list.length,
       commands: list.reduce((n, s) => n + s.commands, 0),
       definedTools: listDefinedTools().length,

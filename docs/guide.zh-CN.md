@@ -30,7 +30,7 @@ opencli-mcp 是一个连接到真实 Chrome 的 MCP browser service。Chrome ext
 
 内置 Adapter 覆盖 Twitter/X、Bilibili 和 Reddit。`sites_search` 查找命令和参数，`site_run` 直接执行；在 `js` 中可用 `sites.enable('reddit')` 暴露该站的动态工具。Adapter 与交互式 browser 操作使用同一个 `Tab` API 和当前 Chrome 登录状态。
 
-创建自己的 Adapter 时，先用 `tab.network.read()` 和 `recon.discover(tab)` 找候选 API，再验证鉴权、参数、分页及错误行为。用 `tools_define` 或 `tools.define()` 保存明确写出的函数，并以 `site_run` 验证结果。系统不会根据一次操作轨迹猜测并生成永久工具。详见 [Adapter 指南](define-tools.md)。
+创建自己的 Adapter 时，先用 `network_inspect` 的 list/detail 和 `recon.discover(tab)` 找候选 API，再验证鉴权、参数、分页及错误行为。`tools_define` 创建不会立即生效的 draft；用 `tools_try` 传入真实参数和结果断言验证，通过后用 `tools_activate` 发布。系统不会根据一次操作轨迹猜测并生成永久工具。详见 [Adapter 指南](define-tools.md)。
 
 ## 架构与开发
 

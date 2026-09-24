@@ -6,8 +6,9 @@ describe('docs manifest', () => {
   it('builds instructions per backend and gates cdp', () => {
     const ext = buildInstructions({ backend: 'extension', capabilities: [] });
     const none = buildInstructions({ backend: 'none', capabilities: [] });
-    expect(ext).toContain('Tabs are the user');
-    expect(none).not.toContain('Tabs are the user');
+    expect(ext).toContain('tab-lifecycle');
+    expect(none).not.toContain('tab-lifecycle');
+    expect(readDoc('tab-lifecycle')).toContain('Tabs are the user');
     expect(readDoc('confirmations')).toBeNull();
     expect(readDoc('../README')).toBeNull();
     expect(ext).not.toMatch(/confirmWrites|askNewOrigins|allowOrigin/);

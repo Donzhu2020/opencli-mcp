@@ -157,8 +157,9 @@ export type BrowserEvent =
   | { kind: 'session_released'; session: string; reason: string };
 
 export type HostToExt = { type: 'command'; command: Command } | { type: 'ready'; version: string; port: number };
+export type BrowserFeature = 'cdp' | 'network' | 'frames' | 'dialogs' | 'console' | 'downloads' | 'viewport' | 'visibility' | 'webmcp';
 export type ExtToHost =
-  | { type: 'hello'; extensionVersion: string }
+  | { type: 'hello'; extensionVersion: string; features: BrowserFeature[] }
   | { type: 'result'; result: Result }
   | { type: 'event'; event: BrowserEvent };
 

@@ -20,11 +20,7 @@ families are in the `errors` doc; read the full object model on demand with `doc
 6. **Don't re-`goto` a URL the tab is already on** (it reloads and loses form state); use `tab_act {action:"reload"}`
    when a reload is intended.
 7. **`tab.evaluate(js)` is read-only page scope.** Writes go through `tab_act` / `tab.act`.
-8. **API first.** Every session tab is captured from attach: `tab.network.read({afterSequence})` (in `js`) is a paged
-   log of the requests your steps triggered (method, status, headers, body, JSON sample); endpoint candidates come from
-   the explicit `recon.discover(tab)`. When you've reached the data in the UI, find the request that carried it, verify
-   with `tab.fetchJson(url,{method,headers,body})` (runs in the page: cookies + origin). An adapter should encode
-   the verified request explicitly and handle changing tokens at run time. DOM extraction (`tab.evaluate`) is the last resort.
+8. **Choose the data path for the task.** For a reusable adapter, start from the UI behavior and inspect the request that carried the data. Every session tab captures from attach: `network_inspect` list returns compact request summaries; detail by `seq` returns headers and a bounded request or response body. Continue with `body.nextStart` when needed. In `js`, use `tab.network.list()` and `tab.network.detail({seq})`. `recon.discover(tab)` ranks captured requests, and `{includeStatic:true}` adds script analysis only when needed. Replay a candidate with `tab.fetchJson(url,{method,headers,body})` inside the logged-in page, then compare its result to the captured response. An adapter should handle changing tokens at run time. For a one-off UI task, complete it directly; there is no need to reverse-engineer every endpoint.
 9. **Dialogs:** a native `alert`/`confirm`/`prompt` freezes the page (`dialog_open`, details in `error.dialog`). Read
    with `tab.dialog.get()` and answer `tab.dialog.accept(text?)` / `tab.dialog.dismiss()` (in `js`), then retry — never
    answer a dialog the user didn't ask you to.

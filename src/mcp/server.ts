@@ -60,7 +60,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   const persistent = opts.persistent !== false; // stateless HTTP creates a fresh server per request: no long-lived rt listeners, and close() must not finalize the shared runtime session
   const api = createAgentApi(rt, sessionId);
   const state = rt.session(sessionId);
-  const docCtx = (): DocContext => ({ backend: rt.backend(), capabilities: [...state.capabilities] });
+  const docCtx = (): DocContext => ({ backend: rt.backend(), capabilities: rt.features() });
   const server = new McpServer({ name: 'opencli-mcp', version: opts.version ?? '0.0.0' }, {
     capabilities: { tools: { listChanged: true }, resources: { listChanged: true }, prompts: {}, logging: {} },
     instructions: buildInstructions(docCtx()),
@@ -151,6 +151,24 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     inputSchema: { tab: z.string().optional().describe('required when the session has more than one tab'), maxChars: z.number().int().min(200).max(80_000).optional().describe('stop after this many characters (default 60000)'), start: z.number().int().min(0).optional().describe('character offset returned as nextStart by a previous read') },
     annotations: { readOnlyHint: true },
   }, async ({ tab, maxChars, start }) => run(async () => { const t = await tabOf(tab); return ok({ tab: t.id, ...(await t.read({ maxChars, start })) }); }));
+  server.registerTool('tab_find', { title: 'Find page elements', description: 'Inspect exact candidates for a target using the same locator engine as tab_act. Use after selector_ambiguous/not_found, then copy a returned selector or scope the target.',
+    inputSchema: { tab: z.string().optional(), target: targetSchema, limit: z.number().int().min(1).max(50).default(20) }, annotations: { readOnlyHint: true },
+  }, async ({ tab, target, limit }) => run(async () => { const t = await tabOf(tab); return ok({ tab: t.id, result: await t.find({ ...target, limit } as Parameters<Tab['find']>[0]) }); }));
+  const networkTool = server.registerTool('network_inspect', { title: 'Inspect captured requests', description: 'list returns compact request summaries; detail returns headers and a bounded request or response body for one seq. Capture starts when a session tab is attached. Use list after the page performs the operation, then detail on the relevant seq. Copy body.nextStart to continue reading.',
+    inputSchema: { tab: z.string().optional(), action: z.enum(['list', 'detail']).default('list'), filter: z.string().optional().describe('URL substring for list'), afterSequence: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(100).default(30), seq: z.number().int().positive().optional().describe('required for detail; copy from list'), part: z.enum(['request', 'response']).default('response'), start: z.number().int().min(0).default(0), maxChars: z.number().int().min(200).max(100_000).default(8_000) }, annotations: { readOnlyHint: true },
+  }, async ({ tab, action, filter, afterSequence, limit, seq, part, start, maxChars }) => run(async () => {
+    if (!rt.hasFeature('network')) throw new ActionError('capability_unavailable', 'The connected extension does not advertise Network capture.', 'Run doctor to inspect its features and update the extension.');
+    const t = await tabOf(tab);
+    if (action === 'list') return ok({ tab: t.id, ...(await t.network.list({ filter, afterSequence, limit })) });
+    if (seq === undefined) throw new ActionError('invalid_args', 'detail requires seq.', 'Call network_inspect action:list and copy an entry seq.');
+    return ok({ tab: t.id, ...(await t.network.detail({ seq, part, start, maxChars })) });
+  }));
+  if (!rt.hasFeature('network')) networkTool.disable();
+  const onFeaturesChanged = (): void => {
+    if (networkTool.enabled !== rt.hasFeature('network')) networkTool.update({ enabled: rt.hasFeature('network') });
+    if (server.isConnected()) server.sendResourceListChanged();
+  };
+  if (persistent) rt.on('features-changed', onFeaturesChanged);
   server.registerTool('tab_act', { title: 'Act on a tab', description: 'One action. click/dblclick/hover/focus/check/uncheck need target; fill/type/press/select need target+value (press has no default key; value:"" clears with fill); upload needs target+files; drag needs target+to; scroll takes direction/amount and optional target; back/forward/reload take no target. Invalid combinations return invalid_args with details.expected. click sends a real mouse event; method:"dom" is click-only and only after not_delivered or no box. Do not repeat a click that returned ok.',
     inputSchema: { tab: z.string().optional().describe('required when the session has more than one tab'), action: z.enum(['click', 'dblclick', 'hover', 'focus', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'upload', 'drag', 'scroll', 'back', 'forward', 'reload']), target: targetSchema.optional(), value: z.string().optional().describe('fill/type text, press key, or select option. Required for those actions; "" fill clears'), files: z.array(z.string()).optional().describe('upload only'), to: targetSchema.optional().describe('drag only'), direction: z.enum(['up', 'down', 'left', 'right']).optional().describe('scroll only'), amount: z.number().optional().describe('scroll only'), method: z.enum(['cdp', 'dom']).optional().describe('click only. dom = HTMLElement.click(), no mouse event. Default cdp = real mouse event'), settleMs: z.number().int().min(0).max(10_000).default(600).describe('wait for the DOM to settle after the action'), observe: z.boolean().default(false).describe('also return the page state after the action') },
     annotations: { destructiveHint: true, openWorldHint: true },
@@ -171,20 +189,44 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   // ── capabilities ──
 
   // ── recon & tools ──
-  const argDef = z.object({ name: z.string(), type: z.enum(['string', 'int', 'number', 'boolean']).optional(), default: z.unknown().optional(), required: z.boolean().optional(), help: z.string().optional(), choices: z.array(z.string()).optional() });
-  server.registerTool('tools_define', { title: 'Define a site adapter', description: 'Read docs_get {name:"define-tools"} before authoring. Save a host-side JavaScript adapter for immediate use through site_run or sites.<site>.<name>() in js. `func` is the source of `async ({ tab, args, sites, recon }) => {…}`; browser access goes through tab. Verify endpoints before encoding them. A typed <site>_<name> tool appears after sites.enable(site) in js.',
-    inputSchema: { site: z.string(), name: z.string(), description: z.string(), access: z.enum(['read', 'write']), domain: z.string().optional(), args: z.array(argDef).optional(), func: z.string() },
-  }, async (def) => run(async () => {
-    const saved = await api.tools.define(def);
-    const cmd = await rt.registry.resolve(def.site, def.name);
-    await syncSiteTools();
-    const enabled = state.enabledSites.get(def.site);
-    return ok({ ...saved, description: cmd.description, access: cmd.access, args: argSpec(cmd.args), next: { tool: 'site_run', arguments: { site: def.site, command: def.name, args: {} }, note: 'Supply required args and verify the result. To expose a typed tool, call sites.enable(site) in js (write:true for write commands).' }, typedToolAvailable: Boolean(enabled && (enabled.write || cmd.access === 'read')) });
+  const valueDef: z.ZodType<import('opencli-mcp/adapter-sdk').ArgValue> = z.lazy(() => z.object({
+    type: z.enum(['string', 'int', 'number', 'boolean', 'array', 'object']).optional(), nullable: z.boolean().optional(),
+    choices: z.array(z.union([z.string(), z.number(), z.boolean()])).optional(),
+    items: valueDef.optional(), properties: z.record(z.string(), valueDef.and(z.object({ required: z.boolean().optional(), help: z.string().optional() }))).optional(),
+    min: z.number().optional(), max: z.number().optional(), minLength: z.number().int().min(0).optional(), maxLength: z.number().int().min(0).optional(), example: z.unknown().optional(),
   }));
+  const argDef = valueDef.and(z.object({ name: z.string(), default: z.unknown().optional(), required: z.boolean().optional(), help: z.string().optional() }));
+  server.registerTool('tools_define', { title: 'Draft a site adapter', description: 'Read docs_get {name:"define-tools"} before authoring. Create an inactive draft of a host-side JavaScript adapter. `func` is the source of `async ({ tab, args, sites, recon }) => {…}`. Then run tools_try with real sample args and an output assertion; tools_activate publishes a passing draft.',
+    inputSchema: { site: z.string(), name: z.string(), description: z.string(), access: z.enum(['read', 'write']), domain: z.string().optional(), result: z.object({ kind: z.enum(['rows', 'value']), description: z.string(), fields: z.record(z.string(), z.string()).optional(), paginated: z.boolean().optional() }).optional(), args: z.array(argDef).optional(), func: z.string() },
+  }, async (def) => run(async () => {
+    const draft = await api.tools.define(def);
+    return ok({ ...draft, status: 'draft', next: { tool: 'tools_try', requiredArgs: argSpec(def.args).filter((a) => a.required).map((a) => a.name), note: 'Provide real sample args and an assertion on the returned value or row count. The active adapter is unchanged.' } });
+  }));
+  server.registerTool('tools_try', { title: 'Verify an adapter draft', description: 'Execute an inactive adapter draft against the real logged-in site and assert its output. This may perform writes when the draft is a write command. A passing trial makes the draft eligible for tools_activate; inspect the returned result before activating.',
+    inputSchema: { draftId: z.string().uuid(), args: z.record(z.string(), z.unknown()).default({}), expect: z.object({ path: z.string().optional().describe('dot path in rows or value, e.g. rows.0.id or value.success'), equals: z.unknown().optional().describe('expected value at path; omit to assert existence'), minRows: z.number().int().min(1).optional() }) }, annotations: { openWorldHint: true },
+  }, async ({ draftId, args, expect }) => run(async () => {
+    const trial = await api.tools.try(draftId, args, expect);
+    return ok({ ...trial, next: trial.verification.passed ? { tool: 'tools_activate', draftId, note: 'Inspect the trial result before publishing.' } : { tool: 'tools_try', draftId, note: 'Revise the draft or use a different assertion; a failed trial cannot be activated.' } });
+  }));
+  server.registerTool('tools_activate', { title: 'Activate a verified adapter', description: 'Atomically publish a draft that passed tools_try. It becomes available through site_run; enabled site tools receive a tool-list change.',
+    inputSchema: { draftId: z.string().uuid() },
+  }, async ({ draftId }) => run(async () => {
+    const active = await api.tools.activate(draftId);
+    await syncSiteTools();
+    return ok({ ...active, status: 'active', next: { tool: 'site_run', note: 'The verified adapter is now available.' } });
+  }));
+  server.registerTool('tools_discard', { title: 'Discard an adapter draft', description: 'Delete an inactive adapter draft without changing the active adapter.',
+    inputSchema: { draftId: z.string().uuid() },
+  }, async ({ draftId }) => run(async () => ok(api.tools.discard(draftId))));
 
   // ── docs ──
   server.registerTool('docs_list', { title: 'List docs', description: 'Documentation available for this backend.', inputSchema: {}, annotations: { readOnlyHint: true } }, async () => run(async () => ok({ docs: listDocs(docCtx()).filter((d) => d.available).map(({ name, mode, description }) => ({ name, mode, description })) })));
-  server.registerTool('docs_get', { title: 'Read a doc', description: 'Read a documentation page by name (see docs_list).', inputSchema: { name: z.string() }, annotations: { readOnlyHint: true } }, async ({ name }) => run(async () => { const d = readDoc(name); if (!d) throw new ActionError('unknown_doc', `no doc "${name}"`, 'Call docs_list to see available docs.'); return ok(d); }));
+  server.registerTool('docs_get', { title: 'Read a doc', description: 'Read an available documentation page by name (see docs_list).', inputSchema: { name: z.string() }, annotations: { readOnlyHint: true } }, async ({ name }) => run(async () => {
+    if (!listDocs(docCtx()).some((entry) => entry.name === name && entry.available)) throw new ActionError('unknown_doc', `no available doc "${name}"`, 'Call docs_list to see docs for the connected runtime.');
+    const d = readDoc(name);
+    if (!d) throw new ActionError('unknown_doc', `no doc "${name}"`, 'Call docs_list to see available docs.');
+    return ok(d);
+  }));
 
   // ── code mode ──
   const jsGlobals = { agent: api.agent, browser: api.agent.browser, sites: api.sites, recon: api.recon, tools: api.tools, session: api.session, Tab };
@@ -214,7 +256,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
 
   // ── dynamic site tools ──
   const siteTools = new Map<string, { reg: RegisteredTool; metadata: string }>();
-  const syncSiteTools = async (): Promise<void> => {
+  const performSiteToolSync = async (): Promise<void> => {
     const wanted = new Set<string>();
     let changed = false;
     for (const [site, { write }] of state.enabledSites) {
@@ -224,12 +266,12 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
         wanted.add(name);
         const descriptor = {
           title: `${site} ${cmd.name}`,
-          description: `${cmd.description}${cmd.domain ? ` (${cmd.domain})` : ''} [${cmd.access}]`,
+          description: `${cmd.description}${cmd.domain ? ` (${cmd.domain})` : ''} [${cmd.access}]${cmd.result ? ` Returns ${cmd.result.kind}: ${cmd.result.description}` : ''}`,
           inputSchema: z.object(argsToShape(cmd.args)).strict(),
           annotations: { readOnlyHint: cmd.access === 'read', destructiveHint: cmd.access === 'write', openWorldHint: true },
           icons: cmd.domain ? [{ src: `https://${cmd.domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '')}/favicon.ico` }] : [],
         };
-        const metadata = JSON.stringify({ description: cmd.description, access: cmd.access, domain: cmd.domain, args: cmd.args });
+        const metadata = JSON.stringify({ description: cmd.description, access: cmd.access, domain: cmd.domain, args: cmd.args, result: cmd.result });
         const current = siteTools.get(name);
         if (current) {
           if (current.metadata !== metadata) {
@@ -247,6 +289,12 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     for (const [name, { reg }] of siteTools) if (!wanted.has(name)) { reg.remove(); siteTools.delete(name); changed = true; }
     if (changed && server.isConnected()) server.sendToolListChanged();
   };
+  let syncTail: Promise<void> = Promise.resolve();
+  const syncSiteTools = (): Promise<void> => {
+    const next = syncTail.then(performSiteToolSync);
+    syncTail = next.catch(() => {});
+    return next;
+  };
   const onToolsChanged = (): void => { void syncSiteTools().catch((err) => rt.emit('log', `syncSiteTools failed: ${(err as Error).message}`)); };
   if (persistent) rt.on('tools-changed', onToolsChanged);
   const onLog = (msg: string): void => { if (server.isConnected()) void server.sendLoggingMessage({ level: 'info', logger: 'opencli-mcp', data: msg }).catch(() => {}); };
@@ -263,16 +311,19 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   if (state.enabledSites.size) queueMicrotask(onToolsChanged);
 
   // ── resources ──
-  server.registerResource('docs', new ResourceTemplate('opencli://docs/{name}', { list: async () => ({ resources: listDocs(docCtx()).filter((d) => d.available).map((d) => ({ uri: `opencli://docs/${d.name}`, name: d.name, description: d.description, mimeType: 'text/markdown' })) }) }), { title: 'Documentation', description: 'Agent-facing docs' }, async (uri, { name }) => ({ contents: [{ uri: uri.href, mimeType: 'text/markdown', text: readDoc(String(name)) ?? `no doc ${String(name)}` }] }));
+  server.registerResource('docs', new ResourceTemplate('opencli://docs/{name}', { list: async () => ({ resources: listDocs(docCtx()).filter((d) => d.available).map((d) => ({ uri: `opencli://docs/${d.name}`, name: d.name, description: d.description, mimeType: 'text/markdown' })) }) }), { title: 'Documentation', description: 'Agent-facing docs' }, async (uri, { name }) => {
+    if (!listDocs(docCtx()).some((entry) => entry.name === String(name) && entry.available)) throw new ActionError('unknown_doc', `no available doc "${String(name)}"`);
+    return { contents: [{ uri: uri.href, mimeType: 'text/markdown', text: readDoc(String(name)) ?? `no doc ${String(name)}` }] };
+  });
   server.registerResource('sites', 'opencli://sites', { title: 'Sites', description: 'All sites with command counts', mimeType: 'application/json' }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(api.sites.list(), null, 2) }] }));
-  server.registerResource('site', new ResourceTemplate('opencli://sites/{site}', { list: undefined }), { title: 'Site commands', mimeType: 'application/json' }, async (uri, { site }) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify((await rt.registry.commands(String(site))).map((c) => ({ name: c.name, description: c.description, access: c.access, domain: c.domain, args: c.args })), null, 2) }] }));
+  server.registerResource('site', new ResourceTemplate('opencli://sites/{site}', { list: undefined }), { title: 'Site commands', mimeType: 'application/json' }, async (uri, { site }) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify((await rt.registry.commands(String(site))).map((c) => ({ name: c.name, description: c.description, access: c.access, domain: c.domain, args: c.args, result: c.result })), null, 2) }] }));
 
   // ── prompts ──
   server.registerPrompt('browse', { title: 'Browse a site for a goal', description: 'Use the browser service to observe, act, verify, and finalize.', argsSchema: { goal: z.string(), url: z.string().optional() } }, ({ goal, url }) => ({ messages: [{ role: 'user', content: { type: 'text', text: `Goal: ${goal}${url ? `\nStart at: ${url}` : ''}\n\n1. Open or claim a tab, then use tab_observe → tab_act → tab_expect as needed.\n2. If a verified site adapter fits this task, you may use site_run instead of repeating the workflow.\n3. Finish with session_finalize, keeping only deliverable/handoff tabs.` } }] }));
-  server.registerPrompt('write-tool', { title: 'Turn a flow into a tool', description: 'Explore and verify an API, then define an explicit adapter.', argsSchema: { site: z.string(), goal: z.string() } }, ({ site, goal }) => ({ messages: [{ role: 'user', content: { type: 'text', text: `Create a reusable ${site} adapter for: ${goal}\n\n1. Open the site and perform the flow once. Use tab.network.read() and recon.discover(tab) to identify candidate endpoints.\n2. Verify the chosen endpoint through the logged-in page, including authentication, arguments, pagination, and errors.\n3. Write an explicit adapter with tools_define. Run it with site_run to verify its result.` } }] }));
+  server.registerPrompt('write-tool', { title: 'Turn a flow into a tool', description: 'Explore and verify an API, then define an explicit adapter.', argsSchema: { site: z.string(), goal: z.string() } }, ({ site, goal }) => ({ messages: [{ role: 'user', content: { type: 'text', text: `Create a reusable ${site} adapter for: ${goal}\n\n1. Open the site and perform the flow once. Use network_inspect list/detail and recon.discover(tab) to identify candidate endpoints.\n2. Verify the chosen endpoint through the logged-in page, including authentication, arguments, pagination, and errors.\n3. Read docs_get {name:"define-tools"}, create a draft with tools_define, verify it with tools_try using sample args and an output assertion, then publish with tools_activate.` } }] }));
 
   return {
     server, api,
-    close: async () => { if (!persistent) return; rt.off('tools-changed', onToolsChanged); rt.off('log', onLog); rt.off('browser-event', onBrowserEvent); await rt.closeSession(sessionId); },
+    close: async () => { if (!persistent) return; rt.off('tools-changed', onToolsChanged); rt.off('features-changed', onFeaturesChanged); rt.off('log', onLog); rt.off('browser-event', onBrowserEvent); await rt.closeSession(sessionId); },
   };
 }

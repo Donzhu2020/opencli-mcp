@@ -7,12 +7,15 @@ interface AgentApi {
   agent: { browsers: { getDefault(): Promise<Browser>; }; browser: Browser; documentation: { get(name: string): string | null; }; };
   sites: Record<string, unknown> & { search(q: string, limit?: number): Promise<unknown>; list(): unknown; enable(site: string, opts?: { write?: boolean; }): Promise<{ site: string; tools: Array<string>; }>; disable(site: string): boolean; run(site: string, name: string, args?: Record<string, unknown>): Promise<unknown>; };
   recon: {
-    discover(tab: Tab, opts?: { maxScripts?: number; includeAssets?: boolean; includeInline?: boolean; fetchTimeoutMs?: number; network?: Array<Record<string, unknown>>; }): Promise<DiscoverResult>;
+    discover(tab: Tab, opts?: { maxScripts?: number; includeStatic?: boolean; includeAssets?: boolean; includeInline?: boolean; fetchTimeoutMs?: number; network?: Array<Record<string, unknown>>; }): Promise<DiscoverResult>;
   };
   tools: {
-    define(def: ToolDefinition | (Omit<ToolDefinition, "func"> & { func?: string | ((ctx: Record<string, unknown>) => unknown); })): Promise<{ file: string; site: string; name: string; }>;
+    define(def: ToolDefinition | (Omit<ToolDefinition, "func"> & { func?: string | ((ctx: Record<string, unknown>) => unknown); })): Promise<{ draftId: string; site: string; name: string; args: Array<Arg>; }>;
+    try(draftId: string, args: Record<string, unknown>, expect: DraftExpectation): Promise<{ result: CommandRunResult | CommandRunError; verification: { passed: boolean; checks: Array<{ check: string; passed: boolean; actual?: unknown; }>; }; }>;
+    activate(draftId: string): Promise<{ site: string; name: string; file: string; verifiedAt: string; }>;
+    discard(draftId: string): { draftId: string; discarded: true; };
     list(): Array<{ site: string; name: string; file: string; }>;
-    remove(site: string, name: string): boolean;
+    remove(site: string, name: string): Promise<boolean>;
   };
   session: { id: string; };
 }
@@ -70,6 +73,8 @@ class Tab {
   };
   network: {
     start(pattern?: string): Promise<boolean>;
+    list(opts?: { filter?: string; limit?: number; afterSequence?: number; }): Promise<{ cursor: number; entries: Array<Record<string, unknown>>; hasMore: boolean; }>;
+    detail(opts: { seq?: number; requestId?: string; part?: "request" | "response"; start?: number; maxChars?: number; }): Promise<Record<string, unknown>>;
     read(opts?: { pattern?: string; limit?: number; includeStatic?: boolean; afterSequence?: number; }): Promise<{ cursor: number; entries: Array<unknown>; hasMore: boolean; }>; // Cursor-paged read: pass `afterSequence` from the previous result to get only new requests. Returns network rows only; endpoint candidates come from the explicit `recon.discover(tab)` (not a hidden side effect of reading).
   };
   cookies(domain: string): Promise<Array<unknown>>;

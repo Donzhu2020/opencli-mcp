@@ -1,16 +1,14 @@
 /**
- * tools.define — save an explicit adapter against the browser object model.
- * A defined tool is just an adapter file in the USER SOURCE (~/.opencli-mcp/adapters/<site>/<name>.js): the exact same
- * shape and loader as a built-in adapter, only in a different source directory. There is no separate registry.
+ * Shared adapter definition validation and module rendering. tools.define creates an inactive draft;
+ * activation moves the verified module into the user adapter source.
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
-import { randomUUID } from 'node:crypto';
 import { USER_ADAPTERS_DIR } from '../lib/sources.js';
 
 import type { Arg } from 'opencli-mcp/adapter-sdk';
+import { validateArgDefinitions } from './schema.js';
 export type { Arg } from 'opencli-mcp/adapter-sdk';
 
 export interface ToolDefinition {
@@ -19,6 +17,7 @@ export interface ToolDefinition {
   description: string;
   access: 'read' | 'write';
   domain?: string;
+  result?: { kind: 'rows' | 'value'; description: string; fields?: Record<string, string>; paginated?: boolean };
   args?: Arg[];
   /** JS source of the adapter body: `async ({ tab, args, sites, recon }) => …` */
   func: string;
@@ -30,8 +29,9 @@ export function validateDefinition(def: ToolDefinition): void {
   if (!NAME_RE.test(def.site) || !NAME_RE.test(def.name)) throw Object.assign(new Error('site and name must match /^[a-z0-9][a-z0-9-]{0,63}$/'), { code: 'invalid_definition' });
   if (!def.description) throw Object.assign(new Error('description is required'), { code: 'invalid_definition' });
   if (def.access !== 'read' && def.access !== 'write') throw Object.assign(new Error("access must be 'read' or 'write'"), { code: 'invalid_definition' });
+  if (def.result && (!['rows', 'value'].includes(def.result.kind) || !def.result.description?.trim() || def.result.fields !== undefined && (!def.result.fields || typeof def.result.fields !== 'object' || Object.values(def.result.fields).some((v) => typeof v !== 'string')) || def.result.paginated && def.result.kind !== 'rows')) throw Object.assign(new Error('result needs kind rows|value and a description; fields must be text and paginated applies to rows'), { code: 'invalid_definition' });
   if (!def.func) throw Object.assign(new Error('provide `func` source (async ({ tab, args }) => …)'), { code: 'invalid_definition' });
-  for (const a of def.args ?? []) if (!/^[a-z][a-z0-9_]*$/.test(a.name)) throw Object.assign(new Error(`arg name ${JSON.stringify(a.name)} must be snake_case`), { code: 'invalid_definition' });
+  try { validateArgDefinitions(def.args); } catch (err) { throw Object.assign(new Error((err as Error).message), { code: 'invalid_definition' }); }
   if (!/^\s*(async\s*)?(\(|[A-Za-z_$])/.test(def.func)) throw Object.assign(new Error('func must be a function expression such as `async ({ tab, args }) => { … }`'), { code: 'invalid_definition' });
   try { new Function(`return (${def.func});`); } catch (err) { throw Object.assign(new Error(`func does not parse: ${(err as Error).message}`), { code: 'invalid_definition' }); }
 }
@@ -67,27 +67,12 @@ export function renderAdapterModule(def: ToolDefinition): string {
     `  description: ${JSON.stringify(def.description)},`,
     `  access: ${JSON.stringify(def.access)},`,
     def.domain ? `  domain: ${JSON.stringify(def.domain)},` : null,
+    def.result ? `  result: ${JSON.stringify(def.result)},` : null,
     `  args: ${JSON.stringify(def.args ?? [], null, 2).replace(/\n/g, '\n  ')},`,
     `  run: ${def.func.trim()},`,
     `});`,
     ``,
   ].filter((l): l is string => l !== null).join('\n');
-}
-
-export async function saveTool(def: ToolDefinition): Promise<{ file: string; site: string; name: string }> {
-  validateDefinition(def);
-  const dir = path.join(ensureUserSource(), def.site);
-  fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, `${def.name}.js`);
-  const staged = path.join(dir, `.${def.name}-${randomUUID()}.js`);
-  try {
-    fs.writeFileSync(staged, renderAdapterModule(def));
-    await import(pathToFileURL(staged).href); // reject an invalid descriptor without replacing the working adapter
-    fs.renameSync(staged, file);
-  } finally {
-    if (fs.existsSync(staged)) fs.rmSync(staged);
-  }
-  return { file, site: def.site, name: def.name };
 }
 
 export function deleteTool(site: string, name: string): boolean {

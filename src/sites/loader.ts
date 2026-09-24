@@ -10,7 +10,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { argSpec, type Arg, type ArgView } from './schema.js';
+import { defineAdapter, type AdapterDescriptor } from 'opencli-mcp/adapter-sdk';
+import { argSpec, validateArgDefinitions, type Arg, type ArgView } from './schema.js';
 
 export type SourceKind = 'builtin' | 'user';
 
@@ -31,14 +32,36 @@ export interface AdapterCommand {
   description: string;
   access: 'read' | 'write';
   domain?: string;
+  result?: { kind: 'rows' | 'value'; description: string; fields?: Record<string, string>; paginated?: boolean };
   args: Arg[];
   aliases?: string[];
   source: SourceKind;
   run: (ctx: AdapterContext) => Promise<unknown>;
 }
 
+/** One descriptor validation path for built-in, user, and draft adapters. */
+export function adapterCommandFromDescriptor(site: string, name: string, source: SourceKind, descriptor: Record<string, unknown>): AdapterCommand {
+  const d = defineAdapter(descriptor as unknown as AdapterDescriptor) as unknown as Record<string, unknown>;
+  validateArgDefinitions((d.args as Arg[]) ?? []);
+  return {
+    site, name, source,
+    description: String(d.description),
+    access: d.access as 'read' | 'write',
+    domain: d.domain as string | undefined,
+    result: d.result as AdapterCommand['result'],
+    args: (d.args as Arg[]) ?? [],
+    aliases: d.aliases as string[] | undefined,
+    run: d.run as AdapterCommand['run'],
+  };
+}
+
 const isCommandFile = (f: string): boolean => f.endsWith('.js') && !f.startsWith('_');
 const cmdName = (f: string): string => f.replace(/\.js$/, '');
+const INTENT_TERMS: Array<[RegExp, string[]]> = [
+  [/搜索|查找|搜/, ['search', 'find']], [/发布|发帖|投稿/, ['post', 'publish']],
+  [/点赞|喜欢/, ['like', 'upvote']], [/评论|回复/, ['comment', 'reply']],
+  [/收藏|书签/, ['bookmark', 'save', 'favorite']], [/关注|订阅/, ['follow', 'subscribe']],
+];
 
 export class SiteRegistry {
   loadedAt: number | null = null;
@@ -79,6 +102,17 @@ export class SiteRegistry {
     catch { return []; }
   }
 
+  private siteAliases(site: string): string[] {
+    const aliases = new Set<string>();
+    for (const source of this.existingDirs()) {
+      try {
+        const metadata = JSON.parse(fs.readFileSync(path.join(source.dir, site, 'site.json'), 'utf8')) as { aliases?: unknown };
+        if (Array.isArray(metadata.aliases)) for (const alias of metadata.aliases) if (typeof alias === 'string' && alias.trim()) aliases.add(alias.toLowerCase());
+      } catch { /* optional site metadata */ }
+    }
+    return [...aliases];
+  }
+
   /** site -> command-name -> absolute file path (later source wins). */
   private map(): Map<string, Map<string, string>> {
     const out = new Map<string, Map<string, string>>();
@@ -107,15 +141,7 @@ export class SiteRegistry {
   }
 
   private toCommand(site: string, name: string, file: string, d: Record<string, unknown>): AdapterCommand {
-    return {
-      site, name, source: this.kindOf(file),
-      description: String(d.description ?? ''),
-      access: d.access === 'write' ? 'write' : 'read',
-      domain: d.domain as string | undefined,
-      args: (d.args as Arg[]) ?? [],
-      aliases: d.aliases as string[] | undefined,
-      run: d.run as (ctx: AdapterContext) => Promise<unknown>,
-    };
+    return adapterCommandFromDescriptor(site, name, this.kindOf(file), d);
   }
 
   private async buildIndex(): Promise<Array<Omit<AdapterCommand, 'run'>>> {
@@ -137,13 +163,13 @@ export class SiteRegistry {
 
   has(site: string): boolean { return this.map().has(site); }
 
-  sites(): Array<{ site: string; commands: number; read: number; write: number; domains: string[]; source: SourceKind; sample: string[] }> {
+  sites(): Array<{ site: string; aliases: string[]; commands: number; read: number; write: number; domains: string[]; source: SourceKind; sample: string[] }> {
     const idx = this.index ?? [];
     const map = this.map();
     return [...map.entries()].map(([site, cmds]) => {
       const metas = idx.filter((c) => c.site === site);
       return {
-        site, commands: cmds.size,
+        site, aliases: this.siteAliases(site), commands: cmds.size,
         read: metas.filter((c) => c.access === 'read').length,
         write: metas.filter((c) => c.access === 'write').length,
         domains: [...new Set(metas.map((c) => c.domain).filter(Boolean) as string[])],
@@ -154,18 +180,23 @@ export class SiteRegistry {
   }
 
   commandNames(site: string): string[] { return [...(this.map().get(site)?.keys() ?? [])].sort(); }
+  sourceFile(site: string, name: string): string | undefined { return this.map().get(site)?.get(name); }
 
   /** Command metadata for a site (from the index; loads it if cold). */
   async commands(site: string): Promise<Array<Omit<AdapterCommand, 'run'>>> { return (await this.all()).filter((c) => c.site === site).sort((a, b) => a.name.localeCompare(b.name)); }
 
   /** Rank commands for a free-text query, using the in-memory index. */
-  async search(query: string, limit = 20): Promise<Array<{ site: string; name: string; description: string; score: number; access: string; domain?: string; args: ArgView[] }>> {
-    const terms = query.toLowerCase().split(/[\s,]+/).filter(Boolean);
+  async search(query: string, limit = 20): Promise<Array<{ site: string; name: string; description: string; score: number; access: string; domain?: string; args: ArgView[]; result?: AdapterCommand['result'] }>> {
+    const normalized = query.toLowerCase();
+    const terms = [...normalized.split(/[\s,]+/).filter(Boolean), ...INTENT_TERMS.flatMap(([pattern, words]) => pattern.test(normalized) ? words : [])];
     if (!terms.length) return [];
-    const hits: Array<{ site: string; name: string; description: string; score: number; access: string; domain?: string; args: ArgView[] }> = [];
+    const hits: Array<{ site: string; name: string; description: string; score: number; access: string; domain?: string; args: ArgView[]; result?: AdapterCommand['result'] }> = [];
+    const siteAliases = new Map<string, string[]>();
     for (const c of await this.all()) {
+      if (!siteAliases.has(c.site)) siteAliases.set(c.site, this.siteAliases(c.site));
       const hay = { site: c.site.toLowerCase(), name: c.name.toLowerCase(), desc: c.description.toLowerCase(), domain: (c.domain ?? '').toLowerCase(), aliases: (c.aliases ?? []).join(' ').toLowerCase() };
       let score = 0;
+      if ([hay.site, hay.domain, ...(siteAliases.get(c.site) ?? [])].some((name) => name.length >= 2 && normalized.includes(name))) score += 8;
       for (const t of terms) {
         if (hay.site === t) score += 10; else if (hay.site.includes(t)) score += 5;
         if (hay.name === t) score += 6; else if (hay.name.includes(t)) score += 3;
@@ -173,7 +204,7 @@ export class SiteRegistry {
         if (hay.aliases.includes(t)) score += 3;
         if (hay.desc.includes(t)) score += 2;
       }
-      if (score > 0) hits.push({ site: c.site, name: c.name, description: c.description, score, access: c.access, domain: c.domain, args: argSpec(c.args) });
+      if (score > 0) hits.push({ site: c.site, name: c.name, description: c.description, score, access: c.access, domain: c.domain, args: argSpec(c.args), result: c.result });
     }
     return hits.sort((a, b) => b.score - a.score).slice(0, limit);
   }

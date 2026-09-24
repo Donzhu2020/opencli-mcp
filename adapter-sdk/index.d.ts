@@ -2,13 +2,25 @@
 
 export type Access = 'read' | 'write';
 
-export interface Arg {
+export interface ArgValue {
+  type?: 'string' | 'int' | 'number' | 'boolean' | 'array' | 'object';
+  nullable?: boolean;
+  choices?: Array<string | number | boolean>;
+  items?: ArgValue;
+  properties?: Record<string, ArgValue & { required?: boolean; help?: string }>;
+  min?: number;
+  max?: number;
+  minLength?: number;
+  maxLength?: number;
+  /** One representative value, shown to the agent; not used as a default. */
+  example?: unknown;
+}
+
+export interface Arg extends ArgValue {
   /** snake_case, agent-native JSON key */
   name: string;
-  type?: 'string' | 'int' | 'number' | 'boolean';
   required?: boolean;
   default?: unknown;
-  choices?: string[];
   /** one line, agent-facing, no CLI grammar */
   help?: string;
 }
@@ -38,6 +50,8 @@ export interface Tab {
   screenshot(opts?: { fullPage?: boolean; annotate?: boolean; format?: 'png' | 'jpeg'; quality?: number }): Promise<unknown>;
   readonly network: {
     start(pattern?: string): Promise<boolean>;
+    list(opts?: { filter?: string; limit?: number; afterSequence?: number }): Promise<{ cursor: number; entries: unknown[]; hasMore: boolean }>;
+    detail(opts: { seq?: number; requestId?: string; part?: 'request' | 'response'; start?: number; maxChars?: number }): Promise<unknown>;
     read(opts?: { pattern?: string; limit?: number; includeStatic?: boolean; afterSequence?: number }): Promise<NetworkReadResult>;
   };
 }
@@ -57,6 +71,8 @@ export interface AdapterContext {
 export interface AdapterDescriptor {
   description: string;
   access: Access;
+  /** Agent-facing result shape. `rows` may include nextCursor; `value` is one object/scalar. */
+  result?: { kind: 'rows' | 'value'; description: string; fields?: Record<string, string>; paginated?: boolean };
   /** Site metadata and tool icon host; the adapter navigates explicitly when needed. */
   domain?: string;
   args?: Arg[];

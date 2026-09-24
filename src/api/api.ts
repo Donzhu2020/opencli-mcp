@@ -7,7 +7,8 @@ import { ActionError } from './errors.js';
 import { argSpec } from '../sites/schema.js';
 import { discoverEndpoints, type DiscoverResult } from '../recon/discover.js';
 import { listDefinedTools, type ToolDefinition } from '../sites/define.js';
-import { readDoc } from '../docs/manifest.js';
+import type { DraftExpectation } from '../sites/drafts.js';
+import { readDoc, listDocs } from '../docs/manifest.js';
 import { Tab } from './tab.js';
 import { Browser } from './browser.js';
 import type { SessionContext } from './context.js';
@@ -16,7 +17,7 @@ export interface AgentApi {
   agent: { browsers: { getDefault(): Promise<Browser> }; browser: Browser; documentation: { get(name: string): string | null } };
   sites: Record<string, unknown> & { search(q: string, limit?: number): Promise<unknown>; list(): unknown; enable(site: string, opts?: { write?: boolean }): Promise<{ site: string; tools: string[] }>; disable(site: string): boolean; run(site: string, name: string, args?: Record<string, unknown>): Promise<unknown> };
   recon: { discover(tab: Tab, opts?: Parameters<typeof discoverEndpoints>[1]): Promise<DiscoverResult> };
-  tools: { define(def: ToolDefinition | (Omit<ToolDefinition, 'func'> & { func?: string | ((ctx: Record<string, unknown>) => unknown) })): Promise<{ file: string; site: string; name: string }>; list(): ReturnType<typeof listDefinedTools>; remove(site: string, name: string): boolean };
+  tools: { define(def: ToolDefinition | (Omit<ToolDefinition, 'func'> & { func?: string | ((ctx: Record<string, unknown>) => unknown) })): ReturnType<Runtime['defineTool']>; try(draftId: string, args: Record<string, unknown>, expect: DraftExpectation): ReturnType<Runtime['tryToolDraft']>; activate(draftId: string): ReturnType<Runtime['activateToolDraft']>; discard(draftId: string): ReturnType<Runtime['discardToolDraft']>; list(): ReturnType<typeof listDefinedTools>; remove(site: string, name: string): ReturnType<Runtime['removeTool']> };
   session: { id: string };
 }
 
@@ -38,7 +39,7 @@ export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
       rt.emit('tools-changed', { site });
       const cmds = (await rt.registry.commands(site)).filter((c) => opts.write || c.access === 'read');
       const tools = cmds.map((c) => `${site}_${c.name}`.replace(/[^A-Za-z0-9_-]/g, '_'));
-      return { site, tools, commands: cmds.map((c) => ({ tool: `${site}_${c.name}`.replace(/[^A-Za-z0-9_-]/g, '_'), description: c.description, access: c.access, args: argSpec(c.args) })), note: 'Adapter commands use your logged-in Chrome session in a background tab.' };
+      return { site, tools, commands: cmds.map((c) => ({ tool: `${site}_${c.name}`.replace(/[^A-Za-z0-9_-]/g, '_'), description: c.description, access: c.access, args: argSpec(c.args), result: c.result })), note: 'Adapter commands use your logged-in Chrome session in a background tab.' };
     },
     disable: (site: string) => { const ok = state.enabledSites.delete(site); if (ok) rt.emit('tools-changed', { site }); return ok; },
     run: async (site: string, name: string, args: Record<string, unknown> = {}) => {
@@ -62,13 +63,16 @@ export function createAgentApi(rt: Runtime, sessionId: string): AgentApi {
       // The single default browser, eagerly available (one user, one Chrome) so `browser.tabs/user/...` works in js
       // without a bootstrap line; ops throw browser_unavailable at call time when Chrome isn't connected.
       browser: new Browser('chrome', 'extension', ctx),
-      documentation: { get: (name: string) => readDoc(name) },
+      documentation: { get: (name: string) => listDocs({ backend: rt.backend(), capabilities: rt.features() }).some((entry) => entry.name === name && entry.available) ? readDoc(name) : null },
     },
     sites,
     recon: { discover: async (tab: Tab, opts) => { const log = await tab.network.read({ limit: 2000 }); return tab.use((page) => discoverEndpoints(page, { ...opts, network: log.entries as Array<Record<string, unknown>> })); } },
     tools: {
       // In js, an explicit function can be passed directly; its source is saved as the adapter.
       define: (def: ToolDefinition | (Omit<ToolDefinition, 'func'> & { func?: string | ((ctx: Record<string, unknown>) => unknown) })) => rt.defineTool({ ...def, func: typeof def.func === 'function' ? def.func.toString() : def.func } as ToolDefinition),
+      try: (draftId, args, expect) => rt.tryToolDraft(draftId, args, expect),
+      activate: (draftId) => rt.activateToolDraft(draftId),
+      discard: (draftId) => rt.discardToolDraft(draftId),
       list: () => listDefinedTools(),
       remove: (site: string, name: string) => rt.removeTool(site, name),
     },

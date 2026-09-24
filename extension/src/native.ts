@@ -3,7 +3,7 @@
  * connect; while the port is open Chrome keeps this service worker alive and the host keeps the
  * runtime warm. Reconnect immediately on disconnect (backoff) with an alarm as the safety net.
  */
-import type { Command, ExtToHost, HostToExt, Result, BrowserEvent } from '../../src/protocol.js';
+import type { Command, ExtToHost, HostToExt, Result, BrowserEvent, BrowserFeature } from '../../src/protocol.js';
 import { NATIVE_HOST_NAME } from '../../src/protocol.js';
 
 const RECONNECT_ALARM = 'opencli-mcp-reconnect';
@@ -51,7 +51,9 @@ export class NativeHost {
       this.scheduleReconnect();
     });
     this.status = 'connected';
-    this.send({ type: 'hello', extensionVersion: chrome.runtime.getManifest().version });
+    const features: BrowserFeature[] = ['frames', 'dialogs', 'console', 'downloads', 'visibility', 'webmcp'];
+    if (chrome.debugger) features.push('cdp', 'viewport', 'network');
+    this.send({ type: 'hello', extensionVersion: chrome.runtime.getManifest().version, features });
     return true;
   }
 

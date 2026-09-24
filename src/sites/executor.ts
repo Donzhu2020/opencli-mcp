@@ -57,6 +57,9 @@ export async function runAdapter(
     if (opts.signal?.aborted) throw new ActionError('cancelled', `${key} cancelled by the client`);
     const ctx = { args, tab: model.tab, sites: model.sites, recon: model.recon, signal: opts.signal };
     const result = await withTimeout(Promise.resolve(cmd.run(ctx)), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, key, opts.signal);
+    const isRows = Array.isArray(result) || Boolean(result && typeof result === 'object' && Array.isArray((result as { rows?: unknown }).rows));
+    if (cmd.result?.kind === 'rows' && !isRows) throw new ActionError('adapter_result_mismatch', `${key} declared rows but returned a value.`, 'Return an array or {rows,nextCursor?}.');
+    if (cmd.result?.kind === 'value' && isRows) throw new ActionError('adapter_result_mismatch', `${key} declared value but returned rows.`, 'Return a single value, or declare result.kind:"rows".');
     const elapsedMs = Date.now() - started;
     if (Array.isArray(result)) return { ok: true, site: cmd.site, name: cmd.name, rows: result, elapsedMs };
     if (result && typeof result === 'object') {

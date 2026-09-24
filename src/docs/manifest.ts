@@ -18,9 +18,9 @@ export interface DocContext { backend: 'extension' | 'none'; capabilities: strin
 
 export const DOCS_MANIFEST: DocEntry[] = [
   { name: 'instructions', mode: 'included' },
-  { name: 'api-use', mode: 'included' },
+  { name: 'api-use', mode: 'lookup', description: 'detailed browser actions, locators, network evidence, and recovery' },
   { name: 'safety', mode: 'included' },
-  { name: 'tab-lifecycle', mode: 'included', when: { backends: ['extension'] } },
+  { name: 'tab-lifecycle', mode: 'lookup', description: 'session tabs, claiming user tabs, and finalization', when: { backends: ['extension'] } },
   { name: 'sites', mode: 'lookup', description: 'find, run, and define site adapters' },
   { name: 'js-tool', mode: 'model' },
   { name: 'api-reference', mode: 'model', description: 'the whole object model, generated from its TypeScript declarations' },

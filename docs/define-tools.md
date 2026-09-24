@@ -4,12 +4,14 @@ A site adapter is a host-side JavaScript function that uses the same `Tab` API a
 
 The optional `domain` is metadata for discovery and the tool icon. It does not navigate the tab; the adapter should call `tab.goto()` when it needs a site origin.
 
-1. Explore the site with `tab.observe()`, `tab.act()`, and `tab.network.read()`. `recon.discover(tab)` can suggest API endpoints, but a candidate is evidence, not a verified contract.
+1. Explore the site with `tab.observe()` and `tab.act()`. Once the meaningful page operation has happened, use `network_inspect` (list, then detail by `seq`) or `tab.network.list()/detail()` in `js`. `recon.discover(tab)` ranks observed requests; pass `{includeStatic:true}` only when the captured traffic is insufficient.
 2. Verify the endpoint or UI workflow, including authentication, arguments, pagination, and errors. Recompute CSRF tokens and request signatures at run time; never save a captured credential or one-time value.
-3. Define the adapter with `tools_define {site, name, description, access, domain?, args?, func}` or `await tools.define({...})` in `js`. The `func` is a JavaScript function source such as `async ({ tab, args }) => { ... }`.
-4. Use the returned `next` call to run the new command with `site_run` and check its actual result. The source is saved under `~/.opencli-mcp/adapters/<site>/<name>.js` and becomes available without restarting the host. For a typed `<site>_<name>` tool, call `sites.enable(site)` in `js` (`write:true` for write commands).
+3. Define an inactive draft with `tools_define {site, name, description, access, domain?, args?, func}` or `await tools.define({...})` in `js`. The `func` is a JavaScript function source such as `async ({ tab, args }) => { ... }`. Args may use nested `array`/`object`, `nullable`, bounds, choices and examples; this same contract powers search, MCP schemas and execution.
+4. Run `tools_try {draftId,args,expect}` with real sample args and an assertion (`{path:"value.id"}` or `{minRows:1}`; add `equals` when a particular value matters). Inspect the actual result and assertion report. A failed trial stays inactive. A write draft may perform the write during this trial, so use a sample whose effect you intend to verify.
+5. Call `tools_activate {draftId}` only after a passing trial. It atomically replaces the active adapter under `~/.opencli-mcp/adapters/<site>/<name>.js`; `site_run` can then execute it. For a typed `<site>_<name>` tool, call `sites.enable(site)` in `js` (`write:true` for write commands).
 
-A replacement is validated before it takes the place of an existing adapter. If the new descriptor fails to load, the previous command remains available.
+A draft never replaces the current adapter until activation. Activation fails if that adapter changed since the draft was created; create a new draft against the latest version.
+Discard an unused draft with `tools_discard {draftId}` or `tools.discard(draftId)` in `js`.
 
 For a logged-in JSON API, navigate to the site's origin before fetching. A minimal function looks like this:
 

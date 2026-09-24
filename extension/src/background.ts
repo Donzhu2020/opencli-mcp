@@ -235,9 +235,9 @@ async function handleTabs(cmd: Command, s: Session): Promise<Result> {
       if (cmd.url) {
         const detail = !t.url ? `did not commit (status ${t.status})` : await isErrorDocument(created.tabId).then((u) => (u ? `the browser shows its error page (${u})` : null));
         if (detail) {
-          // do not hand the agent a dead tab: release it and report the failure the same way navigate does
-          s.leases.delete(created.tabId); if (s.preferredTabId === created.tabId) s.preferredTabId = null;
-          await chrome.tabs.remove(created.tabId).catch(() => {});
+          // Keep ownership until Chrome confirms the dead tab is closed; a failed close remains retryable.
+          try { await sessions.endTab(s, created.tabId, 'close'); }
+          catch (error) { throw new SessionError('tab_create_cleanup_failed', `Opening ${cmd.url} failed and tab ${created.tabId} could not be closed: ${String(error)}`, 'The tab remains in this session. Use tab_list and tab_close to clean it up.'); }
           return notLoaded(cmd.id, cmd.url, detail);
         }
       }

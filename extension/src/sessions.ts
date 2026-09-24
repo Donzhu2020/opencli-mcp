@@ -27,6 +27,7 @@ export interface Session {
 }
 
 type GroupColor = chrome.tabGroups.TabGroup['color'];
+type WindowChoice = { windowId: number; initialTab?: chrome.tabs.Tab };
 const GROUP_COLORS: GroupColor[] = ['blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan', 'orange'];
 const IDLE_MS: Record<Session['surface'], number> = { browser: 60 * 60_000, adapter: 10 * 60_000 };
 const CONTENT_FILE = 'content/cursor.js';
@@ -67,6 +68,7 @@ export class SessionManager {
           if (leases.size === 0) continue;
           const session = { ...st, leases, idleTimer: null };
           this.sessions.set(st.key, session);
+          if (st.surface === 'adapter' && st.windowId !== null && this.adapterWindowId === null) this.adapterWindowId = st.windowId;
           this.scheduleIdle(session);
         }
       } catch { /* storage unavailable */ }
@@ -110,14 +112,23 @@ export class SessionManager {
   }
   ownerOf(tabId: number): Session | null { for (const s of this.sessions.values()) if (s.leases.has(tabId)) return s; return null; }
 
-  private async pickWindow(): Promise<number> {
+  private async createWindow(state?: 'minimized'): Promise<WindowChoice> {
+    const w = await chrome.windows.create({ focused: false, type: 'normal', url: 'about:blank', ...(state && { state }) });
+    if (w?.id === undefined) throw new SessionError('window_create_failed', 'Could not create a browser window');
+    const initialTab = w.tabs?.[0] ?? (await chrome.tabs.query({ windowId: w.id }))[0];
+    if (initialTab?.id === undefined) {
+      await chrome.windows.remove(w.id).catch(() => {});
+      throw new SessionError('window_create_failed', `Created window ${w.id} has no tab`);
+    }
+    return { windowId: w.id, initialTab };
+  }
+
+  private async pickWindow(): Promise<WindowChoice> {
     const focused = await chrome.windows.getLastFocused({ windowTypes: ['normal'] }).catch(() => null);
-    if (focused?.id !== undefined && focused.type === 'normal') return focused.id;
+    if (focused?.id !== undefined && focused.type === 'normal' && focused.id !== this.adapterWindowId) return { windowId: focused.id };
     const all = await chrome.windows.getAll({ windowTypes: ['normal'] });
-    if (all[0]?.id !== undefined) return all[0].id;
-    const w = await chrome.windows.create({ focused: false, type: 'normal', url: 'about:blank' });
-    if (!w?.id) throw new SessionError('window_create_failed', 'Could not create a browser window');
-    return w.id;
+    const existing = all.find((w) => w.id !== undefined && w.id !== this.adapterWindowId);
+    return existing?.id !== undefined ? { windowId: existing.id } : this.createWindow();
   }
 
   private colorFor(key: string): GroupColor {
@@ -138,17 +149,16 @@ export class SessionManager {
 
   /** Background adapter runs get their own minimized window so they never clutter the user's tab strip. */
   private adapterWindowId: number | null = null;
-  private async pickAdapterWindow(): Promise<number> {
-    if (this.adapterWindowId !== null) { try { await chrome.windows.get(this.adapterWindowId); return this.adapterWindowId; } catch { this.adapterWindowId = null; } }
-    const w = await chrome.windows.create({ focused: false, type: 'normal', url: 'about:blank', state: 'minimized' });
-    if (!w?.id) throw new SessionError('window_create_failed', 'Could not create the adapter window');
-    this.adapterWindowId = w.id;
-    return w.id;
+  private async pickAdapterWindow(): Promise<WindowChoice> {
+    if (this.adapterWindowId !== null) { try { await chrome.windows.get(this.adapterWindowId); return { windowId: this.adapterWindowId }; } catch { this.adapterWindowId = null; } }
+    const choice = await this.createWindow('minimized');
+    this.adapterWindowId = choice.windowId;
+    return choice;
   }
 
   async createTab(s: Session, url?: string): Promise<{ tabId: number; page: string; tab: chrome.tabs.Tab }> {
     const pick = async () => s.surface === 'adapter' && !s.visible ? this.pickAdapterWindow() : this.pickWindow();
-    let windowId = s.windowId ?? await pick();
+    let choice: WindowChoice = s.windowId === null ? await pick() : { windowId: s.windowId };
     const target = url && isHttp(url) ? url : 'about:blank';
     // Register the load watcher before the tab exists so a fast (cached) load is never missed.
     let createdId = -1; let loaded = false; let navError: string | null = null;
@@ -167,8 +177,8 @@ export class SessionManager {
     // the tab is born blank, attached (network capture armed), and only then navigated: the requests of the first load
     // are evidence too — network inspection needs the document's own XHR/fetch, which fire before any command would attach
     try {
-      try { tab = await chrome.tabs.create({ windowId, url: 'about:blank', active: s.visible }); }
-      catch { s.windowId = null; s.groupId = null; windowId = await pick(); tab = await chrome.tabs.create({ windowId, url: 'about:blank', active: s.visible }); }
+      try { tab = choice.initialTab ?? await chrome.tabs.create({ windowId: choice.windowId, url: 'about:blank', active: s.visible }); }
+      catch { s.windowId = null; s.groupId = null; choice = await pick(); tab = choice.initialTab ?? await chrome.tabs.create({ windowId: choice.windowId, url: 'about:blank', active: s.visible }); }
       createdId = tab.id!;
       if (target !== 'about:blank') {
         await executor.ensureAttached(createdId, s.surface === 'browser').catch(() => { /* attach on first command instead */ });

@@ -28,9 +28,51 @@ function chromeMock() {
   return tabs;
 }
 
+function emptyWindowMock() {
+  const tabs = chromeMock();
+  const initialTab = { id: 1, windowId: 1, url: 'about:blank', status: 'complete', active: true };
+  let open = true;
+  tabs.get.mockImplementation(async () => { if (!open) throw new Error('No tab with id: 1'); return initialTab; });
+  tabs.update.mockImplementation(async (_id, change) => {
+    Object.assign(initialTab, change);
+    if (change.url) for (const [listener] of tabs.onUpdated.addListener.mock.calls) listener(1, { status: 'complete' }, initialTab);
+    return initialTab;
+  });
+  tabs.remove.mockImplementation(async () => { open = false; });
+  tabs.query.mockImplementation(async () => open ? [initialTab] : []);
+  globalThis.chrome.windows.getLastFocused = vi.fn(async () => null);
+  globalThis.chrome.windows.getAll = vi.fn(async () => []);
+  globalThis.chrome.windows.get = vi.fn(async () => ({ id: 1 }));
+  globalThis.chrome.windows.create = vi.fn(async () => ({ id: 1, tabs: [initialTab] }));
+  return tabs;
+}
+
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('browser tab ownership', () => {
+  it.each(['browser', 'adapter'])('uses the initial tab of a new %s window', async (surface) => {
+    const tabs = emptyWindowMock();
+    const manager = new SessionManager(() => {});
+    await manager.ready();
+    const session = manager.get('new-window', surface);
+    const opened = await manager.createTab(session, 'https://example.com/');
+    expect(opened.tabId).toBe(1);
+    expect(tabs.create).not.toHaveBeenCalled();
+    expect(session.leases.has(1)).toBe(true);
+    await manager.finalize(session, []);
+    expect(tabs.remove).toHaveBeenCalledWith(1);
+  });
+
+  it('closes the initial tab when its first navigation fails', async () => {
+    const tabs = emptyWindowMock();
+    tabs.update.mockRejectedValueOnce(new Error('navigation blocked'));
+    const manager = new SessionManager(() => {});
+    await manager.ready();
+    await expect(manager.createTab(manager.get('new-window'), 'https://example.com/')).rejects.toMatchObject({ code: 'page_not_loaded' });
+    expect(tabs.create).not.toHaveBeenCalled();
+    expect(tabs.remove).toHaveBeenCalledWith(1);
+  });
+
   it('resumes idle cleanup after a service-worker restart', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-24T00:00:00Z'));

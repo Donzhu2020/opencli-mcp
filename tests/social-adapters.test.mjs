@@ -221,9 +221,9 @@ describe('LinkedIn Voyager adapters', () => {
     const views = { elements: [{ value: { 'com.linkedin.voyager.identity.me.wvmpOverview.WvmpViewersCard': {
       insightCards: [{ value: { 'com.linkedin.voyager.identity.me.wvmpOverview.WvmpSummaryInsightCard': summary } }],
     } } }] };
-    expect(mapProfileAnalytics(views, { metadata: { numAppearances: 59 } }, { publicIdentifier: 'example' }))
-      .toMatchObject({ profile_views: 41, search_appearances: 59, profile_url: 'https://www.linkedin.com/in/example/' });
-    expect(() => mapProfileAnalytics({}, {}, { publicIdentifier: 'example' })).toThrow(/shape/);
+    expect(mapProfileAnalytics(views, { metadata: { numAppearances: 59 } }, { numConnections: 491 }, { publicIdentifier: 'example' }))
+      .toMatchObject({ profile_views: 41, search_appearances: 59, connections: 491, profile_url: 'https://www.linkedin.com/in/example/' });
+    expect(() => mapProfileAnalytics({}, {}, {}, { publicIdentifier: 'example' })).toThrow(/shape/);
   });
   it('discovers and maps a Services page from Voyager JSON', () => {
     const url = 'https://www.linkedin.com/services/page/abc123/';

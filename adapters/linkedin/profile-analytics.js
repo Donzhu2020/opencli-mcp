@@ -2,11 +2,12 @@ import { defineAdapter, errors } from 'opencli-mcp/adapter-sdk';
 import { ensureLinkedIn, linkedinApi } from './_shared.js';
 import { linkedinProfile, profileIdentity } from './_profile.js';
 
-export function mapProfileAnalytics(views, appearances, profile) {
+export function mapProfileAnalytics(views, appearances, connections, profile) {
   const cards = views?.elements?.[0]?.value?.['com.linkedin.voyager.identity.me.wvmpOverview.WvmpViewersCard']?.insightCards;
   const summary = cards?.find((card) => card?.value?.['com.linkedin.voyager.identity.me.wvmpOverview.WvmpSummaryInsightCard'])
     ?.value?.['com.linkedin.voyager.identity.me.wvmpOverview.WvmpSummaryInsightCard'];
-  if (!summary || !Number.isFinite(summary.numViews) || !Number.isFinite(appearances?.metadata?.numAppearances)) {
+  if (!summary || !Number.isFinite(summary.numViews) || !Number.isFinite(appearances?.metadata?.numAppearances)
+    || !Number.isFinite(connections?.numConnections)) {
     throw errors.upstream('LinkedIn profile analytics response changed shape');
   }
   return {
@@ -18,7 +19,7 @@ export function mapProfileAnalytics(views, appearances, profile) {
     search_appearances_period: appearances.metadata.headerTitle || null,
     post_impressions: null,
     followers: null,
-    connections: null,
+    connections: connections.numConnections,
   };
 }
 
@@ -36,6 +37,7 @@ export default defineAdapter({
     }
     const views = await linkedinApi(tab, '/voyager/api/identity/wvmpCards?count=10&start=0');
     const appearances = await linkedinApi(tab, '/voyager/api/identity/searchAppearances?count=10&start=0');
-    return { rows: [mapProfileAnalytics(views, appearances, own)] };
+    const connections = await linkedinApi(tab, '/voyager/api/relationships/connectionsSummary');
+    return { rows: [mapProfileAnalytics(views, appearances, connections, own)] };
   },
 });

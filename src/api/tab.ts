@@ -34,7 +34,9 @@ const WRITE_EVAL_RE = /(\.click\s*\(|\.submit\s*\(|\blocation\s*(=|\.href\s*=|\.
 
 export class Tab {
   /** A Tab owns the page object bound to its identity; `bound` lets an adapter pass an existing page. */
-  constructor(readonly id: string, private readonly ctx: SessionContext, private readonly bound?: RuntimePage) {}
+  /** Numeric Chrome tab id when claimed from a user tab; `id` is the session page handle. */
+  readonly tabId?: number;
+  constructor(readonly id: string, private readonly ctx: SessionContext, private readonly bound?: RuntimePage, tabId?: number) { this.tabId = tabId; }
   private closed = false;
 
   /** Run `fn` on this tab's own page object. Operations are serialized per tab, never across tabs. */

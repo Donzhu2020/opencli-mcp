@@ -5,7 +5,7 @@
  * url/title match; extra matchers are fail-closed guards) and never moved by claim.
  * finalize() decides what the user keeps.
  */
-import type { BrowserEvent } from '../../src/protocol.js';
+import type { BrowserEvent, CloseUserTabsResult } from '../../src/protocol.js';
 import * as executor from './cdp';
 import * as identity from './identity';
 
@@ -238,12 +238,20 @@ export class SessionManager {
    * exact value or prefix, a title by case-insensitive substring — used as guards when an id is given, or to find the tab
    * when it is not (then the match must be unique; ambiguity fails closed with the candidates).
    */
-  async claimUserTab(s: Session, claim: { tabId?: number; title?: string; url?: string }): Promise<{ tabId: number; page: string; tab: chrome.tabs.Tab }> {
+  async claimUserTab(s: Session, claim: { tabId?: number; active?: boolean; title?: string; url?: string }): Promise<{ tabId: number; page: string; tab: chrome.tabs.Tab }> {
     const urlOk = (u?: string) => claim.url === undefined || (u !== undefined && (u === claim.url || u.startsWith(claim.url)));
     const titleOk = (t?: string) => claim.title === undefined || (t !== undefined && t.toLowerCase().includes(claim.title.toLowerCase()));
     let tab: chrome.tabs.Tab;
-    if (claim.tabId === undefined) {
-      if (claim.url === undefined && claim.title === undefined) throw new SessionError('claim_not_allowed', 'claim needs a tabId, or a url/title to find the tab', 'List user tabs first (tab_list user:true).');
+    if (claim.active) {
+      const focused = await chrome.windows.getLastFocused({ windowTypes: ['normal'], populate: true }).catch(() => null);
+      const activeTab = focused?.tabs?.find((candidate) => candidate.active);
+      if (activeTab?.id === undefined) throw new SessionError('claim_not_found', 'No active tab in the last focused normal window', 'Focus the Chrome tab you want to use, then retry tab_claim {active:true}.');
+      tab = await chrome.tabs.get(activeTab.id).catch(() => { throw new SessionError('claim_not_found', 'The foreground tab is no longer open', 'Focus the intended tab and retry.'); });
+      if (!tab.active || tab.windowId !== focused?.id) throw new SessionError('claim_identity_mismatch', 'The foreground tab changed before it could be claimed', 'Focus the intended tab and retry.');
+      if (claim.tabId !== undefined && tab.id !== claim.tabId) throw new SessionError('claim_identity_mismatch', `Active tab is ${tab.id}, not ${claim.tabId}`, 'Use the current tabId or omit it when claiming the active tab.');
+      if (!urlOk(tab.url) || !titleOk(tab.title)) throw new SessionError('claim_identity_mismatch', `Active tab does not match the given url/title (now "${tab.title}" ${tab.url})`, 'Focus the intended tab or update the url/title guard.');
+    } else if (claim.tabId === undefined) {
+      if (claim.url === undefined && claim.title === undefined) throw new SessionError('claim_not_allowed', 'claim needs a tabId, active:true, or a url/title to find the tab', 'Use tab_claim {active:true} for the foreground tab, or list user tabs first.');
       const candidates = (await this.listUserTabs({ query: claim.url ?? claim.title, all: true })).filter((t) => urlOk(t.url) && titleOk(t.title));
       if (candidates.length === 0) throw new SessionError('claim_not_found', `no user tab matches ${JSON.stringify({ url: claim.url, title: claim.title })}`, 'List user tabs and claim by tabId.');
       if (candidates.length > 1) throw new SessionError('claim_ambiguous', `${candidates.length} user tabs match; claim by tabId: ${candidates.map((c) => `${c.tabId} "${c.title}" ${c.url}`).join('; ')}`, 'Pass the tabId of the intended tab.');
@@ -268,6 +276,22 @@ export class SessionManager {
     this.emit({ kind: 'tab_acquired', session: s.key, page, tabId, url: tab.url, title: tab.title, origin });
     await this.touch(s);
     return { tabId: tabId, page, tab };
+  }
+
+  /** Close explicit user-tab ids without acquiring them into a browser session. */
+  async closeUserTabs(tabIds: number[]): Promise<CloseUserTabsResult> {
+    const unique = [...new Set(tabIds)];
+    const eligible = new Set((await chrome.tabs.query({ windowType: 'normal' }))
+      .filter((tab) => tab.id !== undefined && (this.ownerOf(tab.id)?.leases.get(tab.id)?.state ?? 'none') !== 'active')
+      .map((tab) => tab.id!));
+    const outcomes = await Promise.all(unique.map(async (tabId) => {
+      if (!eligible.has(tabId) || this.ownerOf(tabId)?.leases.get(tabId)?.state === 'active') return { tabId, reason: 'Tab is gone or controlled by a session' };
+      try { await chrome.tabs.remove(tabId); return { tabId, closed: true as const }; }
+      catch (error) { return { tabId, reason: String(error) }; }
+    }));
+    const closed = outcomes.filter((outcome): outcome is { tabId: number; closed: true } => 'closed' in outcome).map(({ tabId }) => tabId);
+    const failed = outcomes.filter((outcome): outcome is { tabId: number; reason: string } => 'reason' in outcome);
+    return { complete: failed.length === 0, closed, failed };
   }
 
   /** Resolve the tab a page-scoped command targets; create one when the session has none. */

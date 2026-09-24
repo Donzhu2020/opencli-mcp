@@ -112,20 +112,27 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     const { data, images } = stripImage({ tab: tab.id, ...(await tab.observe()) });
     return ok(data, images);
   }));
-  server.registerTool('tab_claim', { title: 'Claim a user tab', description: 'Take control of a tab the user already has open. Use tab_list with user:true to find tabId, or give url (exact or prefix) and/or title (substring) to find a unique match. url/title together with tabId are guards that fail if the tab changed. Claimed user tabs are not moved into the agent group or closed by finalize.',
-    inputSchema: { tabId: z.number().int().optional(), title: z.string().optional(), url: z.string().optional(), observe: z.boolean().default(true) },
+  server.registerTool('tab_claim', { title: 'Claim a user tab', description: 'Take control of a user tab. Pass active:true for the foreground tab of the last focused Chrome window, tabId from tab_list, or url/title for a unique match. url/title and tabId guard active:true against claiming a different tab. Returns tab (page handle) and numeric tabId. Claimed user tabs are released, not closed, by session_finalize.',
+    inputSchema: { tabId: z.number().int().positive().optional(), active: z.boolean().optional().describe('claim the foreground tab of the last focused normal Chrome window'), title: z.string().optional(), url: z.string().optional(), observe: z.boolean().default(true) },
     annotations: { openWorldHint: true },
-  }, async ({ tabId, title, url, observe }) => run(async () => {
+  }, async ({ tabId, active, title, url, observe }) => run(async () => {
     const b = await api.agent.browsers.getDefault();
-    const tab = await b.user.claimTab({ tabId, title, url });
-    if (!observe) return ok({ tab: tab.id });
-    const { data, images } = stripImage({ tab: tab.id, ...(await tab.observe()) });
+    const tab = await b.user.claimTab({ tabId, active, title, url });
+    if (!observe) return ok({ tab: tab.id, tabId: tab.tabId });
+    const { data, images } = stripImage({ tab: tab.id, tabId: tab.tabId, ...(await tab.observe()) });
     return ok(data, images);
   }));
-  server.registerTool('tab_close', { title: 'Close a tab', description: 'Close a tab controlled by this session, including a claimed user tab. To leave the tab open, use tab_release.',
-    inputSchema: { tab: z.string().optional().describe('required when the session has more than one tab') },
+  server.registerTool('tab_close', { title: 'Close tabs', description: 'Close one session tab with tab, or close explicit user tabs with tabIds:[...]. Numeric tabIds of unclaimed user tabs are closed directly without loading the pages. Inspect complete and the per-id closed/failed results. To keep a controlled tab open, use tab_release.',
+    inputSchema: { tab: z.string().optional().describe('page handle for one session tab; omit when only one session tab is active'), tabIds: z.array(z.number().int().positive()).min(1).optional().describe('Chrome tabIds of user tabs to close in one call; cannot be combined with tab') },
     annotations: { destructiveHint: true },
-  }, async ({ tab }) => run(async () => { const t = await tabOf(tab); await t.close(); return ok({ tab: t.id, closed: true }); }));
+  }, async ({ tab, tabIds }) => run(async () => {
+    if (tab !== undefined && tabIds !== undefined) throw new ActionError('invalid_args', 'Pass tab or tabIds, not both.');
+    const b = await api.agent.browsers.getDefault();
+    if (tabIds) return ok(await b.user.closeTabs(tabIds));
+    const t = await tabOf(tab);
+    await t.close();
+    return ok({ tab: t.id, closed: true });
+  }));
   server.registerTool('tab_release', { title: 'Release a tab', description: 'Keep a controlled tab open and give up this session’s control. Works for both agent-created and claimed user tabs.',
     inputSchema: { tab: z.string().optional().describe('required when the session has more than one tab') },
   }, async ({ tab }) => run(async () => { const t = await tabOf(tab); await t.release(); return ok({ tab: t.id, released: true }); }));
@@ -222,7 +229,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   // ── code mode ──
   const jsGlobals = { agent: api.agent, browser: api.agent.browser, sites: api.sites, recon: api.recon, tools: api.tools, session: api.session, Tab };
   server.registerTool('js', {
-    title: 'JavaScript session', description: 'Host-side JavaScript against the object model, not page JavaScript. Page scripts go through tab.evaluate. Pre-bound: browser, agent, sites, recon, tools, session. Top-level const/let persist; the last expression is returned. Example: const tab = await browser.tabs.new(url); await tab.observe(). For the full API, call docs_get {name:"api-reference"} when needed.',
+    title: 'JavaScript session', description: 'Host-side JavaScript against the object model, not page JavaScript. Page scripts go through tab.evaluate. Pre-bound: browser, agent, sites, recon, tools, session. Top-level const/let persist; function declarations do not. Use const fn = (...) => ... for reusable helpers. The last expression is returned. Batch loops in one js call; browser.user.closeTabs(ids) closes explicit user-tab ids. User-tab lookup: browser.user.openTabs({query,limit}). For the full API, call docs_get {name:"api-reference"} when needed.',
     inputSchema: { code: z.string(), timeoutMs: z.number().int().max(1_800_000).default(300_000) },
     annotations: { openWorldHint: true, destructiveHint: true },
   }, async ({ code, timeoutMs }) => run(async () => {

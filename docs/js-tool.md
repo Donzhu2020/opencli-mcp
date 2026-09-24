@@ -1,6 +1,6 @@
 ## js — persistent JavaScript session
 
-Top-level `const`/`let` persist across calls (they become session globals). The value of the last expression is returned. Use `nodeRepl.write(text)` for extra output and `await nodeRepl.emitImage({ base64, mimeType })` for images; `tab.screenshot()` already returns an image block when called at top level.
+Top-level `const`/`let` persist across calls (they become session globals). Function declarations are local to one call; use `const norm = (url) => ...` for a helper you need again. The value of the last expression is returned. Use `nodeRepl.write(text)` for extra output and `await nodeRepl.emitImage({ base64, mimeType })` for images; `tab.screenshot()` already returns an image block when called at top level.
 The first text block is always the JSON result envelope; `nodeRepl.write` output follows as additional text blocks.
 
 Pre-bound session globals (no import/bootstrap): `browser` (the default Chrome), `agent`, `sites`, `recon`, `tools`, `session`, `Tab`, `nodeRepl`. So `await browser.tabs.new(...)` works directly; `const browser = await agent.browsers.getDefault()` is the same object if you prefer to be explicit.
@@ -18,6 +18,8 @@ const trial = await tools.try(draft.draftId, {}, { path: 'value.0' });
 if (trial.verification.passed) await tools.activate(draft.draftId);
 await tab.release();                            // leave the page open; tab.close() would close it
 ```
+
+For browser-tab management, keep the list short and batch explicit ids in one call. `browser.user.openTabs({query,limit})` finds user tabs; `browser.user.claimTab({active:true})` claims the foreground tab; `browser.user.closeTabs([tabId1,tabId2])` closes user tabs without claiming them and returns `closed` and `failed` ids. `tab_close {tabIds:[...]}` exposes the same batch path as a typed tool.
 
 Built-in site commands use the connected browser session:
 

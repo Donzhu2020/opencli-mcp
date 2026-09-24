@@ -104,6 +104,36 @@ describe('browser tab ownership', () => {
     expect(tabs.create).not.toHaveBeenCalled();
   });
 
+  it('claims the foreground tab directly and keeps url/title as guards', async () => {
+    const tabs = chromeMock();
+    const active = { id: 7, url: 'https://example.com/active', title: 'Active', windowId: 1, active: true };
+    globalThis.chrome.windows.getLastFocused = vi.fn(async () => ({ id: 1, type: 'normal', tabs: [active] }));
+    tabs.get.mockResolvedValue(active);
+    globalThis.chrome.debugger.getTargets.mockResolvedValue([{ id: 'page-7', type: 'page', tabId: 7 }]);
+    const manager = new SessionManager(() => {});
+    await manager.ready();
+    const session = manager.get('foreground');
+    await expect(manager.claimUserTab(session, { active: true, url: 'https://other.test/' })).rejects.toMatchObject({ code: 'claim_identity_mismatch' });
+    expect(session.leases.size).toBe(0);
+    const claimed = await manager.claimUserTab(session, { active: true, url: 'https://example.com/' });
+    expect(claimed).toMatchObject({ tabId: 7, page: 'page-7' });
+    expect(session.leases.get(7)?.origin).toBe('user');
+    expect(tabs.query).not.toHaveBeenCalled();
+  });
+
+  it('closes explicit user ids in one operation and reports every unavailable tab', async () => {
+    const tabs = chromeMock();
+    tabs.query.mockResolvedValue([...([1, 2, 3, 4].map((id) => ({ id, url: `https://example.com/${id}`, windowId: 1 }))), { id: 5, url: 'about:blank', windowId: 1 }]);
+    tabs.remove.mockImplementation(async (id) => { if (id === 4) throw new Error('cannot remove'); });
+    const manager = new SessionManager(() => {});
+    await manager.ready();
+    manager.get('mine').leases.set(1, { tabId: 1, origin: 'user', mark: null, claimedAt: Date.now(), state: 'active' });
+    manager.get('other').leases.set(3, { tabId: 3, origin: 'user', mark: null, claimedAt: Date.now(), state: 'active' });
+    const outcome = await manager.closeUserTabs([1, 2, 2, 3, 4, 5, 99]);
+    expect(outcome).toMatchObject({ complete: false, closed: [2, 5], failed: [{ tabId: 1 }, { tabId: 3 }, { tabId: 4 }, { tabId: 99 }] });
+    expect(tabs.remove.mock.calls.map(([id]) => id)).toEqual([2, 4, 5]);
+  });
+
   it('releases a claimed user tab without closing it and closes only on explicit close', async () => {
     const tabs = chromeMock();
     const manager = new SessionManager(() => {});

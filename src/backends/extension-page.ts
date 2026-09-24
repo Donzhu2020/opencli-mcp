@@ -3,7 +3,7 @@ import type { ExtensionBridge } from '../host/bridge.js';
 import { BrowserCommandError } from '../host/bridge.js';
 import { wrapForEval, waitForDomStableJs, networkRequestsJs } from './browser-helpers.js';
 import type { RuntimePage } from './page-types.js';
-import type { Command, ActSpec, ActResult, DialogInfo, ConsoleEntry } from '../protocol.js';
+import type { Command, ActSpec, ActResult, DialogInfo, ConsoleEntry, CloseUserTabsResult } from '../protocol.js';
 import { pageCallJs, ActError } from '../shared/engine.js';
 import type { Expectation, CheckResult } from '../shared/page-contract.js';
 
@@ -20,7 +20,8 @@ export interface UserTabInfo { tabId: number; title?: string; url?: string; wind
 export interface ExtensionPageExtras {
   nameSession(name: string): Promise<void>;
   userTabs(options?: { query?: string; limit?: number }): Promise<UserTabInfo[]>;
-  claim(tab: { tabId?: number; title?: string; url?: string }): Promise<{ page: string; url?: string; title?: string }>;
+  claim(tab: { tabId?: number; active?: boolean; title?: string; url?: string }): Promise<{ page: string; tabId: number; url?: string; title?: string }>;
+  closeUserTabs(tabIds: number[]): Promise<CloseUserTabsResult>;
   mark(page: string, mark: 'deliverable' | 'handoff' | null): Promise<void>;
   finalize(keep: Array<{ page: string; status: 'deliverable' | 'handoff' }>): Promise<{ closed: string[]; kept: string[]; failed: Array<{ page: string; reason: string }> }>;
   cursor(x: number, y: number, opts?: { waitForArrival?: boolean }): Promise<void>;
@@ -192,11 +193,22 @@ class ExtensionPage implements ExtensionRuntimePage {
   // ── opencli-mcp extras ──
   async nameSession(name: string): Promise<void> { await this.bridge.send('session-name', { ...this.sessionOpts(), name }); }
   async userTabs(options: { query?: string; limit?: number } = {}): Promise<UserTabInfo[]> { const r = await this.bridge.send('user-tabs', { ...this.sessionOpts(), ...options }); return Array.isArray(r.data) ? r.data as UserTabInfo[] : []; }
-  async claim(tab: { tabId?: number; title?: string; url?: string }): Promise<{ page: string; url?: string; title?: string }> {
+  async claim(tab: { tabId?: number; active?: boolean; title?: string; url?: string }): Promise<{ page: string; tabId: number; url?: string; title?: string }> {
     const r = await this.bridge.send('claim', { ...this.sessionOpts(), claim: tab });
-    if (r.page && !this.bound) this._page = r.page;
-    const d = (r.data ?? {}) as { url?: string; title?: string };
-    return { page: r.page ?? '', url: d.url, title: d.title };
+    const d = (r.data ?? {}) as { tabId?: number; url?: string; title?: string };
+    if (!r.page || !Number.isSafeInteger(d.tabId) || d.tabId! <= 0) throw new BrowserCommandError('claim returned no tab identity', 'invalid_response');
+    if (!this.bound) this._page = r.page;
+    return { page: r.page, tabId: d.tabId!, url: d.url, title: d.title };
+  }
+  async closeUserTabs(tabIds: number[]): Promise<CloseUserTabsResult> {
+    const r = await this.bridge.send('close-user-tabs', { ...this.sessionOpts(), tabIds });
+    const result = r.data as CloseUserTabsResult | undefined;
+    if (!result || typeof result.complete !== 'boolean' || !Array.isArray(result.closed) || !Array.isArray(result.failed)
+      || result.closed.some((id) => !Number.isSafeInteger(id))
+      || result.failed.some((failure) => !Number.isSafeInteger(failure?.tabId) || typeof failure.reason !== 'string')) {
+      throw new BrowserCommandError('close-user-tabs returned no valid outcome', 'invalid_response');
+    }
+    return result;
   }
   async mark(page: string, mark: 'deliverable' | 'handoff' | null): Promise<void> { await this.bridge.send('mark', { ...this.sessionOpts(), page, mark }); }
   async finalize(keep: Array<{ page: string; status: 'deliverable' | 'handoff' }>): Promise<{ closed: string[]; kept: string[]; failed: Array<{ page: string; reason: string }> }> {

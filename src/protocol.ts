@@ -17,7 +17,7 @@ export type Action =
   | 'network-capture-start' | 'network-capture-read'
   | 'wait-download' | 'cdp' | 'frames'
   // session & tab-lifecycle (Codex-style: name, claim, finalize)
-  | 'session-name' | 'session-finalize' | 'user-tabs' | 'claim' | 'mark'
+  | 'session-name' | 'session-finalize' | 'user-tabs' | 'claim' | 'close-user-tabs' | 'mark'
   // native JavaScript dialogs (alert/confirm/prompt/beforeunload) block the page; the agent sees and answers them explicitly
   | 'dialog'
   // reload/back/forward driven by the browser (evaluating location.reload() never returns: the context dies mid-call)
@@ -67,8 +67,10 @@ export interface Command {
   deadlineAt?: number;
   /** session-name */
   name?: string;
-  /** claim: a user tab by id (from user-tabs), or by url/title when the id is omitted; url/title given with an id are guards */
-  claim?: { tabId?: number; title?: string; url?: string };
+  /** claim: active foreground tab, explicit tabId, or a unique url/title match; combined fields guard the identity */
+  claim?: { tabId?: number; active?: boolean; title?: string; url?: string };
+  /** close-user-tabs: numeric Chrome ids, without adopting the tabs into the session. */
+  tabIds?: number[];
   /** mark / finalize */
   mark?: 'deliverable' | 'handoff' | null;
   keep?: Array<{ page: string; status: 'deliverable' | 'handoff' }>;
@@ -136,6 +138,12 @@ export interface ActResult {
   /** options actually selected; upload count */
   selected?: string[];
   files?: number;
+}
+
+export interface CloseUserTabsResult {
+  complete: boolean;
+  closed: number[];
+  failed: Array<{ tabId: number; reason: string }>;
 }
 
 export interface Result {

@@ -3,6 +3,7 @@
  * session naming, capabilities (cdp, viewport, visibility, webmcp) and the model-facing documentation.
  */
 import type { RuntimePage } from '../backends/page-types.js';
+import type { CloseUserTabsResult } from '../protocol.js';
 import type { ExtensionRuntimePage, UserTabInfo } from '../backends/extension-page.js';
 import { ActionError } from './errors.js';
 import { buildInstructions, readDocForContext, type DocContext } from '../docs/manifest.js';
@@ -54,13 +55,18 @@ export class Browser {
 
   readonly user = {
     openTabs: async (options: { query?: string; limit?: number } = {}): Promise<UserTabInfo[]> => this.ext(await this.page()).userTabs(options),
-    /** Claim a user tab by id, or by url/title (unique match) when the id is omitted; url/title with an id act as guards. */
-    claimTab: async (tab: { tabId?: number; title?: string; url?: string }): Promise<Tab> => {
+    /** Claim the foreground tab with active:true, or a tab by id/unique url/title match. Returns a Tab with its numeric tabId. */
+    claimTab: async (tab: { tabId?: number; active?: boolean; title?: string; url?: string }): Promise<Tab> => {
       const page = this.ext(await this.page());
       const r = await page.claim(tab);
       this.ctx.state.finalized = false;
       this.ctx.state.selected = r.page;
-      return new Tab(r.page, this.ctx, await this.ctx.rt.pageFor(this.ctx.sessionId, r.page));
+      return new Tab(r.page, this.ctx, await this.ctx.rt.pageFor(this.ctx.sessionId, r.page), r.tabId);
+    },
+    /** Close user tabs by Chrome id without claiming or loading their pages. */
+    closeTabs: async (tabIds: number[]): Promise<CloseUserTabsResult> => {
+      if (!Array.isArray(tabIds) || tabIds.length === 0 || tabIds.some((id) => !Number.isSafeInteger(id) || id <= 0)) throw new ActionError('invalid_args', 'closeTabs needs a non-empty array of positive tabIds');
+      return this.ext(await this.page()).closeUserTabs(tabIds);
     },
   };
 

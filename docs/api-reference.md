@@ -32,7 +32,8 @@ class Browser {
   };
   user: {
     openTabs(options?: { query?: string; limit?: number; }): Promise<Array<UserTabInfo>>;
-    claimTab(tab: { tabId?: number; title?: string; url?: string; }): Promise<Tab>; // Claim a user tab by id, or by url/title (unique match) when the id is omitted; url/title with an id act as guards.
+    claimTab(tab: { tabId?: number; active?: boolean; title?: string; url?: string; }): Promise<Tab>; // Claim the foreground tab with active:true, or a tab by id/unique url/title match. Returns a Tab with its numeric tabId.
+    closeTabs(tabIds: Array<number>): Promise<CloseUserTabsResult>; // Close user tabs by Chrome id without claiming or loading their pages.
   };
   nameSession(name: string): Promise<void>;
   capabilities: {
@@ -43,6 +44,7 @@ class Browser {
 }
 
 class Tab {
+  tabId?: number; // Numeric Chrome tab id when claimed from a user tab; `id` is the session page handle.
   id: string;
   goto(url: string, opts?: { waitUntil?: "load" | "none"; settleMs?: number; }): Promise<{ url: string | null; title: string | null; }>;
   url(): Promise<string | null>;
@@ -129,4 +131,12 @@ interface CheckResult { ok: boolean; failed: string[]; url: string; title: strin
 interface DialogInfo { type: 'alert' | 'confirm' | 'prompt' | 'beforeunload'; message: string; defaultPrompt?: string; url?: string; openedAt: number }
 
 interface ConsoleEntry { seq: number; level: 'debug' | 'info' | 'log' | 'warn' | 'error'; message: string; timestamp: string; url?: string; line?: number }
+
+interface UserTabInfo { tabId: number; title?: string; url?: string; windowId: number; active: boolean; groupId?: number; lastAccessed?: number }
+
+interface CloseUserTabsResult {
+  complete: boolean;
+  closed: number[];
+  failed: Array<{ tabId: number; reason: string }>;
+}
 ```

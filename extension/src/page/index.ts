@@ -2,7 +2,7 @@
  * Page-side module of the interaction engine. Bundled by esbuild and installed in the extension's isolated world of
  * every frame, next to Playwright's InjectedScript (globalThis.__opencliInjected). Exposes plain functions on
  * globalThis.__opencliPage; the host calls them with JSON arguments. Nothing here is assembled from strings, so this
- * file is type-checked and unit-tested like any other module (tests run it under jsdom with a stub engine).
+ * file is type-checked with the extension and exercised by the browser smoke test.
  */
 import {
   ACT_MARK, FRAME_MARK, ENGINE_GLOBAL, PAGE_GLOBAL,
@@ -299,7 +299,7 @@ function asPort(el: Element, heightFallback: number): ScrollPort {
     scrollTo(x: number, y: number) {
       const left = Math.max(0, x);
       const top = Math.max(0, y);
-      try { el.scrollTo({ left, top, behavior: 'instant' }); } catch { /* jsdom */ }
+      try { el.scrollTo({ left, top, behavior: 'instant' }); } catch { /* unsupported scrollTo */ }
       el.scrollLeft = left;
       el.scrollTop = top;
       el.dispatchEvent(new Event('scroll'));

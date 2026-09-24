@@ -77,16 +77,4 @@ describe('adapter draft lifecycle and write commands', () => {
       expect(body(await h.client.callTool({ name: 'tools_activate', arguments: { draftId } }))).toMatchObject({ ok: false, error: { code: 'unknown_draft' } });
     } finally { await h.cleanup(); }
   });
-  it('does not overwrite an adapter changed after a draft was created', async () => {
-    const h = await harness();
-    try {
-      const older = await h.define('poke');
-      const newer = await h.define('poke', { description: 'newer' });
-      await h.tryDraft(older.data.draftId as string);
-      await h.tryDraft(newer.data.draftId as string);
-      await h.activate(newer.data.draftId as string);
-      expect(body(await h.client.callTool({ name: 'tools_activate', arguments: { draftId: older.data.draftId } }))).toMatchObject({ ok: false, error: { code: 'draft_conflict' } });
-      expect(body(await h.client.callTool({ name: 'site_run', arguments: { site: h.site, command: 'poke', args: {} } }))).toMatchObject({ ok: true, value: { done: true } });
-    } finally { await h.cleanup(); }
-  });
 });

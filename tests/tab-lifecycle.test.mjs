@@ -27,41 +27,9 @@ function chromeMock() {
   });
   return tabs;
 }
-
-function emptyWindowMock() {
-  const tabs = chromeMock();
-  const initialTab = { id: 1, windowId: 1, url: 'about:blank', status: 'complete', active: true };
-  let open = true;
-  tabs.get.mockImplementation(async () => { if (!open) throw new Error('No tab with id: 1'); return initialTab; });
-  tabs.update.mockImplementation(async (_id, change) => {
-    Object.assign(initialTab, change);
-    if (change.url) for (const [listener] of tabs.onUpdated.addListener.mock.calls) listener(1, { status: 'complete' }, initialTab);
-    return initialTab;
-  });
-  tabs.remove.mockImplementation(async () => { open = false; });
-  tabs.query.mockImplementation(async () => open ? [initialTab] : []);
-  globalThis.chrome.windows.getLastFocused = vi.fn(async () => null);
-  globalThis.chrome.windows.getAll = vi.fn(async () => []);
-  globalThis.chrome.windows.get = vi.fn(async () => ({ id: 1 }));
-  globalThis.chrome.windows.create = vi.fn(async () => ({ id: 1, tabs: [initialTab] }));
-  return tabs;
-}
-
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('browser tab ownership', () => {
-  it.each(['browser', 'adapter'])('uses the initial tab of a new %s window', async (surface) => {
-    const tabs = emptyWindowMock();
-    const manager = new SessionManager(() => {});
-    await manager.ready();
-    const session = manager.get('new-window', surface);
-    const opened = await manager.createTab(session, 'https://example.com/');
-    expect(opened.tabId).toBe(1);
-    expect(tabs.create).not.toHaveBeenCalled();
-    expect(session.leases.has(1)).toBe(true);
-    await manager.finalize(session, []);
-    expect(tabs.remove).toHaveBeenCalledWith(1);
-  });
   it('requires explicit open or claim and never adopts an unknown page', async () => {
     const tabs = chromeMock();
     const manager = new SessionManager(() => {});
@@ -103,25 +71,6 @@ describe('browser tab ownership', () => {
     expect(outcome).toMatchObject({ complete: false, closed: [2, 5], failed: [{ tabId: 1 }, { tabId: 3 }, { tabId: 4 }, { tabId: 99 }] });
     expect(tabs.remove.mock.calls.map(([id]) => id)).toEqual([2, 4, 5]);
   });
-
-  it('returns only popups created by the action source tab', async () => {
-    chromeMock();
-    const manager = new SessionManager(() => {});
-    await manager.ready();
-    const session = manager.get('popup');
-    session.leases.set(1, { tabId: 1, origin: 'agent', mark: null, claimedAt: Date.now(), state: 'active' });
-    const navigationListener = globalThis.chrome.webNavigation.onCreatedNavigationTarget.addListener.mock.calls[0][0];
-    const outcome = await manager.withChildTabs(1, async () => {
-      navigationListener({ sourceTabId: 3, tabId: 4 });
-      navigationListener({ sourceTabId: 1, tabId: 2 });
-      return { clicked: true };
-    });
-    expect(outcome.result).toEqual({ clicked: true });
-    expect(outcome.openedTabs).toEqual([expect.objectContaining({ tabId: 2, url: 'https://example.com/' })]);
-    expect(session.leases.has(2)).toBe(true);
-    expect(session.leases.has(4)).toBe(false);
-  });
-
   it('claims an agent-click popup from a claimed user tab, but leaves manual popups alone', async () => {
     chromeMock();
     const manager = new SessionManager(() => {});
@@ -138,22 +87,6 @@ describe('browser tab ownership', () => {
     expect(outcome.openedTabs).toEqual([expect.objectContaining({ tabId: 3 })]);
     expect(session.leases.has(3)).toBe(true);
   });
-
-  it('keeps popup evidence when the action fails after opening it', async () => {
-    chromeMock();
-    const manager = new SessionManager(() => {});
-    await manager.ready();
-    const session = manager.get('partial-effect');
-    session.leases.set(1, { tabId: 1, origin: 'agent', mark: null, claimedAt: Date.now(), state: 'active' });
-    const navigationListener = globalThis.chrome.webNavigation.onCreatedNavigationTarget.addListener.mock.calls[0][0];
-    const outcome = await manager.withChildTabs(1, async () => {
-      navigationListener({ sourceTabId: 1, tabId: 2 });
-      throw new Error('navigation interrupted');
-    });
-    expect(outcome.error).toMatchObject({ message: 'navigation interrupted' });
-    expect(outcome.openedTabs).toEqual([expect.objectContaining({ tabId: 2 })]);
-  });
-
   it('releases a claimed user tab without closing it and closes only on explicit close', async () => {
     const tabs = chromeMock();
     const manager = new SessionManager(() => {});

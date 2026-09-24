@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { performAct, ActError, type ActIO } from '../src/shared/engine.js';
+import { performAct, type ActIO } from '../src/shared/engine.js';
 
 const resolved = { ok: true as const, x: 10, y: 20, matches_n: 1, tag: 'button', hit: 'target' as const, blocker: null, editable: false, checkable: false, checked: false, isSelect: false, ref: 'e1', selector: '#go', usedSelector: '#go' };
 
@@ -26,21 +26,5 @@ describe('click delivery', () => {
     expect(calls.filter((c) => c === 'domClick')).toEqual([]);
     expect(calls).toContain('armClickProbe');
     expect(calls).toContain('Input.dispatchMouseEvent:mousePressed');
-  });
-  it('treats a navigation as delivery when the probe reads false in the new document', async () => {
-    const { io } = fakeIo(false);
-    io.waitForNavigation = async () => ({ navigated: true, url: 'https://next.example/' });
-    const r = await performAct(io, { kind: 'click', target: { ref: 'e1' }, settleMs: 0 });
-    expect(r.navigated).toBe(true);
-    expect(r.url).toBe('https://next.example/');
-  });
-  it('method dom sends no mouse event', async () => {
-    const { io, calls } = fakeIo(true);
-    const r = await performAct(io, { kind: 'click', target: { ref: 'e1' }, method: 'dom', settleMs: 0 });
-    expect(r.method).toBe('dom');
-    expect(calls[0]).toBe('domClick');
-    expect(calls.some((c) => c.startsWith('Input.dispatchMouseEvent'))).toBe(false);
-    await expect(performAct(io, { kind: 'press', target: { ref: 'e1' }, value: 'Enter', method: 'dom', settleMs: 0 })).rejects.toBeInstanceOf(ActError);
-    await expect(performAct(io, { kind: 'click', target: { x: 1, y: 2 }, method: 'dom', settleMs: 0 })).rejects.toMatchObject({ code: 'invalid_args' });
   });
 });

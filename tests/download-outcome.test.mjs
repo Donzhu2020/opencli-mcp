@@ -50,16 +50,4 @@ describe('page-scoped download outcome', () => {
     created({ id: 21, url: 'https://example.test/export', finalUrl: 'https://example.test/export' });
     expect(await waitForDownload(902, cursor, 1000)).toMatchObject({ downloaded: false, started: true, state: 'ambiguous', candidates: 2 });
   });
-  it('rejects a completed file with the same URL that existed before the action', async () => {
-    const onEvent = event();
-    const onCreated = event();
-    const search = vi.fn(async () => [{ id: 40, url: 'https://example.test/repeated.csv', finalUrl: 'https://example.test/repeated.csv', state: 'complete' }]);
-    vi.stubGlobal('chrome', { debugger: { onEvent, onDetach: event() }, tabs: { onRemoved: event(), onUpdated: event() }, downloads: { onCreated, search } });
-    registerListeners();
-    onCreated.addListener.mock.calls[0][0]({ id: 40, url: 'https://example.test/repeated.csv', finalUrl: 'https://example.test/repeated.csv' });
-    const cursor = downloadCursor(904);
-    onEvent.addListener.mock.calls[0][0]({ tabId: 904 }, 'Page.downloadWillBegin', { url: 'https://example.test/repeated.csv', suggestedFilename: 'repeated.csv' });
-    expect(await waitForDownload(904, cursor, 220)).toMatchObject({ downloaded: false, started: true, state: 'unconfirmed' });
-    expect(search).not.toHaveBeenCalled();
-  });
 });

@@ -13,7 +13,7 @@ export async function resolveFriendId(tab, value) {
     if (id && /^\d{10,20}$/.test(id)) return id;
     handle = url.pathname.replace(/^\/+|\/+$/g, '');
   } catch (cause) {
-    if (cause?.code) throw cause;
+    if (cause?.code && cause.code !== 'ERR_INVALID_URL') throw cause;
   }
   if (!/^[A-Za-z0-9._-]{3,100}$/.test(handle)) throw errors.argument('user must be a Facebook ID, username, or profile URL');
   const { rows } = parseProfileSearch(await searchProfilesApi(tab, handle, 'people', 10));

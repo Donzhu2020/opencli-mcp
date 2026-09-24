@@ -21,16 +21,21 @@ export function companySlug(value) {
 
 export function mapCompany(company, slug) {
   if (!company?.entityUrn || !compact(company.name)) throw errors.upstream('LinkedIn company API returned a malformed company');
-  const address = company.headquarter?.address || {};
+  const address = company.headquarter?.address || company.headquarter || {};
   const headquarters = [address.city, address.geographicArea, address.country].map(compact).filter(Boolean).join(', ');
-  const range = company.employeeCountRange || {};
+  const range = company.staffCountRange || company.employeeCountRange || {};
   const size = range.start == null ? null : range.end == null ? `${range.start}+` : `${range.start}-${range.end}`;
   return {
-    name: compact(company.name), industry: null, industry_urns: company.industryUrns || [],
-    size, employee_count: Number.isInteger(company.employeeCount) ? company.employeeCount : null,
+    name: compact(company.name),
+    industry: (company.companyIndustries || []).map((item) => compact(item.localizedName)).filter(Boolean).join('; ') || null,
+    industry_urns: company.industryUrns || (company.companyIndustries || []).map((item) => item.entityUrn).filter(Boolean),
+    size, employee_count: Number.isInteger(company.staffCount) ? company.staffCount
+      : Number.isInteger(company.employeeCount) ? company.employeeCount : null,
     headquarters: headquarters || null, founded: company.foundedOn?.year || null,
-    website: compact(company.websiteUrl) || null, specialties: Array.isArray(company.specialities) ? company.specialities : [],
-    followers: null, about: compact(company.description) || null,
+    website: compact(company.companyPageUrl || company.websiteUrl) || null,
+    specialties: Array.isArray(company.specialities) ? company.specialities : [],
+    followers: Number.isInteger(company.followingInfo?.followerCount) ? company.followingInfo.followerCount : null,
+    about: compact(company.description) || null,
     url: `https://www.linkedin.com/company/${encodeURIComponent(company.universalName || slug)}/about/`,
   };
 }
@@ -43,7 +48,7 @@ export default defineAdapter({
   async run({ tab, args }) {
     const slug = companySlug(args.company);
     await ensureLinkedIn(tab);
-    const path = `/voyager/api/voyagerOrganizationDashCompanies?q=universalName&universalName=${encodeURIComponent(slug)}`;
+    const path = `/voyager/api/organization/companies?decorationId=com.linkedin.voyager.deco.organization.web.WebFullCompanyMain-12&q=universalName&universalName=${encodeURIComponent(slug)}`;
     const elements = requireElements(await linkedinApi(tab, path), 'LinkedIn company');
     if (!elements.length) throw errors.empty(`No LinkedIn company found for ${slug}`);
     return { rows: [mapCompany(elements[0], slug)] };

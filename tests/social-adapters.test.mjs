@@ -14,8 +14,13 @@ import { jobId, mapJobDetail } from '../adapters/linkedin/job-detail.js';
 import { mapConversations } from '../adapters/linkedin/inbox.js';
 import { messagePayload, parseSalesRecipient, remainingCredits } from '../adapters/linkedin/salesnav-message.js';
 import { mapThreadMessages, threadPath } from '../adapters/linkedin/salesnav-thread.js';
+import { activityDate, profileIdentity } from '../adapters/linkedin/_profile.js';
 import { mapConnection } from '../adapters/linkedin/connections.js';
 import { inboxPath } from '../adapters/linkedin/salesnav-inbox.js';
+import { mapProfileAnalytics } from '../adapters/linkedin/profile-analytics.js';
+import { mapServices, servicesUrlFromCard } from '../adapters/linkedin/services-read.js';
+import { inboxCursor, mapMarketplaceThreads } from '../adapters/facebook/marketplace-inbox.js';
+import { listingsCursor, mapListingEdges } from '../adapters/facebook/marketplace-listings.js';
 import discordSend from '../adapters/discord/send.js';
 import discordDelete from '../adapters/discord/delete.js';
 import { discordRoute, messageRow } from '../adapters/discord/_shared.js';
@@ -211,6 +216,34 @@ describe('Facebook groups GraphQL adapter', () => {
 });
 
 describe('LinkedIn Voyager adapters', () => {
+  it('maps owner analytics from the two live Voyager response types', () => {
+    const summary = { numViews: 41, timeFrame: 'LAST_90_DAYS', numViewsChangeInPercentage: 25 };
+    const views = { elements: [{ value: { 'com.linkedin.voyager.identity.me.wvmpOverview.WvmpViewersCard': {
+      insightCards: [{ value: { 'com.linkedin.voyager.identity.me.wvmpOverview.WvmpSummaryInsightCard': summary } }],
+    } } }] };
+    expect(mapProfileAnalytics(views, { metadata: { numAppearances: 59 } }, { publicIdentifier: 'example' }))
+      .toMatchObject({ profile_views: 41, search_appearances: 59, profile_url: 'https://www.linkedin.com/in/example/' });
+    expect(() => mapProfileAnalytics({}, {}, { publicIdentifier: 'example' })).toThrow(/shape/);
+  });
+  it('discovers and maps a Services page from Voyager JSON', () => {
+    const url = 'https://www.linkedin.com/services/page/abc123/';
+    expect(servicesUrlFromCard({ topComponents: [{ footerAction: { actionUnion: { navigationAction: { actionTarget: url } } } }] })).toBe(url);
+    const sections = [
+      { description: { detailsBody: { text: 'Mentoring' }, serviceLocation: { subtitle: { text: 'Remote' }, accessibilityText: 'Anywhere' }, servicePrice: { subtitle: { text: 'Contact for pricing' } } } },
+      { services: { providedServicesResolutionResults: [{ name: 'Training' }] } },
+    ];
+    const response = { data: { marketplacesDashServicesPageViewByVanityName: { elements: [
+      { businessName: { text: 'Example Services' }, detailViewSectionsResolutionResults: sections,
+        servicesPageMediaSections: { elements: [{ title: { text: 'Portfolio' }, description: { text: 'Demo' } }] } },
+    ] } } };
+    expect(mapServices(response, 'abc123')).toMatchObject({ overview: 'Mentoring', services_count: 1, media_count: 1, pricing: 'Contact for pricing' });
+    expect(() => mapServices({ data: {} }, 'abc123')).toThrow(/shape/);
+  });
+  it('accepts only LinkedIn profile URLs and decodes activity time', () => {
+    expect(profileIdentity('https://www.linkedin.com/in/jakevin/')).toBe('jakevin');
+    expect(() => profileIdentity('https://www.linkedin.com.evil.example/in/jakevin/')).toThrow();
+    expect(activityDate('urn:li:ugcPost:7434151475959775232')).toBe('2026-03-02T08:23:51.724Z');
+  });
   it('builds the Sales Navigator API payload for a resolved lead', () => {
     const recipient = parseSalesRecipient('https://www.linkedin.com/sales/lead/P1,NAME_SEARCH,T1');
     expect(recipient.urn).toBe('urn:li:fs_salesProfile:(P1,NAME_SEARCH,T1)');
@@ -268,6 +301,22 @@ describe('LinkedIn Voyager adapters', () => {
   it('encodes Sales Navigator decoration parentheses', () => {
     expect(inboxPath('', 2)).toContain('decoration=%28id%2C');
     expect(inboxPath('next', 2)).toContain('&pageStartsAt=next');
+  });
+});
+
+describe('Facebook Marketplace GraphQL response mapping', () => {
+  it('maps seller inbox and listings without DOM data', () => {
+    expect(mapMarketplaceThreads({ data: { viewer: { marketplaceInboxSellerMessageThreads: { edges: [{ node: {
+      id: 't1', buyer: { name: 'Alice' }, listing: { title: 'Desk' }, snippet: 'Available?', unread_count: 1,
+    } }] } } } }).rows[0]).toMatchObject({ id: 't1', buyer: 'Alice', listing: 'Desk', unread: true });
+    expect(mapMarketplaceThreads({ data: { viewer: { marketplaceInboxBuyerMessageThreads: { edges: [] } } } }, 'buyer').rows).toEqual([]);
+    expect(mapListingEdges({ data: { viewer: { marketplace_listing_sets: { edges: [{ node: { marketplace_listing: {
+      id: 'l1', marketplace_listing_title: 'Desk', listing_price: { formatted_amount: '$20' },
+    } } }] } } } }, 'marketplace_listing_sets', 'Active').rows[0])
+      .toMatchObject({ id: 'l1', title: 'Desk', price: '$20', status: 'Active' });
+    expect(() => mapMarketplaceThreads({ data: {} })).toThrow(/shape/);
+    expect(() => inboxCursor('{"buyer":"x"}')).toThrow(/cursor/);
+    expect(() => listingsCursor('bad')).toThrow(/cursor/);
   });
 });
 

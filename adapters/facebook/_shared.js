@@ -4,6 +4,7 @@ const ORIGIN = 'https://www.facebook.com';
 const SEARCH_OPERATION = 'SearchCometResultsPaginatedResultsQuery';
 
 export function safeFacebookUrl(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
   try {
     const url = new URL(value, ORIGIN);
     if (url.protocol !== 'https:' || !['facebook.com', 'www.facebook.com'].includes(url.hostname)) return null;

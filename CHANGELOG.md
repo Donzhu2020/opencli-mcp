@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.0.22 — 2026-09-25
+
+- feat: include LinkedIn connection count in profile analytics
+- feat: complete API-backed social adapters
+- feat: add more LinkedIn API adapters and recover stale adapter tabs
+- feat: expand API-backed Facebook and LinkedIn adapters
+- feat: add API-backed Gmail Facebook LinkedIn and Discord adapters
+- test: keep only critical regression checks
+
 ## 0.0.21 — 2026-09-25
 
 - test: use current protocol in setup smoke

@@ -110,10 +110,7 @@ async function gmailRequestTemplate(tab, query, account) {
   if (!normalized) throw errors.argument('Gmail search query cannot be empty');
   const path = `/sync/u/${account}/i/bv`;
   const inbox = `${ORIGIN}/mail/u/${account}/#inbox`;
-  const current = await tab.url().catch(() => null);
-  if (!current?.startsWith(`${ORIGIN}/mail/u/${account}/`) || current.includes(`#search/${encodeURIComponent(normalized)}`)) {
-    await tab.goto(inbox, { waitUntil: 'load' });
-  }
+  await tab.goto(inbox, { waitUntil: 'load' });
   await tab.network.start(path);
   let cursor = (await tab.network.read({ pattern: path, limit: 1000 })).cursor;
   await tab.goto(`${ORIGIN}/mail/u/${account}/#search/${encodeURIComponent(normalized)}`, { waitUntil: 'load' });

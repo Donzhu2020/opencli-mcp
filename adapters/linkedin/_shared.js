@@ -12,6 +12,7 @@ export function integer(value, label, fallback, min, max) {
 }
 
 export async function ensureLinkedIn(tab) {
+  await tab.url().catch(() => null);
   await tab.goto(`${ORIGIN}/feed/`, { waitUntil: 'load' });
 }
 
@@ -25,18 +26,23 @@ export async function csrf(tab) {
 export async function linkedinApi(tab, path, { headers = {}, ...opts } = {}) {
   if (!path.startsWith('/') || path.startsWith('//')) throw errors.argument('LinkedIn API path must be relative to linkedin.com');
   const token = await csrf(tab);
-  try {
-    return await tab.fetchJson(`${ORIGIN}${path}`, {
-      ...opts,
-      headers: {
-        'csrf-token': token,
-        'x-restli-protocol-version': '2.0.0',
-        accept: 'application/json',
-        ...headers,
-      },
-    });
+  const request = {
+    ...opts,
+    headers: {
+      'csrf-token': token,
+      'x-restli-protocol-version': '2.0.0',
+      accept: 'application/json',
+      ...headers,
+    },
+  };
+  for (let attempt = 0; attempt < 2; attempt++) try {
+    return await tab.fetchJson(`${ORIGIN}${path}`, request);
   } catch (cause) {
     const message = String(cause?.message ?? cause);
+    if (attempt === 0 && /stale page identity/.test(message) && (!opts.method || opts.method === 'GET')) {
+      await tab.goto(`${ORIGIN}/feed/`, { waitUntil: 'load' });
+      continue;
+    }
     if (/HTTP (401|403)\b/.test(message)) throw errors.auth('LinkedIn API rejected this session', 'Sign in to LinkedIn and check that this account has access to the feature.');
     throw errors.upstream(`LinkedIn API request failed: ${message}`);
   }

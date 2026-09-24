@@ -12,6 +12,8 @@ import { parsePostRows, parseProfileSearch } from '../adapters/facebook/_shared.
 import { jobCardsPath, mapJobCard } from '../adapters/linkedin/jobs.js';
 import { jobId, mapJobDetail } from '../adapters/linkedin/job-detail.js';
 import { mapConversations } from '../adapters/linkedin/inbox.js';
+import { messagePayload, parseSalesRecipient, remainingCredits } from '../adapters/linkedin/salesnav-message.js';
+import { mapThreadMessages, threadPath } from '../adapters/linkedin/salesnav-thread.js';
 import { mapConnection } from '../adapters/linkedin/connections.js';
 import { inboxPath } from '../adapters/linkedin/salesnav-inbox.js';
 import discordSend from '../adapters/discord/send.js';
@@ -209,6 +211,30 @@ describe('Facebook groups GraphQL adapter', () => {
 });
 
 describe('LinkedIn Voyager adapters', () => {
+  it('builds the Sales Navigator API payload for a resolved lead', () => {
+    const recipient = parseSalesRecipient('https://www.linkedin.com/sales/lead/P1,NAME_SEARCH,T1');
+    expect(recipient.urn).toBe('urn:li:fs_salesProfile:(P1,NAME_SEARCH,T1)');
+    expect(messagePayload(recipient.urn, 'Hello', 'A short note', false, '0123456789abcdef')).toEqual({
+      createMessageRequest: { recipients: [recipient.urn], subject: 'Hello', body: 'A short note',
+        copyToCrm: false, trackingId: '0123456789abcdef' },
+    });
+    expect(remainingCredits({ elements: [{ type: 'LSS_INMAIL', value: 3 }] })).toBe(3);
+  });
+  it('maps Sales Navigator thread history in chronological order', () => {
+    expect(threadPath('2-ab/c', 40)).toContain('/salesApiMessagingThreads/2-ab%2Fc?');
+    const rows = mapThreadMessages({ id: '2-thread', totalMessageCount: 2,
+      participants: ['urn:li:fs_salesProfile:lead'], participantsResolutionResults: {
+        'urn:li:fs_salesProfile:lead': { fullName: 'Lead Name' },
+      },
+      messages: [
+        { id: 'new', author: 'urn:li:fs_salesProfile:lead', body: 'Second', deliveredAt: 2000 },
+        { id: 'old', author: 'urn:li:fs_salesProfile:lead', body: 'First', deliveredAt: 1000 },
+      ],
+    });
+    expect(rows.map((row) => row.message_id)).toEqual(['old', 'new']);
+    expect(rows[0].sender).toBe('Lead Name');
+    expect(rows[0].total_message_count).toBe(2);
+  });
   it('maps messenger conversations from the current category query response', () => {
     const response = { data: { messengerConversationsByCategoryQuery: {
       elements: [{ backendUrn: 'urn:li:messagingThread:thread-1',

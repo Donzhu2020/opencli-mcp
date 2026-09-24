@@ -79,10 +79,13 @@ class ExtensionPage implements ExtensionRuntimePage {
     try {
       return await this.bridge.send(action, { ...this.cmdOpts(), ...params });
     } catch (err) {
-      // an unbound (session-level) page may fall through to a fresh tab; a bound one reports its tab as gone
-      if (isStalePageIdentityError(err) && this._page !== undefined && action === 'navigate' && !this.bound) {
+      // An adapter page is session-scoped. Its Chrome target identity can change
+      // after navigation; retry against the session's current tab identity.
+      if (isStalePageIdentityError(err) && this._page !== undefined && !this.bound) {
         this._page = undefined;
-        return this.bridge.send(action, { ...this.cmdOpts(), ...params });
+        const result = await this.bridge.send(action, { ...this.cmdOpts(), ...params });
+        if (result.page) this._page = result.page;
+        return result;
       }
       throw err;
     }

@@ -1,7 +1,7 @@
 import { defineAdapter, errors } from 'opencli-mcp/adapter-sdk';
 import { compact, ensureLinkedIn, integer, linkedinApi, requireElements } from './_shared.js';
 
-const DECORATION = '(id,restrictions,archived,unreadMessageCount,nextPageStartsAt,totalMessageCount,messages*(id,type,contentFlag,deliveredAt,lastEditedAt,subject,body,footerText,blockCopy,attachments,author,systemMessageContent),participants*~fs_salesProfile(entityUrn,firstName,lastName,fullName,degree,profilePictureDisplayImage,objectUrn,inmailRestriction))';
+export const DECORATION = '(id,restrictions,archived,unreadMessageCount,nextPageStartsAt,totalMessageCount,messages*(id,type,contentFlag,deliveredAt,lastEditedAt,subject,body,footerText,blockCopy,attachments,author,systemMessageContent),participants*~fs_salesProfile(entityUrn,firstName,lastName,fullName,degree,profilePictureDisplayImage,objectUrn,inmailRestriction))';
 
 export function inboxPath(cursor = '', count = 20) {
   const decoration = encodeURIComponent(DECORATION).replace(/\(/g, '%28').replace(/\)/g, '%29');

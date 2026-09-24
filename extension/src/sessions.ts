@@ -26,6 +26,8 @@ export interface Session {
   lastActivity: number;
 }
 
+type ChildTab = { page?: string; tabId: number; url?: string; title?: string; pending?: true };
+
 type GroupColor = chrome.tabGroups.TabGroup['color'];
 type WindowChoice = { windowId: number; initialTab?: chrome.tabs.Tab };
 const GROUP_COLORS: GroupColor[] = ['blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan', 'orange'];
@@ -42,6 +44,7 @@ const RELEASED_KEY = 'opencli_mcp_released_v2';
 
 export class SessionManager {
   readonly sessions = new Map<string, Session>();
+  private readonly childObservers = new Map<number, Set<(child: Promise<ChildTab | null>) => void>>();
   /** Tabs finalize handed back to the user (kept, released, handoff). Commands to them are refused until a claim; a stale Tab handle cannot re-adopt one. */
   private readonly released = new Set<number>();
   private cursorSeq = 0;
@@ -85,7 +88,14 @@ export class SessionManager {
       void this.observedState(sender.tab.id).then((state) => respond({ state })); return true;
     });
     chrome.tabGroups.onRemoved.addListener((g) => { for (const s of this.sessions.values()) if (s.groupId === g.id) s.groupId = null; });
-    chrome.webNavigation.onCreatedNavigationTarget.addListener((d) => { void this.onChildTab(d.sourceTabId, d.tabId); });
+    chrome.webNavigation.onCreatedNavigationTarget.addListener((d) => {
+      const child = this.onChildTab(d.sourceTabId, d.tabId).catch((error) => {
+        console.warn(`[opencli-mcp] child tab ${d.tabId} could not be claimed: ${String(error)}`);
+        return null;
+      });
+      for (const observer of this.childObservers.get(d.sourceTabId) ?? []) observer(child);
+      void child;
+    });
     chrome.windows.onRemoved.addListener((windowId) => { if (this.adapterWindowId === windowId) this.adapterWindowId = null; for (const s of this.sessions.values()) if (s.windowId === windowId) { s.windowId = null; s.groupId = null; } });
     void this.restore();
   }
@@ -111,6 +121,24 @@ export class SessionManager {
     s.idleTimer = setTimeout(() => { void this.finalize(s, []).catch(() => {}); }, remaining);
   }
   ownerOf(tabId: number): Session | null { for (const s of this.sessions.values()) if (s.leases.has(tabId)) return s; return null; }
+
+  /** A child tab has an exact Chrome sourceTabId. Register before the action so even a fast popup is attributed. */
+  async withChildTabs<T>(sourceTabId: number, action: () => Promise<T>): Promise<{ result?: T; error?: unknown; openedTabs: ChildTab[] }> {
+    const children: Array<Promise<ChildTab | null>> = [];
+    const observe = (child: Promise<ChildTab | null>) => { children.push(child); };
+    let observers = this.childObservers.get(sourceTabId);
+    if (!observers) { observers = new Set(); this.childObservers.set(sourceTabId, observers); }
+    observers.add(observe);
+    try {
+      let result: T | undefined; let error: unknown;
+      try { result = await action(); } catch (caught) { error = caught; }
+      const openedTabs = (await Promise.all(children)).filter((child): child is ChildTab => child !== null);
+      return { result, error, openedTabs };
+    } finally {
+      observers.delete(observe);
+      if (observers.size === 0) this.childObservers.delete(sourceTabId);
+    }
+  }
 
   private async createWindow(state?: 'minimized'): Promise<WindowChoice> {
     const w = await chrome.windows.create({ focused: false, type: 'normal', url: 'about:blank', ...(state && { state }) });
@@ -422,18 +450,26 @@ export class SessionManager {
     const t = await chrome.tabs.get(tabId).catch(() => null);
     if (t?.mutedInfo?.muted && t.mutedInfo.reason === 'extension') await chrome.tabs.update(tabId, { muted: false }).catch(() => {});
   }
-  private async onChildTab(sourceTabId: number, childId: number): Promise<void> {
+  private async onChildTab(sourceTabId: number, childId: number): Promise<ChildTab | null> {
     const s = this.ownerOf(sourceTabId);
-    if (!s || s.leases.has(childId)) return;
-    if (s.leases.get(sourceTabId)?.origin !== 'agent') return; // a user clicking in their own claimed tab keeps their tabs
+    if (!s || s.leases.has(childId)) return null;
+    if (s.leases.get(sourceTabId)?.state !== 'active') return null;
+    // A claimed user tab keeps unrelated manual popups; a popup during an agent action belongs to that action.
+    if (s.leases.get(sourceTabId)?.origin === 'user' && !this.childObservers.has(sourceTabId)) return null;
     const tab = await chrome.tabs.get(childId).catch(() => null);
-    if (!tab) return;
+    if (!tab) return null;
     s.leases.set(childId, { tabId: childId, origin: 'agent', mark: null, url: tab.url, title: tab.title, claimedAt: Date.now(), state: 'active' });
     if (!s.visible) await chrome.tabs.update(childId, { muted: true, active: false }).catch(() => {});
     await this.ensureGroup(s, childId);
-    const page = await identity.resolveTargetId(childId).catch(() => String(childId));
+    let page: string | undefined;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      page = await identity.resolveTargetId(childId).catch(() => undefined);
+      if (page) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
     this.emit({ kind: 'tab_created', session: s.key, page, tabId: childId, url: tab.url, title: tab.title, origin: 'agent' });
     void this.persist();
+    return { ...(page && { page }), tabId: childId, url: tab.url, title: tab.title, ...(!page && { pending: true as const }) };
   }
 
   // ── human visibility: content script for cursor overlay ──

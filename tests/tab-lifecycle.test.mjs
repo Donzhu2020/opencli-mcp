@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SessionManager } from '../extension/src/sessions.js';
+import { evictTab } from '../extension/src/identity.js';
 
 vi.mock('../extension/src/cdp.js', () => ({ ensureAttached: vi.fn(async () => {}), detach: vi.fn(async () => {}) }));
 
@@ -18,7 +19,7 @@ function chromeMock() {
   };
   vi.stubGlobal('chrome', {
     tabs,
-    debugger: { getTargets: vi.fn(async () => [{ id: 'page-1', type: 'page', tabId: 1 }]) },
+    debugger: { getTargets: vi.fn(async () => [1, 2, 3, 4].map((tabId) => ({ id: `page-${tabId}`, type: 'page', tabId }))) },
     storage: { session: { get: vi.fn(async () => ({})), set: vi.fn(async () => {}) } },
     windows: { onFocusChanged: event(), onRemoved: event() },
     runtime: { onMessage: event() },
@@ -132,6 +133,72 @@ describe('browser tab ownership', () => {
     const outcome = await manager.closeUserTabs([1, 2, 2, 3, 4, 5, 99]);
     expect(outcome).toMatchObject({ complete: false, closed: [2, 5], failed: [{ tabId: 1 }, { tabId: 3 }, { tabId: 4 }, { tabId: 99 }] });
     expect(tabs.remove.mock.calls.map(([id]) => id)).toEqual([2, 4, 5]);
+  });
+
+  it('returns only popups created by the action source tab', async () => {
+    chromeMock();
+    const manager = new SessionManager(() => {});
+    await manager.ready();
+    const session = manager.get('popup');
+    session.leases.set(1, { tabId: 1, origin: 'agent', mark: null, claimedAt: Date.now(), state: 'active' });
+    const navigationListener = globalThis.chrome.webNavigation.onCreatedNavigationTarget.addListener.mock.calls[0][0];
+    const outcome = await manager.withChildTabs(1, async () => {
+      navigationListener({ sourceTabId: 3, tabId: 4 });
+      navigationListener({ sourceTabId: 1, tabId: 2 });
+      return { clicked: true };
+    });
+    expect(outcome.result).toEqual({ clicked: true });
+    expect(outcome.openedTabs).toEqual([expect.objectContaining({ tabId: 2, url: 'https://example.com/' })]);
+    expect(session.leases.has(2)).toBe(true);
+    expect(session.leases.has(4)).toBe(false);
+  });
+
+  it('claims an agent-click popup from a claimed user tab, but leaves manual popups alone', async () => {
+    chromeMock();
+    const manager = new SessionManager(() => {});
+    await manager.ready();
+    const session = manager.get('claimed-popup');
+    session.leases.set(1, { tabId: 1, origin: 'user', mark: null, claimedAt: Date.now(), state: 'active' });
+    const navigationListener = globalThis.chrome.webNavigation.onCreatedNavigationTarget.addListener.mock.calls[0][0];
+    navigationListener({ sourceTabId: 1, tabId: 2 });
+    await Promise.resolve();
+    expect(session.leases.has(2)).toBe(false);
+    const outcome = await manager.withChildTabs(1, async () => {
+      navigationListener({ sourceTabId: 1, tabId: 3 });
+    });
+    expect(outcome.openedTabs).toEqual([expect.objectContaining({ tabId: 3 })]);
+    expect(session.leases.has(3)).toBe(true);
+  });
+
+  it('keeps popup evidence when the action fails after opening it', async () => {
+    chromeMock();
+    const manager = new SessionManager(() => {});
+    await manager.ready();
+    const session = manager.get('partial-effect');
+    session.leases.set(1, { tabId: 1, origin: 'agent', mark: null, claimedAt: Date.now(), state: 'active' });
+    const navigationListener = globalThis.chrome.webNavigation.onCreatedNavigationTarget.addListener.mock.calls[0][0];
+    const outcome = await manager.withChildTabs(1, async () => {
+      navigationListener({ sourceTabId: 1, tabId: 2 });
+      throw new Error('navigation interrupted');
+    });
+    expect(outcome.error).toMatchObject({ message: 'navigation interrupted' });
+    expect(outcome.openedTabs).toEqual([expect.objectContaining({ tabId: 2 })]);
+  });
+
+  it('marks a popup pending instead of inventing a page identity', async () => {
+    chromeMock();
+    evictTab(2);
+    globalThis.chrome.debugger.getTargets.mockResolvedValue([{ id: 'page-1', type: 'page', tabId: 1 }]);
+    const manager = new SessionManager(() => {});
+    await manager.ready();
+    const session = manager.get('pending-popup');
+    session.leases.set(1, { tabId: 1, origin: 'agent', mark: null, claimedAt: Date.now(), state: 'active' });
+    const navigationListener = globalThis.chrome.webNavigation.onCreatedNavigationTarget.addListener.mock.calls[0][0];
+    const outcome = await manager.withChildTabs(1, async () => {
+      navigationListener({ sourceTabId: 1, tabId: 2 });
+    });
+    expect(outcome.openedTabs).toEqual([expect.objectContaining({ tabId: 2, pending: true })]);
+    expect(outcome.openedTabs[0].page).toBeUndefined();
   });
 
   it('releases a claimed user tab without closing it and closes only on explicit close', async () => {

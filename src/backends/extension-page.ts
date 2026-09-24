@@ -3,7 +3,7 @@ import type { ExtensionBridge } from '../host/bridge.js';
 import { BrowserCommandError } from '../host/bridge.js';
 import { wrapForEval, waitForDomStableJs, networkRequestsJs } from './browser-helpers.js';
 import type { RuntimePage } from './page-types.js';
-import type { Command, ActSpec, ActResult, DialogInfo, ConsoleEntry, CloseUserTabsResult } from '../protocol.js';
+import type { Command, ActSpec, ActResult, DialogInfo, ConsoleEntry, CloseUserTabsResult, DownloadWaitResult } from '../protocol.js';
 import { pageCallJs, ActError } from '../shared/engine.js';
 import type { Expectation, CheckResult } from '../shared/page-contract.js';
 
@@ -185,7 +185,7 @@ class ExtensionPage implements ExtensionRuntimePage {
   async readNetworkCapture(): Promise<unknown[]> { const r = await this.send('network-capture-read'); return Array.isArray(r.data) ? r.data : []; }
   /** Page-side performance entries (fallback when CDP capture is unavailable) — a pure helper script, not a locator. */
   async networkRequests(includeStatic = false): Promise<unknown[]> { const r = await this.evaluate(networkRequestsJs(includeStatic)); return Array.isArray(r) ? r : []; }
-  async waitForDownload(pattern = '', timeoutMs = 30_000): Promise<unknown> { return (await this.send('wait-download', { pattern, timeoutMs })).data; }
+  async waitForDownload(afterSequence: number, timeoutMs = 30_000): Promise<DownloadWaitResult> { return (await this.send('wait-download', { afterSequence, timeoutMs })).data as DownloadWaitResult; }
   async frames(): Promise<Array<{ index: number; frameId: string; url: string; name: string }>> { const r = await this.send('frames'); return Array.isArray(r.data) ? r.data as Array<{ index: number; frameId: string; url: string; name: string }> : []; }
   async evaluateInFrame(js: string, frameIndex: number): Promise<unknown> { return (await this.send('exec', { code: wrapForEval(js), frameIndex })).data; }
   async cdp(method: string, params?: Record<string, unknown>): Promise<unknown> { return (await this.send('cdp', { cdpMethod: method, cdpParams: params })).data; }

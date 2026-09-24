@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
-import { ExtensionBridge } from '../src/host/bridge.js';
+import { BrowserCommandError, ExtensionBridge } from '../src/host/bridge.js';
 import { Runtime } from '../src/runtime/runtime.js';
 import { createMcpServer } from '../src/mcp/server.js';
 import type { RuntimePage } from '../src/backends/page-types.js';
@@ -102,7 +102,7 @@ it('carries observation, read, and action evidence through MCP-only calls', asyn
     evaluate: async () => 'Example',
     pageCall: async (fn: string, args: Record<string, unknown>) => fn === 'aria' ? aria : fn === 'readText' ? args.readId ? { readId: 'capture-1', text: ' document', chars: 9, start: 5, complete: true } : { readId: 'capture-1', text: 'Hello', chars: 5, start: 0, nextStart: 5, complete: false, reason: 'budget' } : null,
     readNetworkCapture: async () => captures < 2 ? [{ requestId: `r${++captures}`, url: `https://example.test/${captures}`, method: 'GET', done: true }] : [],
-    act: async () => ({ ok: true, kind: 'click', ref: 'e1', matches_n: 1, method: 'cdp', hit: 'target' }),
+    act: async () => ({ ok: true, kind: 'click', ref: 'e1', matches_n: 1, method: 'cdp', hit: 'target', openedTabs: [{ page: 'child-2', tabId: 2, url: 'https://example.test/report' }], download: { afterSequence: 4, started: [{ seq: 5, url: 'https://example.test/report.csv', suggestedFilename: 'report.csv' }] } }),
   } as unknown as RuntimePage;
   state.pages.set('page-1', page);
   const session = createMcpServer(rt, 'evidence');
@@ -124,6 +124,10 @@ it('carries observation, read, and action evidence through MCP-only calls', asyn
     expect(await call('tab_read', { readId: read.readId, start: read.nextStart })).toMatchObject({ text: ' document', complete: true });
     const action = await call('tab_act', { action: 'click', target: { ref: 'e1' } });
     expect(action).toMatchObject({ delivery: 'received', controlState: 'unverified', network: { afterSequence: 1, cursor: 2 } });
+    expect(action.openedTabs).toEqual([{ tab: 'child-2', url: 'https://example.test/report' }]);
+    expect(action.download).toMatchObject({ afterSequence: 4, started: [{ seq: 5, suggestedFilename: 'report.csv' }] });
+    page.act = async () => { throw new BrowserCommandError('page changed', 'target_navigated', undefined, { openedTabs: [{ tab: 'child-3' }], download: { afterSequence: 5, started: [] } }); };
+    expect(await call('tab_act', { action: 'click', target: { ref: 'e1' } })).toMatchObject({ ok: false, error: { code: 'target_navigated', openedTabs: [{ tab: 'child-3' }], download: { afterSequence: 5 } } });
     expect(await call('network_inspect', { afterSequence: action.network.afterSequence })).toMatchObject({ entries: [expect.objectContaining({ seq: 2 })] });
   } finally {
     await session.close();

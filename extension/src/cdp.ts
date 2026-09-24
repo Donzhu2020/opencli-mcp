@@ -1,4 +1,5 @@
 // Derived from OpenCLI (https://github.com/jackwener/OpenCLI), Apache-2.0. Adapted for opencli-mcp.
+import type { DownloadWaitResult } from '../../src/protocol.js';
 /**
  * CDP execution via chrome.debugger API.
  *
@@ -47,19 +48,40 @@ type NetworkCaptureState = {
   requestToIndex: Map<string, number>;
 };
 
-export type DownloadWaitResult = {
-  downloaded: boolean;
-  id?: number;
-  filename?: string;
-  url?: string;
-  finalUrl?: string;
-  mime?: string;
-  totalBytes?: number;
-  state?: string;
-  danger?: string;
-  error?: string;
-  elapsedMs: number;
-};
+export interface PageDownloadStart { seq: number; guid?: string; url: string; suggestedFilename: string; timestamp: number }
+type DownloadCapture = { pageSeq: number; entries: PageDownloadStart[]; anchors: Map<number, { pageSeq: number; chromeSeq: number }> };
+type ChromeDownloadStart = { seq: number; id: number; url: string; finalUrl: string };
+const pageDownloads = new Map<number, DownloadCapture>();
+const chromeDownloads: ChromeDownloadStart[] = [];
+let chromeDownloadSeq = 0;
+let downloadCursorSeq = 0;
+
+function downloadState(tabId: number): DownloadCapture {
+  let state = pageDownloads.get(tabId);
+  if (!state) { state = { pageSeq: 0, entries: [], anchors: new Map() }; pageDownloads.set(tabId, state); }
+  return state;
+}
+
+/** Arm before the action: only Chrome downloads created after this point can satisfy the result. */
+export function downloadCursor(tabId: number): number {
+  const state = downloadState(tabId);
+  const cursor = ++downloadCursorSeq;
+  state.anchors.set(cursor, { pageSeq: state.pageSeq, chromeSeq: chromeDownloadSeq });
+  if (state.anchors.size > 100) state.anchors.delete(state.anchors.keys().next().value!);
+  return cursor;
+}
+export function pageDownloadsAfter(tabId: number, afterSequence: number): PageDownloadStart[] {
+  const state = pageDownloads.get(tabId);
+  const anchor = state?.anchors.get(afterSequence);
+  return anchor ? state!.entries.filter((entry) => entry.seq > anchor.pageSeq) : [];
+}
+
+function notePageDownload(tabId: number, params: { guid?: string; url?: string; suggestedFilename?: string }): void {
+  const state = downloadState(tabId);
+  if (params.guid && state.entries.some((entry) => entry.guid === params.guid)) return;
+  state.entries.push({ seq: ++state.pageSeq, ...(params.guid && { guid: params.guid }), url: String(params.url ?? ''), suggestedFilename: String(params.suggestedFilename ?? ''), timestamp: Date.now() });
+  if (state.entries.length > 100) state.entries.splice(0, state.entries.length - 100);
+}
 
 const networkCaptures = new Map<number, NetworkCaptureState>();
 
@@ -453,20 +475,13 @@ export async function screenshot(
   }
 }
 
-function matchesDownloadPattern(item: chrome.downloads.DownloadItem, pattern: string): boolean {
-  if (!pattern) return true;
-  const haystack = [
-    item.filename,
-    item.url,
-    item.finalUrl,
-    item.mime,
-  ].filter(Boolean).join('\n').toLowerCase();
-  return haystack.includes(pattern.toLowerCase());
-}
-
-function downloadResult(item: chrome.downloads.DownloadItem, startedAt: number): DownloadWaitResult {
+function downloadResult(item: chrome.downloads.DownloadItem, startedAt: number, event: PageDownloadStart): DownloadWaitResult {
   return {
     downloaded: item.state === 'complete',
+    started: true,
+    sequence: event.seq,
+    suggestedFilename: event.suggestedFilename,
+    association: 'url+event',
     id: item.id,
     filename: item.filename,
     url: item.url,
@@ -480,81 +495,32 @@ function downloadResult(item: chrome.downloads.DownloadItem, startedAt: number):
   };
 }
 
-export async function waitForDownload(pattern: string = '', timeoutMs: number = 30000): Promise<DownloadWaitResult> {
+/** Pair the tab's Page event with a new Chrome download observed after the action was armed. */
+export async function waitForDownload(tabId: number, afterSequence: number, timeoutMs: number = 30000): Promise<DownloadWaitResult> {
   const startedAt = Date.now();
   const timeout = Math.max(1, timeoutMs);
-
-  return await new Promise<DownloadWaitResult>((resolve) => {
-    let done = false;
-    const inProgressIds = new Set<number>();
-    const finish = (result: DownloadWaitResult) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      chrome.downloads.onCreated.removeListener(onCreated);
-      chrome.downloads.onChanged.removeListener(onChanged);
-      resolve(result);
-    };
-
-    const inspectById = async (id: number) => {
-      const items = await chrome.downloads.search({ id });
-      const item = items[0];
-      if (!item || !matchesDownloadPattern(item, pattern)) return;
-      inProgressIds.add(id);
-      if (item.state === 'complete' || item.state === 'interrupted') finish(downloadResult(item, startedAt));
-    };
-
-    const onCreated = (item: chrome.downloads.DownloadItem) => {
-      if (!matchesDownloadPattern(item, pattern)) return;
-      inProgressIds.add(item.id);
-      if (item.state === 'complete' || item.state === 'interrupted') finish(downloadResult(item, startedAt));
-    };
-    const onChanged = (delta: chrome.downloads.DownloadDelta) => {
-      if (!delta.id) return;
-      if (!inProgressIds.has(delta.id) && !delta.filename && !delta.url) return;
-      if (delta.filename?.current || delta.url?.current) {
-        void inspectById(delta.id);
-        return;
-      }
-      if (delta.state?.current === 'complete' || delta.state?.current === 'interrupted') {
-        void inspectById(delta.id);
-      }
-    };
-    const timer = setTimeout(() => {
-      finish({
-        downloaded: false,
-        state: 'interrupted',
-        error: `No download matched "${pattern || '*'}" within ${timeout}ms`,
-        elapsedMs: Date.now() - startedAt,
-      });
-    }, timeout);
-
-    chrome.downloads.onCreated.addListener(onCreated);
-    chrome.downloads.onChanged.addListener(onChanged);
-
-    void chrome.downloads.search({
-      limit: 50,
-      orderBy: ['-startTime'],
-      startedAfter: new Date(startedAt - Math.max(timeout, 1000)).toISOString(),
-    }).then((recent) => {
-      if (done) return;
-      const completed = recent.find((item) => item.state === 'complete' && matchesDownloadPattern(item, pattern));
-      if (completed) {
-        finish(downloadResult(completed, startedAt));
-        return;
-      }
-      for (const item of recent) {
-        if (item.state === 'in_progress' && matchesDownloadPattern(item, pattern)) inProgressIds.add(item.id);
-      }
-    }).catch((err) => {
-      finish({
-        downloaded: false,
-        state: 'interrupted',
-        error: err instanceof Error ? err.message : String(err),
-        elapsedMs: Date.now() - startedAt,
-      });
-    });
-  });
+  const deadline = startedAt + timeout;
+  const anchor = pageDownloads.get(tabId)?.anchors.get(afterSequence);
+  if (!anchor) return { downloaded: false, started: false, state: 'cursor_expired', error: 'Download cursor is no longer available.', elapsedMs: 0 };
+  let event: PageDownloadStart | undefined;
+  for (;;) {
+    const starts = pageDownloadsAfter(tabId, afterSequence);
+    if (starts.length > 1) return { downloaded: false, started: true, state: 'ambiguous', candidates: starts.length, error: 'This action started multiple downloads.', elapsedMs: Date.now() - startedAt };
+    event = starts[0];
+    if (event) break;
+    if (Date.now() >= deadline) return { downloaded: false, started: false, state: 'not_started', elapsedMs: Date.now() - startedAt };
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  for (;;) {
+    const starts = pageDownloadsAfter(tabId, afterSequence);
+    if (starts.length > 1) return { downloaded: false, started: true, state: 'ambiguous', candidates: starts.length, error: 'This action started multiple downloads.', elapsedMs: Date.now() - startedAt };
+    const matches = chromeDownloads.filter((item) => item.seq > anchor.chromeSeq && (item.url === event.url || item.finalUrl === event.url));
+    if (matches.length > 1) return { downloaded: false, started: true, sequence: event.seq, suggestedFilename: event.suggestedFilename, state: 'ambiguous', candidates: matches.length, error: 'Multiple Chrome downloads match the page event.', elapsedMs: Date.now() - startedAt };
+    const item = matches[0] ? (await chrome.downloads.search({ id: matches[0].id }))[0] : undefined;
+    if (item?.state === 'complete' || item?.state === 'interrupted') return downloadResult(item, startedAt, event);
+    if (Date.now() >= deadline) return { downloaded: false, started: true, sequence: event.seq, suggestedFilename: event.suggestedFilename, url: event.url, state: item?.state ?? 'unconfirmed', elapsedMs: Date.now() - startedAt };
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
 }
 
 /**
@@ -806,9 +772,14 @@ export async function detach(tabId: number): Promise<void> {
 }
 
 export function registerListeners(): void {
+  chrome.downloads.onCreated.addListener((item) => {
+    chromeDownloads.push({ seq: ++chromeDownloadSeq, id: item.id, url: item.url, finalUrl: item.finalUrl });
+    if (chromeDownloads.length > 200) chromeDownloads.splice(0, chromeDownloads.length - 200);
+  });
   chrome.debugger.onEvent.addListener((source, method, params: any) => {
     if (!source.tabId) return;
     if (method.startsWith('Target.')) { trackOopifs(source, method, params); return; }
+    if (method === 'Page.downloadWillBegin') { notePageDownload(source.tabId, params ?? {}); return; }
     if (method === 'Runtime.consoleAPICalled') {
       const t = String(params?.type ?? 'log'); const level = (t === 'warning' ? 'warn' : ['debug', 'info', 'log', 'warn', 'error'].includes(t) ? t : 'log') as ConsoleEntry['level'];
       const frame = params?.stackTrace?.callFrames?.[0];
@@ -829,6 +800,7 @@ export function registerListeners(): void {
     dialogs.delete(tabId); dialogWaiters.delete(tabId); dialogClosedWaiters.delete(tabId);
     attached.delete(tabId);
     networkCaptures.delete(tabId);
+    pageDownloads.delete(tabId);
       oopifByTab.delete(tabId);
   });
   chrome.debugger.onDetach.addListener((source) => {

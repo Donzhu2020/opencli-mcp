@@ -1,5 +1,5 @@
 /** The transport surface used by the browser object API. */
-import type { ActSpec, ActResult, DialogInfo, ConsoleEntry } from '../protocol.js';
+import type { ActSpec, ActResult, DialogInfo, ConsoleEntry, DownloadWaitResult } from '../protocol.js';
 import type { Expectation, CheckResult } from '../shared/page-contract.js';
 
 export interface ScreenshotOptions { format?: 'png' | 'jpeg'; quality?: number; fullPage?: boolean; width?: number; height?: number }
@@ -20,7 +20,7 @@ export interface RuntimePage {
   screenshot(options?: ScreenshotOptions): Promise<string>;
   startNetworkCapture(pattern?: string): Promise<boolean>;
   readNetworkCapture(): Promise<unknown[]>;
-  waitForDownload(pattern?: string, timeoutMs?: number): Promise<unknown>;
+  waitForDownload(afterSequence: number, timeoutMs?: number): Promise<DownloadWaitResult>;
   /** Child frames in document order; crossOrigin marks frames whose origin differs from the top document (data:/sandboxed count as cross-origin). */
   frames(): Promise<Array<{ index: number; frameId: string; url: string; name: string; crossOrigin?: boolean; oopif?: boolean }>>;
   evaluateInFrame(js: string, frameIndex: number): Promise<unknown>;

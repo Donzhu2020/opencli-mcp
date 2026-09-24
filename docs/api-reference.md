@@ -83,7 +83,7 @@ class Tab {
   cookie(name: string, opts?: { domain?: string; }): Promise<string | undefined>; // Read one cookie's value at run time — useful for per-request tokens an adapter needs (csrf/ct0/ csrftoken/XSRF-TOKEN). Defaults to the current page's host. Returns undefined when the cookie is absent.
   fetchJson(url: string, opts?: Record<string, unknown>): Promise<unknown>; // Fetch JSON through the page (its cookies and origin) after verifying the endpoint.
   frames(): Promise<Array<{ index: number; frameId: string; url: string; name: string; crossOrigin?: boolean; oopif?: boolean; }>>;
-  download(pattern?: string, timeoutMs?: number): Promise<unknown>;
+  download(afterSequence: number, timeoutMs?: number): Promise<DownloadWaitResult>; // Wait for the page download begun after a tab_act cursor, then check Chrome's file state.
 }
 
 type Target = ({ frame?: FrameStep | FrameStep[]; within?: string }) & (
@@ -138,5 +138,23 @@ interface CloseUserTabsResult {
   complete: boolean;
   closed: number[];
   failed: Array<{ tabId: number; reason: string }>;
+}
+
+interface DownloadWaitResult {
+  downloaded: boolean;
+  started: boolean;
+  sequence?: number;
+  suggestedFilename?: string; association?: 'url+event';
+  candidates?: number;
+  id?: number;
+  filename?: string;
+  url?: string;
+  finalUrl?: string;
+  mime?: string;
+  totalBytes?: number;
+  state?: string;
+  danger?: string;
+  error?: string;
+  elapsedMs: number;
 }
 ```

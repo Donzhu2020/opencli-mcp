@@ -9,7 +9,7 @@ import { networkDetail, networkSummary } from './network.js';
 import { ARIA_BUDGET, collapseAria } from '../shared/aria-collapse.js';
 import { targetToSelector, fallbackSelector } from '../shared/engine.js';
 import type { FindEntry, FindResult, QueryFindResult, ElementAtResult, Expectation, CheckResult, ReadTextResult } from '../shared/page-contract.js';
-import type { DialogInfo, FrameStep } from '../protocol.js';
+import type { DialogInfo, DownloadWaitResult, FrameStep } from '../protocol.js';
 import type { SessionContext } from './context.js';
 
 export type Target = ({ frame?: FrameStep | FrameStep[]; /** container (css/selector/eN) to resolve inside */ within?: string }) & (
@@ -209,6 +209,8 @@ export class Tab {
           ...(r.checked !== undefined ? { checked: r.checked, changed: r.changed } : {}),
           ...(r.selected !== undefined ? { selected: r.selected } : {}),
           ...(r.files !== undefined ? { files: r.files } : {}),
+          ...(r.openedTabs?.length ? { openedTabs: r.openedTabs.map(({ page, url, title, pending }) => ({ ...(page && { tab: page }), url, title, ...(pending && { pending }) })) } : {}),
+          ...(r.download ? { download: r.download } : {}),
           ...(action === 'click' && r.method === 'dom' ? { method: 'dom' as const } : {}),
         };
       } catch (err) {
@@ -302,5 +304,6 @@ export class Tab {
   /** Fetch JSON through the page (its cookies and origin) after verifying the endpoint. */
   async fetchJson(url: string, opts: Record<string, unknown> = {}): Promise<unknown> { return this.use((p) => p.fetchJson(url, opts as never)); }
   async frames(): Promise<Array<{ index: number; frameId: string; url: string; name: string; crossOrigin?: boolean; oopif?: boolean }>> { return this.use((p) => p.frames()); }
-  async download(pattern = '', timeoutMs = 30_000): Promise<unknown> { return this.use((p) => p.waitForDownload(pattern, timeoutMs)); }
+  /** Wait for the page download begun after a tab_act cursor, then check Chrome's file state. */
+  async download(afterSequence: number, timeoutMs = 30_000): Promise<DownloadWaitResult> { return this.use((p) => p.waitForDownload(afterSequence, timeoutMs)); }
 }

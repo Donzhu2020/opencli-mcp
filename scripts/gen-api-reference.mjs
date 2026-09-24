@@ -48,7 +48,7 @@ function memberLines(type, indent, depth) {
 }
 const sections = [];
 const wanted = new Map([['AgentApi', 'interface'], ['Browser', 'class'], ['Tab', 'class']]);
-const aliases = ['Target', 'ActAction', 'ActOptions', 'ObserveOptions', 'ReadOptions', 'ImageValue', 'Box', 'FindEntry', 'FindResult', 'QueryFindResult', 'ElementAtResult', 'ReadTextResult', 'Expectation', 'CheckResult', 'FrameStep', 'DialogInfo', 'ConsoleEntry', 'UserTabInfo', 'CloseUserTabsResult'];
+const aliases = ['Target', 'ActAction', 'ActOptions', 'ObserveOptions', 'ReadOptions', 'ImageValue', 'Box', 'FindEntry', 'FindResult', 'QueryFindResult', 'ElementAtResult', 'ReadTextResult', 'Expectation', 'CheckResult', 'FrameStep', 'DialogInfo', 'ConsoleEntry', 'UserTabInfo', 'CloseUserTabsResult', 'DownloadWaitResult'];
 for (const entry of entries) { sf = program.getSourceFile(entry); ts.forEachChild(sf, (node) => {
   if ((ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node)) && node.name && wanted.has(node.name.text)) {
     const sym = checker.getSymbolAtLocation(node.name);
@@ -61,7 +61,7 @@ for (const entry of entries) { sf = program.getSourceFile(entry); ts.forEachChil
   }
 }); }
 // keep a stable order: the entry object first, then Browser, Tab, then the value types
-const order = ['interface AgentApi', 'class Browser', 'class Tab', 'type Target', 'type FrameStep', 'type ActAction', 'interface ActOptions', 'interface ObserveOptions', 'interface ReadOptions', 'interface ImageValue', 'interface Box', 'interface FindEntry', 'interface FindResult', 'interface QueryFindResult', 'interface ElementAtResult', 'interface ReadTextResult', 'interface Expectation', 'interface CheckResult', 'interface DialogInfo', 'interface ConsoleEntry', 'interface UserTabInfo', 'interface CloseUserTabsResult'];
+const order = ['interface AgentApi', 'class Browser', 'class Tab', 'type Target', 'type FrameStep', 'type ActAction', 'interface ActOptions', 'interface ObserveOptions', 'interface ReadOptions', 'interface ImageValue', 'interface Box', 'interface FindEntry', 'interface FindResult', 'interface QueryFindResult', 'interface ElementAtResult', 'interface ReadTextResult', 'interface Expectation', 'interface CheckResult', 'interface DialogInfo', 'interface ConsoleEntry', 'interface UserTabInfo', 'interface CloseUserTabsResult', 'interface DownloadWaitResult'];
 const key = (s) => s.replace(/^\/\/.*\n/, '').replace(/^export /, '');
 sections.sort((a, b) => order.findIndex((k) => key(a).startsWith(k)) - order.findIndex((k) => key(b).startsWith(k)));
 // `?` already says undefined for parameters (also inside type-literal method signatures); real `T | undefined` results and properties stay

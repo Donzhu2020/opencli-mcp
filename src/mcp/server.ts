@@ -166,7 +166,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     if (server.isConnected()) server.sendResourceListChanged();
   };
   if (persistent) rt.on('features-changed', onFeaturesChanged);
-  server.registerTool('tab_act', { title: 'Act on a tab', description: 'One action. The action-specific schema permits only its parameters. The result distinguishes input delivery from verified control state and, when Network capture is available, returns a cursor for evidence inspection. A successful click means the mouse reached the page, not that the site completed the task; use tab_expect for the desired effect. method:"dom" is a click-only fallback after not_delivered or no box.',
+  server.registerTool('tab_act', { title: 'Act on a tab', description: 'One action. The action-specific schema permits only its parameters. The result distinguishes input delivery from verified control state, returns openedTabs for popups from this tab observed during the action (pending:true means retry tab_list), a download.afterSequence cursor for tab.download() in js, and a Network cursor when available. A successful click means the mouse reached the page, not that the site completed the task; use tab_expect for the desired effect. method:"dom" is a click-only fallback after not_delivered or no box.',
     inputSchema: actionSchema,
     annotations: { destructiveHint: true, openWorldHint: true },
   }, async (input) => run(async () => {

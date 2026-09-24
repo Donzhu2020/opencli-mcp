@@ -74,10 +74,17 @@ async function handleCommand(cmd: Command): Promise<Result> {
         if (!cmd.act) return { id: cmd.id, ok: false, error: 'Missing act spec', errorCode: 'invalid_target' };
         const tabId = await sessions.resolveTab(s, cmd.page);
         await ensureLoaded(tabId);
+        const downloadFrom = executor.downloadCursor(tabId);
         // the action budget is the spec's own timeout (default 3s) — never the whole command deadline
         // Show the cursor at the action point but never block input on its arrival (waitForArrival:false) — the overlay is a UX affordance, not on the latency path.
-        const result = await performAct(tabId, { ...cmd.act, timeoutMs: Math.min(cmd.act.timeoutMs ?? 3000, 60_000) }, { aggressive: s.surface === 'browser', cursor: cmd.act.cursor ? (x, y) => sessions.cursor(s, tabId, x, y, false) : undefined });
-        return pageScoped(cmd.id, tabId, result);
+        const { result, error, openedTabs } = await sessions.withChildTabs(tabId, () => performAct(tabId, { ...cmd.act!, timeoutMs: Math.min(cmd.act!.timeoutMs ?? 3000, 60_000) }, { aggressive: s.surface === 'browser', cursor: cmd.act!.cursor ? (x, y) => sessions.cursor(s, tabId, x, y, false) : undefined }));
+        const started = executor.pageDownloadsAfter(tabId, downloadFrom).map(({ seq, guid, url, suggestedFilename }) => ({ seq, ...(guid && { guid }), url, suggestedFilename }));
+        if (error) {
+          const failure = errorResult(cmd.id, error);
+          failure.data = { ...(typeof failure.data === 'object' && failure.data !== null ? failure.data : {}), ...(openedTabs.length && { openedTabs: openedTabs.map(({ page, url, title, pending }) => ({ ...(page && { tab: page }), url, title, ...(pending && { pending }) })) }), download: { afterSequence: downloadFrom, started } };
+          return failure;
+        }
+        return pageScoped(cmd.id, tabId, { ...result, ...(openedTabs.length && { openedTabs }), download: { afterSequence: downloadFrom, started } });
       }
       case 'navigate': return await handleNavigate(cmd, s);
       case 'tabs': return await handleTabs(cmd, s);
@@ -87,7 +94,11 @@ async function handleCommand(cmd: Command): Promise<Result> {
       case 'frames': { const tabId = await sessions.resolveTab(s, cmd.page); return { id: cmd.id, ok: true, data: await executor.listFrames(tabId) }; }
       case 'network-capture-start': { const tabId = await sessions.resolveTab(s, cmd.page); await executor.startNetworkCapture(tabId, cmd.pattern); return pageScoped(cmd.id, tabId, { started: true }); }
       case 'network-capture-read': { const tabId = await sessions.resolveTab(s, cmd.page); return pageScoped(cmd.id, tabId, await executor.readNetworkCapture(tabId)); }
-      case 'wait-download': return { id: cmd.id, ok: true, data: await executor.waitForDownload(cmd.pattern ?? '', cmd.timeoutMs ?? 30_000) };
+      case 'wait-download': {
+        if (cmd.afterSequence === undefined) return { id: cmd.id, ok: false, error: 'Missing download cursor', errorCode: 'invalid_args', errorHint: 'Pass download.afterSequence from tab_act.' };
+        const tabId = await sessions.resolveTab(s, cmd.page);
+        return pageScoped(cmd.id, tabId, await executor.waitForDownload(tabId, cmd.afterSequence, cmd.timeoutMs ?? 30_000));
+      }
       // ── session & tab lifecycle ──
       case 'session-name': { if (!cmd.name) return { id: cmd.id, ok: false, error: 'Missing name' }; await sessions.nameSession(s, cmd.name); return { id: cmd.id, ok: true, data: { name: cmd.name } }; }
       case 'user-tabs': return { id: cmd.id, ok: true, data: await sessions.listUserTabs({ query: cmd.query, limit: cmd.limit }) };

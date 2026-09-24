@@ -138,6 +138,30 @@ export interface ActResult {
   /** options actually selected; upload count */
   selected?: string[];
   files?: number;
+  /** Child tabs from this source tab while the action ran; each is claimed into the same session. */
+  openedTabs?: Array<{ page?: string; tabId: number; url?: string; title?: string; pending?: true }>;
+  /** Page.downloadWillBegin events observed while this action ran; completion is checked separately. */
+  download?: { afterSequence: number; started: Array<{ seq: number; guid?: string; url: string; suggestedFilename: string }> };
+}
+
+export interface DownloadWaitResult {
+  downloaded: boolean;
+  started: boolean;
+  sequence?: number;
+  suggestedFilename?: string;
+  /** Chrome has no source-tab field for files; this new download was paired with the tab's Page event by URL. */
+  association?: 'url+event';
+  candidates?: number;
+  id?: number;
+  filename?: string;
+  url?: string;
+  finalUrl?: string;
+  mime?: string;
+  totalBytes?: number;
+  state?: string;
+  danger?: string;
+  error?: string;
+  elapsedMs: number;
 }
 
 export interface CloseUserTabsResult {

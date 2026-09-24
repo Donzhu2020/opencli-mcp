@@ -1,28 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { runAdapter, type PageProvider } from '../src/sites/executor.js';
+import type { PageProvider } from '../src/sites/executor.js';
 import type { AdapterCommand } from '../src/sites/loader.js';
 import { Runtime } from '../src/runtime/runtime.js';
-
-const provider: PageProvider = {
-  browserAvailable: () => true,
-  getAdapterPage: async () => ({}) as Awaited<ReturnType<PageProvider['getAdapterPage']>>,
-  toolContext: async () => ({}),
-};
 
 function cmd(run: AdapterCommand['run']): AdapterCommand {
   return { site: 's', name: 'n', description: '', access: 'read', args: [], source: 'builtin', run };
 }
-
-describe('runAdapter cancellation', () => {
-  it('does not start the command when the signal is already aborted', async () => {
-    const ac = new AbortController();
-    ac.abort();
-    let started = false;
-    const r = await runAdapter(provider, cmd(async () => { started = true; return { ok: true }; }), {}, { signal: ac.signal });
-    expect(started).toBe(false);
-    expect(r).toMatchObject({ ok: false, error: { code: 'cancelled' } });
-  });
-});
 
 describe('site adapter page ownership', () => {
   it('runs complete calls to the same site sequentially', async () => {

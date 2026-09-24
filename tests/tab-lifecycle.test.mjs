@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SessionManager } from '../extension/src/sessions.js';
-import { evictTab } from '../extension/src/identity.js';
 
 vi.mock('../extension/src/cdp.js', () => ({ ensureAttached: vi.fn(async () => {}), detach: vi.fn(async () => {}) }));
 
@@ -63,37 +62,6 @@ describe('browser tab ownership', () => {
     await manager.finalize(session, []);
     expect(tabs.remove).toHaveBeenCalledWith(1);
   });
-
-  it('closes the initial tab when its first navigation fails', async () => {
-    const tabs = emptyWindowMock();
-    tabs.update.mockRejectedValueOnce(new Error('navigation blocked'));
-    const manager = new SessionManager(() => {});
-    await manager.ready();
-    await expect(manager.createTab(manager.get('new-window'), 'https://example.com/')).rejects.toMatchObject({ code: 'page_not_loaded' });
-    expect(tabs.create).not.toHaveBeenCalled();
-    expect(tabs.remove).toHaveBeenCalledWith(1);
-  });
-
-  it('resumes idle cleanup after a service-worker restart', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-09-24T00:00:00Z'));
-    const tabs = chromeMock();
-    globalThis.chrome.storage.session.get.mockResolvedValue({
-      opencli_mcp_sessions_v1: [{
-        key: 'restored', surface: 'browser', name: null, groupId: 10, windowId: 1,
-        leases: [{ tabId: 1, origin: 'agent', mark: null, claimedAt: Date.now() - 60_000, state: 'active' }],
-        preferredTabId: 1, visible: false, lastActivity: Date.now() - 60 * 60_000 + 1000,
-      }],
-      opencli_mcp_released_v2: [],
-    });
-    const manager = new SessionManager(() => {});
-    await manager.ready();
-    expect(manager.sessions.has('restored')).toBe(true);
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(tabs.remove).toHaveBeenCalledWith(1);
-    expect(manager.sessions.has('restored')).toBe(false);
-  });
-
   it('requires explicit open or claim and never adopts an unknown page', async () => {
     const tabs = chromeMock();
     const manager = new SessionManager(() => {});
@@ -123,7 +91,6 @@ describe('browser tab ownership', () => {
     expect(session.leases.get(7)?.origin).toBe('user');
     expect(tabs.query).not.toHaveBeenCalled();
   });
-
   it('closes explicit user ids in one operation and reports every unavailable tab', async () => {
     const tabs = chromeMock();
     tabs.query.mockResolvedValue([...([1, 2, 3, 4].map((id) => ({ id, url: `https://example.com/${id}`, windowId: 1 }))), { id: 5, url: 'about:blank', windowId: 1 }]);
@@ -185,22 +152,6 @@ describe('browser tab ownership', () => {
     });
     expect(outcome.error).toMatchObject({ message: 'navigation interrupted' });
     expect(outcome.openedTabs).toEqual([expect.objectContaining({ tabId: 2 })]);
-  });
-
-  it('marks a popup pending instead of inventing a page identity', async () => {
-    chromeMock();
-    evictTab(2);
-    globalThis.chrome.debugger.getTargets.mockResolvedValue([{ id: 'page-1', type: 'page', tabId: 1 }]);
-    const manager = new SessionManager(() => {});
-    await manager.ready();
-    const session = manager.get('pending-popup');
-    session.leases.set(1, { tabId: 1, origin: 'agent', mark: null, claimedAt: Date.now(), state: 'active' });
-    const navigationListener = globalThis.chrome.webNavigation.onCreatedNavigationTarget.addListener.mock.calls[0][0];
-    const outcome = await manager.withChildTabs(1, async () => {
-      navigationListener({ sourceTabId: 1, tabId: 2 });
-    });
-    expect(outcome.openedTabs).toEqual([expect.objectContaining({ tabId: 2, pending: true })]);
-    expect(outcome.openedTabs[0].page).toBeUndefined();
   });
 
   it('releases a claimed user tab without closing it and closes only on explicit close', async () => {

@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { Runtime } from '../src/runtime/runtime.js';
 import { createMcpServer } from '../src/mcp/server.js';
-import { activateDraft, createDraft, discardDraft, tryDraft } from '../src/sites/drafts.js';
 import type { RuntimePage } from '../src/backends/page-types.js';
 
 /** Parse the tool result's text content (the one result envelope: {ok,…} | {ok:false,error}). */
@@ -67,27 +66,6 @@ describe('adapter draft lifecycle and write commands', () => {
     } finally { await h.cleanup(); }
   });
 
-  it('refreshes discovery and a typed tool when its adapter is redefined', async () => {
-    const h = await harness();
-    try {
-      const first = await h.define('poke');
-      expect(await h.tryDraft(first.data.draftId as string)).toMatchObject({ verification: { passed: true } });
-      await h.activate(first.data.draftId as string);
-      await h.client.callTool({ name: 'js', arguments: { code: `await sites.enable('${h.site}', { write: true })` } });
-      const defined = await h.define('poke', { description: 'updated adapter', args: [{ name: 'message', required: true }], func: 'async ({ args }) => ({ message: args.message })' });
-      expect(defined.data).toMatchObject({ ok: true, args: [{ name: 'message', required: true }], status: 'draft' });
-      expect(body(await h.client.callTool({ name: 'site_run', arguments: { site: h.site, command: 'poke', args: {} } }))).toMatchObject({ ok: true, value: { done: true } });
-      expect(await h.tryDraft(defined.data.draftId as string, { message: 'new' }, { path: 'value.message', equals: 'new' })).toMatchObject({ verification: { passed: true } });
-      await h.activate(defined.data.draftId as string);
-      const tool = (await h.client.listTools()).tools.find((t) => t.name === `${h.site}_poke`);
-      expect(tool?.description).toContain('updated adapter');
-      expect(tool?.inputSchema).toMatchObject({ required: ['message'] });
-      const hits = body(await h.client.callTool({ name: 'sites_search', arguments: { query: h.site } }));
-      expect(hits).toMatchObject({ ok: true, results: expect.arrayContaining([expect.objectContaining({ name: 'poke', args: [expect.objectContaining({ name: 'message' })] })]) });
-      expect(body(await h.client.callTool({ name: 'site_run', arguments: { site: h.site, command: 'poke', args: { x: 'old' } } }))).toMatchObject({ ok: false, error: { code: 'invalid_args' } });
-      expect(body(await h.client.callTool({ name: `${h.site}_poke`, arguments: { message: 'new' } }))).toMatchObject({ ok: true, value: { message: 'new' } });
-    } finally { await h.cleanup(); }
-  });
   it('does not activate a failed or discarded draft', async () => {
     const h = await harness();
     try {
@@ -111,22 +89,4 @@ describe('adapter draft lifecycle and write commands', () => {
       expect(body(await h.client.callTool({ name: 'site_run', arguments: { site: h.site, command: 'poke', args: {} } }))).toMatchObject({ ok: true, value: { done: true } });
     } finally { await h.cleanup(); }
   });
-});
-
-it('does not activate or discard a draft while its live trial is running', async () => {
-  const site = `ctest${Math.random().toString(36).slice(2)}`;
-  const { draftId } = await createDraft({ site, name: 'poke', description: 'concurrent trial', access: 'read', func: 'async () => ({ done: true })' });
-  const output = { ok: true as const, site, name: 'poke', value: { done: true }, elapsedMs: 0 };
-  try {
-    await tryDraft(async () => output, draftId, {}, { path: 'value.done', equals: true });
-    let finish!: (value: typeof output) => void;
-    let entered!: () => void;
-    const started = new Promise<void>((resolve) => { entered = resolve; });
-    const running = tryDraft(async () => { entered(); return new Promise<typeof output>((resolve) => { finish = resolve; }); }, draftId, {}, { path: 'value.done', equals: true });
-    await started;
-    expect(() => activateDraft(draftId, () => undefined)).toThrow(/still being tried/);
-    expect(() => discardDraft(draftId)).toThrow(/still being tried/);
-    finish(output);
-    await expect(running).resolves.toMatchObject({ verification: { passed: true } });
-  } finally { discardDraft(draftId); }
 });

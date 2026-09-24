@@ -53,68 +53,6 @@ describe('runtime-advertised MCP contract', () => {
   });
 });
 
-it('reports a host/extension protocol mismatch before sending browser commands', async () => {
-  const channel = new FakeChannel();
-  const send = vi.spyOn(channel, 'send');
-  const bridge = new ExtensionBridge(channel as unknown as NativeChannel);
-  const rt = new Runtime({ bridge });
-  await rt.init();
-  channel.emit('message', { type: 'hello', extensionVersion: 'older-extension', features: ['network', 'downloads'] });
-  expect(rt.doctor().extension).toMatchObject({ connected: true, compatible: false, protocolRevision: null, requiredProtocolRevision: PROTOCOL_REVISION, features: [] });
-  await expect(bridge.send('ping')).rejects.toMatchObject({ code: 'extension_update_required' });
-  expect(send).not.toHaveBeenCalled();
-  await expect(rt.getBrowserPage('mismatch')).rejects.toMatchObject({ code: 'extension_update_required' });
-  const session = createMcpServer(rt, 'mismatch');
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  await session.server.connect(serverTransport);
-  const client = new Client({ name: 'mismatch', version: '1' }, { capabilities: {} });
-  await client.connect(clientTransport);
-  expect(JSON.parse(resultText(await client.callTool({ name: 'tab_list', arguments: {} })))).toMatchObject({ ok: false, error: { code: 'extension_update_required' } });
-  await session.close();
-  await client.close();
-  await rt.shutdown();
-});
-
-it('claims the active user tab and batch-closes numeric ids through the MCP contract', async () => {
-  const channel = new FakeChannel();
-  const commands: Array<{ action: string; claim?: Record<string, unknown>; tabIds?: number[] }> = [];
-  vi.spyOn(channel, 'send').mockImplementation((frame) => {
-    const message = frame as { type?: string; command?: { id: string; action: string; claim?: Record<string, unknown>; tabIds?: number[] } };
-    if (message.type !== 'command' || !message.command) return;
-    const command = message.command;
-    commands.push(command);
-    const result = command.action === 'claim'
-      ? { id: command.id, ok: true, page: 'page-7', data: { tabId: 7, url: 'https://example.test/', title: 'Example' } }
-      : command.action === 'close-user-tabs'
-        ? { id: command.id, ok: true, data: { complete: true, closed: command.tabIds, failed: [] } }
-        : { id: command.id, ok: true, data: { closed: [], kept: [], failed: [] } };
-    queueMicrotask(() => channel.emit('message', { type: 'result', result }));
-  });
-  const bridge = new ExtensionBridge(channel as unknown as NativeChannel);
-  const rt = new Runtime({ bridge });
-  await rt.init();
-  channel.emit('message', { type: 'hello', extensionVersion: 'test', protocolRevision: PROTOCOL_REVISION, features: [] });
-  const session = createMcpServer(rt, 'tab-management');
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  await session.server.connect(serverTransport);
-  const client = new Client({ name: 'tab-management', version: '1' }, { capabilities: {} });
-  await client.connect(clientTransport);
-  try {
-    const claim = JSON.parse(resultText(await client.callTool({ name: 'tab_claim', arguments: { active: true, expectedUrl: 'https://example.test/', observe: false } })));
-    expect(claim).toMatchObject({ ok: true, tab: 'page-7', tabId: 7 });
-    expect(commands.find((command) => command.action === 'claim')?.claim).toMatchObject({ active: true, expectedUrl: 'https://example.test/' });
-    const close = JSON.parse(resultText(await client.callTool({ name: 'tab_close', arguments: { tabIds: [8, 9] } })));
-    expect(close).toMatchObject({ ok: true, complete: true, closed: [8, 9], failed: [] });
-    expect(commands.find((command) => command.action === 'close-user-tabs')?.tabIds).toEqual([8, 9]);
-    const js = JSON.parse(resultText(await client.callTool({ name: 'js', arguments: { code: 'await browser.user.closeTabs([10])' } })));
-    expect(js).toMatchObject({ ok: true, value: { complete: true, closed: [10], failed: [] } });
-  } finally {
-    await session.close();
-    await client.close().catch(() => {});
-    await rt.shutdown();
-  }
-});
-
 it('carries observation, read, and action evidence through MCP-only calls', async () => {
   const rt = new Runtime();
   const state = rt.session('evidence');

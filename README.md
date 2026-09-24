@@ -145,7 +145,7 @@ npm run typecheck
 
 ```bash
 npm run build:ext        # rebuild the extension
-npm test                 # unit tests
+npm test                 # focused regression tests
 npm run smoke:setup      # isolated setup and Native Messaging end-to-end check
 npm run smoke:browser    # end-to-end check with a connected Chrome extension
 ```

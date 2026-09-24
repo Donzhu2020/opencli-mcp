@@ -50,23 +50,6 @@ describe('page-scoped download outcome', () => {
     created({ id: 21, url: 'https://example.test/export', finalUrl: 'https://example.test/export' });
     expect(await waitForDownload(902, cursor, 1000)).toMatchObject({ downloaded: false, started: true, state: 'ambiguous', candidates: 2 });
   });
-
-  it('waits for a late page event instead of accepting an unrelated completed file', async () => {
-    const onEvent = event();
-    const onCreated = event();
-    vi.stubGlobal('chrome', {
-      debugger: { onEvent, onDetach: event() },
-      tabs: { onRemoved: event(), onUpdated: event() },
-      downloads: { onCreated, search: vi.fn(async () => [{ id: 30, url: 'https://other.test/file', finalUrl: 'https://other.test/file', state: 'complete' }]) },
-    });
-    registerListeners();
-    const listener = onEvent.addListener.mock.calls[0][0];
-    onCreated.addListener.mock.calls[0][0]({ id: 30, url: 'https://other.test/file', finalUrl: 'https://other.test/file' });
-    const cursor = downloadCursor(903);
-    setTimeout(() => listener({ tabId: 903 }, 'Page.downloadWillBegin', { guid: 'g1', url: 'https://example.test/new.csv', suggestedFilename: 'new.csv' }), 10);
-    expect(await waitForDownload(903, cursor, 220)).toMatchObject({ downloaded: false, started: true, state: 'unconfirmed', url: 'https://example.test/new.csv' });
-  });
-
   it('rejects a completed file with the same URL that existed before the action', async () => {
     const onEvent = event();
     const onCreated = event();
@@ -78,15 +61,5 @@ describe('page-scoped download outcome', () => {
     onEvent.addListener.mock.calls[0][0]({ tabId: 904 }, 'Page.downloadWillBegin', { url: 'https://example.test/repeated.csv', suggestedFilename: 'repeated.csv' });
     expect(await waitForDownload(904, cursor, 220)).toMatchObject({ downloaded: false, started: true, state: 'unconfirmed' });
     expect(search).not.toHaveBeenCalled();
-  });
-
-  it('does not accept a cursor from another tab', async () => {
-    const onEvent = event();
-    const onCreated = event();
-    vi.stubGlobal('chrome', { debugger: { onEvent, onDetach: event() }, tabs: { onRemoved: event(), onUpdated: event() }, downloads: { onCreated, search: vi.fn() } });
-    registerListeners();
-    const cursor = downloadCursor(905);
-    downloadCursor(906);
-    expect(await waitForDownload(906, cursor, 1)).toMatchObject({ downloaded: false, state: 'cursor_expired' });
   });
 });

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.0.21 — 2026-09-25
+
+- test: use current protocol in setup smoke
+- test: trim redundant regression coverage
+- chore: bump Chrome extension to 0.0.16
+- Improve browser action continuation and protocol clarity
+- Improve popup and download action evidence
+- Improve agent tab claiming and batch cleanup
+
 ## 0.0.20 — 2026-09-25
 
 - release: add manual extension asset and bump extension to 0.0.15

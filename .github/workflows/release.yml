@@ -1,0 +1,111 @@
+name: Release npm package
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact npm version to release (for example, 0.0.19)
+        required: true
+        type: string
+      notes:
+        description: Optional release notes; otherwise use commit subjects since the last tag
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: opencli-mcp-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Use npm with trusted publishing support
+        run: npm install --global 'npm@^11.5.1'
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Prepare version and changelog
+        env:
+          RELEASE_NOTES: ${{ inputs.notes }}
+        run: node scripts/prepare-release.mjs
+      - name: Basic checks
+        run: |
+          npm run typecheck
+          npx vitest run tests/stdio-late-host.test.ts
+      - name: Build package
+        run: |
+          npm pack --silent
+          test -f "opencli-mcp-${RELEASE_VERSION}.tgz"
+      - name: Check installed package
+        run: |
+          npm install --prefix "$RUNNER_TEMP/package-smoke" --ignore-scripts --no-audit --no-fund "./opencli-mcp-${RELEASE_VERSION}.tgz"
+          (cd "$RUNNER_TEMP/package-smoke" && node --input-type=module -e 'const sdk = await import("opencli-mcp/adapter-sdk"); const adapter = await import("./node_modules/opencli-mcp/adapters/reddit/search.js"); if (typeof sdk.defineAdapter !== "function" || typeof adapter.default.run !== "function") process.exit(1)')
+      - name: Commit and tag checked release
+        run: |
+          git diff --check
+          while IFS= read -r file; do
+            case "$file" in
+              package.json|package-lock.json|CHANGELOG.md) ;;
+              *) echo "Build changed tracked file: $file" >&2; exit 1 ;;
+            esac
+          done < <(git diff --name-only)
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package.json package-lock.json CHANGELOG.md
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: release opencli-mcp ${RELEASE_VERSION}"
+            git push origin HEAD:main
+          fi
+          tag="v${RELEASE_VERSION}"
+          existing=$(git rev-parse -q --verify "refs/tags/${tag}^{}" || true)
+          if [ -n "$existing" ]; then
+            test "$existing" = "$(git rev-parse HEAD)" || { echo "$tag points to another commit" >&2; exit 1; }
+          else
+            git tag -a "$tag" -m "opencli-mcp ${RELEASE_VERSION}"
+            git push origin "$tag"
+          fi
+      - name: Publish to npm with trusted publishing
+        run: |
+          tarball="opencli-mcp-${RELEASE_VERSION}.tgz"
+          published=$(npm view "opencli-mcp@${RELEASE_VERSION}" dist.shasum --prefer-online 2>/dev/null || true)
+          if [ -n "$published" ]; then
+            local_sha=$(sha1sum "$tarball" | cut -d ' ' -f 1)
+            test "$published" = "$local_sha" || { echo 'Published tarball differs from this build' >&2; exit 1; }
+            echo "opencli-mcp@${RELEASE_VERSION} is already published"
+          else
+            npm publish "./$tarball" --access public --provenance
+          fi
+      - name: Create GitHub Release
+        run: |
+          tag="v${RELEASE_VERSION}"
+          tarball="opencli-mcp-${RELEASE_VERSION}.tgz"
+          node scripts/release-notes.mjs "$RELEASE_VERSION" > "$RUNNER_TEMP/release-notes.md"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$tarball" --clobber
+          else
+            gh release create "$tag" "$tarball" --verify-tag --title "opencli-mcp ${RELEASE_VERSION}" --notes-file "$RUNNER_TEMP/release-notes.md"
+          fi
+      - name: Verify npm availability
+        run: |
+          for attempt in {1..20}; do
+            published=$(npm view "opencli-mcp@${RELEASE_VERSION}" version --prefer-online 2>/dev/null || true)
+            if [ "$published" = "$RELEASE_VERSION" ]; then exit 0; fi
+            sleep 15
+          done
+          echo "opencli-mcp@${RELEASE_VERSION} is not yet visible on npm" >&2
+          exit 1

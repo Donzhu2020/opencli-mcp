@@ -1,0 +1,14 @@
+/** Print one version's CHANGELOG section for the GitHub Release. */
+import { readFileSync } from 'node:fs';
+
+const version = process.argv[2];
+if (!version || !/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Pass an exact release version');
+const lines = readFileSync('CHANGELOG.md', 'utf8').split('\n');
+const heading = new RegExp(`^## ${version.replaceAll('.', '\\.')}($|\\s)`);
+const start = lines.findIndex((line) => heading.test(line));
+if (start < 0) throw new Error(`CHANGELOG.md has no section for ${version}`);
+let end = lines.findIndex((line, index) => index > start && line.startsWith('## '));
+if (end < 0) end = lines.length;
+const body = lines.slice(start + 1, end).join('\n').trim();
+if (!body) throw new Error(`CHANGELOG.md has no notes for ${version}`);
+process.stdout.write(`${body}\n`);

@@ -149,6 +149,8 @@ npm run smoke:browser    # end-to-end check with a connected Chrome extension
 
 Run the tests relevant to your change. `npm run check` runs typecheck, build, and the full test suite when a broader check is needed. For browser changes, use the browser smoke test. `docs/api-reference.md` is generated during the build; update its TypeScript source rather than editing the generated file.
 
+Maintainers: use the [release workflow](docs/releasing.md) to publish the npm package and GitHub Release.
+
 Found a bug or have a feature request? [Open an issue](https://github.com/jackwener/opencli-mcp/issues). See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## License and credits

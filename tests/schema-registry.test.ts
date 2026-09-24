@@ -14,6 +14,7 @@ describe('schema', () => {
     expect(coerceArgs(args, { q: 'x', limit: '5', sort: 'hot' })).toEqual({ q: 'x', limit: 5, sort: 'hot' });
     expect(() => coerceArgs(args, { q: 'x', sort: 'weird' })).toThrow(/one of/);
     expect(() => coerceArgs(args, {})).toThrow(ActionError);
+    expect(() => coerceArgs(args, { q: 'x', invented: 1 })).toThrow(/Unknown argument/);
   });
 
   it('preserves every declared parameter in discovery and execution', () => {
@@ -23,6 +24,7 @@ describe('schema', () => {
     expect(coerceArgs(args, { output: 'json', all: 'true', timeout: '10' })).toEqual({ output: 'json', all: true, timeout: 10 });
     expect(coerceArgs(args, { output: 'json' })).toEqual({ output: 'json', timeout: 5 });
     expect(() => coerceArgs(args, {})).toThrow(ActionError);
+    expect(() => coerceArgs(args, { output: 'json', all: 'maybe' })).toThrow(/must be a boolean/);
   });
 });
 

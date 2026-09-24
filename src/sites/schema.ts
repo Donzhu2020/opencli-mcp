@@ -18,8 +18,8 @@ export interface ArgView {
 export function argSpec(args: Arg[] = []): ArgView[] {
   return args.map((a) => ({
     name: a.name,
-    ...(a.type && { type: a.type }),
-    ...(a.required && { required: true }),
+    type: a.type ?? 'string',
+    required: a.required === true,
     ...(a.help && { help: a.help }),
     ...(a.default !== undefined && { default: a.default }),
     ...(a.choices?.length && { choices: a.choices }),
@@ -51,6 +51,9 @@ function invalidArgs(message: string, args: Arg[]): never {
 
 /** Coerce + validate kwargs against Arg[] (types, choices, required, defaults). */
 export function coerceArgs(cmdArgs: Arg[] = [], kwargs: Record<string, unknown>): Record<string, unknown> {
+  const names = new Set(cmdArgs.map((a) => a.name));
+  const unknown = Object.keys(kwargs).filter((name) => !names.has(name));
+  if (unknown.length) invalidArgs(`Unknown argument${unknown.length === 1 ? '' : 's'}: ${unknown.join(', ')}`, cmdArgs);
   const out: Record<string, unknown> = { ...kwargs };
   for (const def of cmdArgs) {
     const val = out[def.name];
@@ -61,7 +64,9 @@ export function coerceArgs(cmdArgs: Arg[] = [], kwargs: Record<string, unknown>)
         if (!Number.isFinite(n) || (def.type === 'int' && !Number.isInteger(n))) invalidArgs(`Argument "${def.name}" must be a ${def.type}`, cmdArgs);
         out[def.name] = n;
       } else if (def.type === 'boolean') {
-        out[def.name] = typeof val === 'string' ? ['true', '1'].includes(val.toLowerCase()) : Boolean(val);
+        if (typeof val === 'boolean') out[def.name] = val;
+        else if (typeof val === 'string' && ['true', 'false', '1', '0'].includes(val.toLowerCase())) out[def.name] = ['true', '1'].includes(val.toLowerCase());
+        else invalidArgs(`Argument "${def.name}" must be a boolean`, cmdArgs);
       }
       if (def.choices?.length && !def.choices.map(String).includes(String(out[def.name]))) {
         invalidArgs(`Argument "${def.name}" must be one of: ${def.choices.join(', ')}`, cmdArgs);

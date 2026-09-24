@@ -1,7 +1,7 @@
 ## How to act on a page
 
 The core loop and the discipline that makes it reliable. Tool-by-tool argument shapes are in each tool's schema; error
-families are in the `errors` doc; the full object model arrives with your first `js` result (`api-reference`).
+families are in the `errors` doc; read the full object model on demand with `docs_get {name:"api-reference"}`.
 
 1. **Loop:** `tab_open` (or `tab_claim` a tab the user already has) → `tab_observe` → `tab_act` → `tab_observe`. One
    `tab_act` call does everything (waits for actionable, scrolls, hit-tests, dispatches real input, settles).

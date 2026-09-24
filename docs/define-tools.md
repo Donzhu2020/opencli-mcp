@@ -1,13 +1,15 @@
 ## Define a site adapter
 
-A site adapter is an explicit JavaScript function that uses the same `Tab` API as `js`. It receives `{ tab, args, sites, recon }` and runs in its own background tab in the connected Chrome profile. Browser actions, network reads, and `tab.fetchJson()` use the user's existing login.
+A site adapter is a host-side JavaScript function that uses the same `Tab` API as `js`. It receives `{ tab, args, sites, recon }` and operates its own background tab in the connected Chrome profile. Browser actions, network reads, and `tab.fetchJson()` use the user's existing login.
 
 The optional `domain` is metadata for discovery and the tool icon. It does not navigate the tab; the adapter should call `tab.goto()` when it needs a site origin.
 
 1. Explore the site with `tab.observe()`, `tab.act()`, and `tab.network.read()`. `recon.discover(tab)` can suggest API endpoints, but a candidate is evidence, not a verified contract.
 2. Verify the endpoint or UI workflow, including authentication, arguments, pagination, and errors. Recompute CSRF tokens and request signatures at run time; never save a captured credential or one-time value.
 3. Define the adapter with `tools_define {site, name, description, access, domain?, args?, func}` or `await tools.define({...})` in `js`. The `func` is a JavaScript function source such as `async ({ tab, args }) => { ... }`.
-4. Run the new command with `site_run` and check its actual result. The source is saved under `~/.opencli-mcp/adapters/<site>/<name>.js` and becomes available without restarting the host.
+4. Use the returned `next` call to run the new command with `site_run` and check its actual result. The source is saved under `~/.opencli-mcp/adapters/<site>/<name>.js` and becomes available without restarting the host. For a typed `<site>_<name>` tool, call `sites.enable(site)` in `js` (`write:true` for write commands).
+
+A replacement is validated before it takes the place of an existing adapter. If the new descriptor fails to load, the previous command remains available.
 
 For a logged-in JSON API, navigate to the site's origin before fetching. A minimal function looks like this:
 

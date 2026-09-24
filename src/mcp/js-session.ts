@@ -4,6 +4,7 @@
  * survive across calls; the last expression's value is returned.
  */
 import vm from 'node:vm';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 export interface JsRunResult { value: unknown; writes: string[]; images: Array<{ mimeType: string; base64: string }>; error?: { name: string; message: string; stack?: string; code?: string; hint?: string; data?: Record<string, unknown> } }
 export interface JsImage { mimeType?: string; base64?: string; bytes?: Uint8Array | ArrayBuffer }
@@ -96,8 +97,7 @@ export function transformCode(input: string): string {
 
 export class JsSession {
   private context: vm.Context;
-  private writes: string[] = [];
-  private images: Array<{ mimeType: string; base64: string }> = [];
+  private readonly output = new AsyncLocalStorage<{ writes: string[]; images: Array<{ mimeType: string; base64: string }> }>();
   runs = 0;
 
   constructor(private readonly globals: Record<string, unknown>) {
@@ -107,15 +107,16 @@ export class JsSession {
   private makeContext(): vm.Context {
     const self = this;
     const fmt = (v: unknown): string => typeof v === 'string' ? v : safeStringify(v);
+    const write = (value: string): void => { self.output.getStore()?.writes.push(value); };
     const nodeRepl = {
-      write: (v: unknown) => { self.writes.push(fmt(v)); },
-      emitImage: async (img: JsImage) => { self.images.push(normalizeImage(img)); },
+      write: (v: unknown) => { write(fmt(v)); },
+      emitImage: async (img: JsImage) => { self.output.getStore()?.images.push(normalizeImage(img)); },
     };
     const consoleShim = {
-      log: (...a: unknown[]) => self.writes.push(a.map(fmt).join(' ')),
-      info: (...a: unknown[]) => self.writes.push(a.map(fmt).join(' ')),
-      warn: (...a: unknown[]) => self.writes.push('[warn] ' + a.map(fmt).join(' ')),
-      error: (...a: unknown[]) => self.writes.push('[error] ' + a.map(fmt).join(' ')),
+      log: (...a: unknown[]) => write(a.map(fmt).join(' ')),
+      info: (...a: unknown[]) => write(a.map(fmt).join(' ')),
+      warn: (...a: unknown[]) => write('[warn] ' + a.map(fmt).join(' ')),
+      error: (...a: unknown[]) => write('[error] ' + a.map(fmt).join(' ')),
       debug: () => {},
     };
     return vm.createContext({
@@ -130,7 +131,11 @@ export class JsSession {
   reset(): void { this.context = this.makeContext(); this.runs = 0; }
 
   async run(code: string, opts: { timeoutMs?: number } = {}): Promise<JsRunResult> {
-    this.writes = []; this.images = [];
+    const output = { writes: [] as string[], images: [] as Array<{ mimeType: string; base64: string }> };
+    return this.output.run(output, () => this.runCaptured(code, opts, output));
+  }
+
+  private async runCaptured(code: string, opts: { timeoutMs?: number }, output: { writes: string[]; images: Array<{ mimeType: string; base64: string }> }): Promise<JsRunResult> {
     const body = transformCode(code);
     const wrapped = `(async () => {\n${body}\n})()`;
     const timeoutMs = opts.timeoutMs ?? 300_000;
@@ -139,15 +144,15 @@ export class JsSession {
       const script = new vm.Script(wrapped, { filename: `js-call-${++this.runs}.js` });
       // `timeout` bounds the synchronous part (e.g. while(true){}); the race below bounds awaited work
       const promise = script.runInContext(this.context, { timeout: Math.min(timeoutMs, 30_000) }) as Promise<unknown>;
-      const value = await Promise.race([promise, new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error(`js call timed out after ${Math.round(timeoutMs / 1000)}s`)), timeoutMs); })]);
-      const images = [...this.images];
+      const value = await Promise.race([promise, new Promise<never>((_, rej) => { timer = setTimeout(() => rej(Object.assign(new Error(`js call timed out after ${Math.round(timeoutMs / 1000)}s`), { code: 'command_outcome_unknown', hint: 'The JavaScript may still be running. Inspect browser or site state before retrying.' })), timeoutMs); })]);
+      const images = [...output.images];
       let out = value;
       if (isImageValue(value)) { images.push({ mimeType: value.mimeType, base64: value.base64 }); out = { image: `${value.mimeType} (${Math.round(value.base64.length * 0.75 / 1024)} KB)` }; }
-      return { value: out, writes: [...this.writes], images };
+      return { value: out, writes: [...output.writes], images };
     } catch (err) {
       const e = err as Error & { code?: string; hint?: string; data?: Record<string, unknown> };
       // Preserve the branchable code/hint/data (ActionError) so the js path gets the same coded error envelope as everywhere else.
-      return { value: undefined, writes: [...this.writes], images: [...this.images], error: { name: e.name ?? 'Error', message: e.message ?? String(err), stack: e.stack?.split('\n').slice(0, 4).join('\n'), ...(e.code && { code: e.code }), ...(e.hint && { hint: e.hint }), ...(e.data && typeof e.data === 'object' && { data: e.data }) } };
+      return { value: undefined, writes: [...output.writes], images: [...output.images], error: { name: e.name ?? 'Error', message: e.message ?? String(err), stack: e.stack?.split('\n').slice(0, 4).join('\n'), ...(e.code && { code: e.code }), ...(e.hint && { hint: e.hint }), ...(e.data && typeof e.data === 'object' && { data: e.data }) } };
     } finally { if (timer) clearTimeout(timer); }
   }
 }

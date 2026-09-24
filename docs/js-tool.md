@@ -1,6 +1,7 @@
 ## js — persistent JavaScript session
 
 Top-level `const`/`let` persist across calls (they become session globals). The value of the last expression is returned. Use `nodeRepl.write(text)` for extra output and `await nodeRepl.emitImage({ base64, mimeType })` for images; `tab.screenshot()` already returns an image block when called at top level.
+The first text block is always the JSON result envelope; `nodeRepl.write` output follows as additional text blocks.
 
 Pre-bound session globals (no import/bootstrap): `browser` (the default Chrome), `agent`, `sites`, `recon`, `tools`, `session`, `Tab`, `nodeRepl`. So `await browser.tabs.new(...)` works directly; `const browser = await agent.browsers.getDefault()` is the same object if you prefer to be explicit.
 
@@ -24,4 +25,4 @@ const posts = await sites.reddit.hot({ subreddit: 'programming', limit: 5 });
 posts;
 ```
 
-The full object model is in the generated API reference that follows (`docs_get api-reference`); nothing else exists.
+Call `docs_get` with `name:"api-reference"` when you need the full generated object model. Ordinary `js` results contain only the requested output.

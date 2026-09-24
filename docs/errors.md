@@ -12,4 +12,6 @@ Every error has `code`, `message`, optional `hint`, and any structured data spre
 | expectations & adapters | `expectation_failed` (+`expect`, `failed`, `state`), `invalid_definition`, `unknown_site`, `unknown_command`, `adapter_load` | inspect the failed expectation or adapter definition |
 | claiming tabs | `claim_not_found`, `claim_ambiguous` (+candidates), `claim_identity_mismatch`, `claim_not_allowed`, `already_claimed` | call `tab_list` with `user:true` and claim by `tabId` |
 | ending tabs | `tab_close_failed`, `tab_release_failed` | Chrome refused to close or release the tab; its lease remains active, so retry `tab_close`, `tab_release`, or `session_finalize` |
-| runtime | `browser_unavailable`, `unsupported_backend`, `unknown_browser`, `unknown_capability`, `unknown_doc`, `evaluate_read_only`, `cancelled`, `command_lost`, `command_failed`, `result_evicted` | run `doctor`; use `tab.act` for writes; retry after reconnect |
+| host unavailable | `host_unavailable` | Chrome or the extension is not connected yet. Keep the MCP session open, start Chrome, and retry the call |
+| runtime | `browser_unavailable`, `unsupported_backend`, `unknown_browser`, `unknown_capability`, `unknown_doc`, `evaluate_read_only`, `cancelled`, `command_failed` | run `doctor` when the browser bridge is unavailable; use `tab.act` for page writes |
+| uncertain outcome | `command_outcome_unknown`, `command_lost`, `result_evicted` | the command may already have applied. Inspect the browser or site state before deciding whether to run it again |

@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
+import { randomUUID } from 'node:crypto';
 import { USER_ADAPTERS_DIR } from '../lib/sources.js';
 
 import type { Arg } from 'opencli-mcp/adapter-sdk';
@@ -78,8 +79,14 @@ export async function saveTool(def: ToolDefinition): Promise<{ file: string; sit
   const dir = path.join(ensureUserSource(), def.site);
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${def.name}.js`);
-  fs.writeFileSync(file, renderAdapterModule(def));
-  await import(`${pathToFileURL(file).href}?t=${Date.now()}`); // load once now to surface a bad descriptor immediately
+  const staged = path.join(dir, `.${def.name}-${randomUUID()}.js`);
+  try {
+    fs.writeFileSync(staged, renderAdapterModule(def));
+    await import(pathToFileURL(staged).href); // reject an invalid descriptor without replacing the working adapter
+    fs.renameSync(staged, file);
+  } finally {
+    if (fs.existsSync(staged)) fs.rmSync(staged);
+  }
   return { file, site: def.site, name: def.name };
 }
 

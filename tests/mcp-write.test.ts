@@ -34,12 +34,17 @@ describe('write commands execute directly', () => {
   it('exposes explicit tab discovery, release, and close', async () => {
     const h = await harness();
     try {
-      const names = (await h.client.listTools()).tools.map((t) => t.name);
+      const listed = (await h.client.listTools()).tools;
+      const names = listed.map((t) => t.name);
       expect(names).toContain('tab_list');
       expect(names).toContain('tab_close');
       expect(names).toContain('tab_release');
+      expect(listed.find((t) => t.name === 'tab_act')?.inputSchema).toMatchObject({ type: 'object', properties: { action: expect.any(Object), target: expect.any(Object) } });
+      expect(body(await h.client.callTool({ name: 'sites_search', arguments: {} }))).toMatchObject({ ok: true, sites: expect.arrayContaining([expect.objectContaining({ site: h.site })]) });
       const unavailable = await h.client.callTool({ name: 'tab_list', arguments: { user: true } });
       expect(body(unavailable)).toMatchObject({ ok: false, error: { code: 'browser_unavailable' } });
+      expect(body(await h.client.callTool({ name: 'tab_act', arguments: { action: 'back' } }))).toMatchObject({ ok: false, error: { code: 'browser_unavailable' } });
+      expect((await h.client.callTool({ name: 'tab_act', arguments: { action: 'press', target: { text: 'Search' } } })).isError).toBe(true);
     } finally { await h.cleanup(); }
   });
 
@@ -56,6 +61,37 @@ describe('write commands execute directly', () => {
       const js = await h.client.callTool({ name: 'js', arguments: { code: `await sites.${h.site}.poke({})` } });
       expect(body(js)).toMatchObject({ ok: true, value: { done: true } });
       expect(h.elicits()).toBe(0);
+      const simple = await h.client.callTool({ name: 'js', arguments: { code: '1 + 1' } });
+      expect(simple.content).toMatchObject([{ type: 'text', text: '{"ok":true,"value":2}' }]);
+      expect((await h.client.callTool({ name: 'docs_get', arguments: { name: 'api-reference' } })).content).toMatchObject([{ type: 'text', text: expect.stringContaining('class Tab') }]);
+      const withOutput = await h.client.callTool({ name: 'js', arguments: { code: 'nodeRepl.write("detail")' } });
+      expect(body(withOutput)).toMatchObject({ ok: true, value: null });
+      expect(withOutput.content).toMatchObject([{ type: 'text' }, { type: 'text', text: 'detail' }]);
+    } finally { await h.cleanup(); }
+  });
+
+  it('refreshes discovery and a typed tool when its adapter is redefined', async () => {
+    const h = await harness();
+    try {
+      await h.client.callTool({ name: 'js', arguments: { code: `await sites.enable('${h.site}', { write: true })` } });
+      const defined = await h.client.callTool({ name: 'tools_define', arguments: { site: h.site, name: 'poke', description: 'updated adapter', access: 'write', args: [{ name: 'message', required: true }], func: 'async ({ args }) => ({ message: args.message })' } });
+      expect(body(defined)).toMatchObject({ ok: true, args: [{ name: 'message', required: true }], next: { tool: 'site_run' }, typedToolAvailable: true });
+      const tool = (await h.client.listTools()).tools.find((t) => t.name === `${h.site}_poke`);
+      expect(tool?.description).toContain('updated adapter');
+      expect(tool?.inputSchema).toMatchObject({ required: ['message'] });
+      const hits = body(await h.client.callTool({ name: 'sites_search', arguments: { query: h.site } }));
+      expect(hits).toMatchObject({ ok: true, results: expect.arrayContaining([expect.objectContaining({ name: 'poke', args: [expect.objectContaining({ name: 'message' })] })]) });
+      expect(body(await h.client.callTool({ name: 'site_run', arguments: { site: h.site, command: 'poke', args: { x: 'old' } } }))).toMatchObject({ ok: false, error: { code: 'invalid_args' } });
+      expect(body(await h.client.callTool({ name: `${h.site}_poke`, arguments: { message: 'new' } }))).toMatchObject({ ok: true, value: { message: 'new' } });
+    } finally { await h.cleanup(); }
+  });
+
+  it('keeps the working adapter when a replacement cannot load', async () => {
+    const h = await harness();
+    try {
+      const failed = await h.client.callTool({ name: 'tools_define', arguments: { site: h.site, name: 'poke', description: 'broken replacement', access: 'write', func: '(() => { throw new Error("bad descriptor"); })()' } });
+      expect(failed.isError).toBe(true);
+      expect(body(await h.client.callTool({ name: 'site_run', arguments: { site: h.site, command: 'poke', args: {} } }))).toMatchObject({ ok: true, value: { done: true } });
     } finally { await h.cleanup(); }
   });
 

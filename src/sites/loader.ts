@@ -55,12 +55,21 @@ export class SiteRegistry {
 
   private existingDirs(): Source[] { return this.sources.filter((s) => { try { return fs.statSync(s.dir).isDirectory(); } catch { return false; } }); }
 
-  /** A cheap fingerprint of every source/site dir mtime, so the index rebuilds only when files actually change. */
+  /** Include file identity: replacing an adapter does not update its parent directory mtime. */
   private stamp(): string {
     const parts: string[] = [];
     for (const s of this.existingDirs()) {
       try { parts.push(`${s.dir}:${fs.statSync(s.dir).mtimeMs}`); } catch { /* ignore */ }
-      for (const site of this.siteDirs(s.dir)) { try { parts.push(`${site}:${fs.statSync(path.join(s.dir, site)).mtimeMs}`); } catch { /* ignore */ } }
+      for (const site of this.siteDirs(s.dir)) {
+        const dir = path.join(s.dir, site);
+        try {
+          parts.push(`${dir}:${fs.statSync(dir).mtimeMs}`);
+          for (const name of fs.readdirSync(dir).filter(isCommandFile).sort()) {
+            const stat = fs.statSync(path.join(dir, name));
+            parts.push(`${name}:${stat.ino}:${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}`);
+          }
+        } catch { /* ignore a concurrently removed source */ }
+      }
     }
     return parts.join('|');
   }
@@ -91,7 +100,8 @@ export class SiteRegistry {
   }
 
   private async importDescriptor(file: string): Promise<Record<string, unknown>> {
-    const mod = await import(`${pathToFileURL(file).href}?t=${fs.statSync(file).mtimeMs}`) as { default?: Record<string, unknown> };
+    const stat = fs.statSync(file);
+    const mod = await import(`${pathToFileURL(file).href}?t=${stat.ino}-${stat.mtimeMs}-${stat.ctimeMs}-${stat.size}`) as { default?: Record<string, unknown> };
     if (!mod.default || typeof mod.default.run !== 'function') throw Object.assign(new Error(`${file} must \`export default defineAdapter({...})\``), { code: 'adapter_load' });
     return mod.default;
   }

@@ -106,7 +106,7 @@ MCP client → opencli-mcp launcher → local host ⇄ Chrome extension → webs
 Chrome starts the local host through Native Messaging. The extension operates browser tabs using Chrome's debugger APIs and Playwright's injected locator engine. The host exposes browser operations, site commands, and tool authoring through MCP.
 Each MCP client connection has its own tab and JavaScript session, so one client's cleanup does not close another client's tabs.
 
-Chrome and the extension must be connected before the MCP launcher starts. Both browser operations and site adapters use that same connection. Run `opencli-mcp doctor` if the client cannot connect.
+The MCP launcher can start before Chrome. It keeps the client connection open and reconnects when the Chrome-owned host appears or restarts. Browser operations and site adapters use that host; run `opencli-mcp doctor` if it stays unavailable.
 
 The host also supports Streamable HTTP for remote clients. See [remote access and configuration](docs/setup.md#remote-clients).
 

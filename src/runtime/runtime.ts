@@ -7,6 +7,7 @@ import type { ExtensionBridge } from '../host/bridge.js';
 import type { BrowserEvent } from '../protocol.js';
 import { SiteRegistry } from '../sites/loader.js';
 import { runAdapter, type CommandRunResult, type CommandRunError, type PageProvider } from '../sites/executor.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { listDefinedTools, ensureUserSource, saveTool, deleteTool, type ToolDefinition } from '../sites/define.js';
 import { defaultSources } from '../lib/sources.js';
 import { createExtensionPage, type ExtensionRuntimePage } from '../backends/extension-page.js';
@@ -65,6 +66,8 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
   readonly registry = new SiteRegistry(defaultSources());
   readonly sessions = new Map<string, SessionState>();
   private readonly adapterPages = new Map<string, Promise<RuntimePage>>();
+  private readonly adapterRuns = new Map<string, Promise<void>>();
+  private readonly adapterCallContext = new AsyncLocalStorage<{ sites: Set<string>; retired: boolean }>();
   private readonly siteApis = new Map<string, AgentApi>();
   bridge: ExtensionBridge | null;
   readonly cursorEnabled: boolean;
@@ -156,8 +159,31 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
 
   async runSite(site: string, name: string, args: Record<string, unknown>, opts: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<CommandRunResult | CommandRunError> {
     const cmd = await this.registry.resolve(site, name);
-    const r = await runAdapter(this, cmd, args, opts);
-    return r;
+    const active = this.adapterCallContext.getStore();
+    if (active?.retired) return { ok: false, site, name, error: { code: 'command_outcome_unknown', message: 'The parent adapter call has timed out or been cancelled', hint: 'Inspect browser or site state before retrying.' }, elapsedMs: 0 };
+    // A nested call into the same site is part of the current workflow and already owns its page.
+    if (active?.sites.has(site)) return runAdapter(this, cmd, args, opts);
+    const previous = this.adapterRuns.get(site) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => { release = resolve; });
+    this.adapterRuns.set(site, current);
+    await previous;
+    try {
+      const callContext = { sites: new Set([...(active?.sites ?? []), site]), retired: false };
+      const result = await this.adapterCallContext.run(callContext, () => runAdapter(this, cmd, args, opts));
+      if (!result.ok && result.error.code === 'command_outcome_unknown') {
+        callContext.retired = true;
+        // Timed-out adapter code may still be running. Retire its page before the next call uses this site.
+        const key = `site:${site}`;
+        const page = this.adapterPages.get(key);
+        this.adapterPages.delete(key);
+        await page?.then((p) => p.closeWindow()).catch(() => {});
+      }
+      return result;
+    } finally {
+      release();
+      if (this.adapterRuns.get(site) === current) this.adapterRuns.delete(site);
+    }
   }
 
   async defineTool(def: ToolDefinition): Promise<{ file: string; site: string; name: string }> {

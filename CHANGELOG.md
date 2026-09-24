@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.18 — 2026-09-24
+
+- Make site capabilities browsable without a search term and return actionable metadata after defining an adapter. Validate replacements before installing them, refresh discovery and typed tool schemas when definitions change, and reject unknown or malformed command arguments.
+- Load the JavaScript API reference on demand instead of attaching it to the first `js` result. Keep the result envelope first, isolate concurrent call output, and update MCP guidance and connection documentation.
+- Serialize adapter workflows sharing a site tab. Stop replaying tool calls after a host disconnect; report uncertain outcomes from interrupted or timed-out operations so agents can inspect state before retrying.
+
 ## 0.0.17 — 2026-09-24
 
 - Export the adapter SDK directly from the main package as `opencli-mcp/adapter-sdk`. Built-in and user-defined adapters now use the same package path without a separate bundled SDK dependency.

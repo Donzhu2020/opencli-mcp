@@ -46,6 +46,7 @@ function docsDir(): string {
 
 const docCache = new Map<string, string | null>();
 export function readDoc(name: string): string | null {
+  if (!DOCS_MANIFEST.some((doc) => doc.name === name)) return null;
   const hit = docCache.get(name);
   if (hit !== undefined) return hit;
   const file = path.join(docsDir(), `${name}.md`);

@@ -57,12 +57,13 @@ async function proxyToHost(version: string, log: (m: string) => void): Promise<v
     return connecting;
   };
   const isDisconnect = (err: unknown): boolean => err instanceof HostUnavailableError || /closed|ECONNREFUSED|ECONNRESET|fetch failed|not connected|terminated/i.test(String((err as Error)?.message ?? err));
-  // Run an upstream call; on a disconnect, drop the client and retry once (reconnect to a possibly-restarted host).
+  // Discovery reads may be retried after a disconnect; writes must never be replayed blindly.
   const via = async <T>(fn: (c: Client) => Promise<T>): Promise<T> => {
     try { return await fn(await ensure()); }
     catch (err) { if (!isDisconnect(err)) throw err; client = null; return fn(await ensure()); }
   };
   const hostDownError = (err: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify({ ok: false, error: { code: 'host_unavailable', message: `opencli-mcp host not reachable: ${String((err as Error)?.message ?? err)}`, hint: 'Open Chrome and enable the extension, then retry. Run opencli-mcp doctor if it stays unavailable.', retryable: true } }) }], isError: true });
+  const unknownOutcomeError = (err: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify({ ok: false, error: { code: 'command_outcome_unknown', message: `Host connection dropped during the tool call: ${String((err as Error)?.message ?? err)}`, hint: 'The command may have applied. Inspect browser or site state before deciding whether to run it again.', retryable: false } }) }], isError: true });
 
   server = new Server({ name: 'opencli-mcp', version }, {
     capabilities: { tools: { listChanged: true }, resources: { listChanged: true }, prompts: { listChanged: true }, logging: {} },
@@ -87,7 +88,9 @@ async function proxyToHost(version: string, log: (m: string) => void): Promise<v
         ? { onprogress: (p) => { void ctx.mcpReq.notify({ method: 'notifications/progress', params: { ...p, progressToken } }); } }
         : {}),
     });
-    try { return await via(call); } catch (err) { if (isDisconnect(err)) return hostDownError(err); throw err; }
+    let upstream: Client;
+    try { upstream = await ensure(); } catch (err) { if (isDisconnect(err)) return hostDownError(err); throw err; }
+    try { return await call(upstream); } catch (err) { if (isDisconnect(err)) { client = null; return unknownOutcomeError(err); } throw err; }
   });
   server.setRequestHandler('resources/list', async (r) => discover((c) => c.listResources(r.params), catalog.resources));
   server.setRequestHandler('resources/templates/list', async (r) => discover((c) => c.listResourceTemplates(r.params), catalog.resourceTemplates));

@@ -26,6 +26,19 @@ describe('js session', () => {
     const r = await s.run('shot()');
     expect(r.images).toHaveLength(1); expect(r.value).toMatchObject({ image: expect.stringContaining('image/png') });
   });
+  it('keeps concurrent call output with the call that wrote it', async () => {
+    let resume!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>((resolve) => { resume = resolve; });
+    const entered = new Promise<void>((resolve) => { started = resolve; });
+    const s = new JsSession({ wait: async () => { started(); await gate; } });
+    const first = s.run('nodeRepl.write("first"); await wait(); nodeRepl.write("after"); 1');
+    await entered;
+    const second = await s.run('nodeRepl.write("second"); 2');
+    resume();
+    expect((await first).writes).toEqual(['first', 'after']);
+    expect(second.writes).toEqual(['second']);
+  });
 });
 
 describe('safeStringify', () => {

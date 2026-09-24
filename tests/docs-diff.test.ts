@@ -9,6 +9,7 @@ describe('docs manifest', () => {
     expect(ext).toContain('Tabs are the user');
     expect(none).not.toContain('Tabs are the user');
     expect(readDoc('confirmations')).toBeNull();
+    expect(readDoc('../README')).toBeNull();
     expect(ext).not.toMatch(/confirmWrites|askNewOrigins|allowOrigin/);
     expect(readDoc('js-tool')).toContain('agent.browsers');
     expect(readDoc('api-reference')).toContain('class Tab');

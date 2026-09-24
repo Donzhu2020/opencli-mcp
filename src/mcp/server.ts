@@ -9,7 +9,7 @@ import { createAgentApi, Tab, type AgentApi, type ActAction } from '../api/agent
 import { ActionError, errorEnvelope } from '../api/errors.js';
 import { JsSession, safeStringify } from './js-session.js';
 import { buildInstructions, listDocs, readDoc, type DocContext } from '../docs/manifest.js';
-import { argsToShape, coerceArgs } from '../sites/schema.js';
+import { argsToShape, argSpec, coerceArgs } from '../sites/schema.js';
 import { listDefinedTools } from '../sites/define.js';
 import { checkActInput, checkExpect } from './act-input.js';
 
@@ -151,7 +151,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     inputSchema: { tab: z.string().optional().describe('required when the session has more than one tab'), maxChars: z.number().int().min(200).max(80_000).optional().describe('stop after this many characters (default 60000)'), start: z.number().int().min(0).optional().describe('character offset returned as nextStart by a previous read') },
     annotations: { readOnlyHint: true },
   }, async ({ tab, maxChars, start }) => run(async () => { const t = await tabOf(tab); return ok({ tab: t.id, ...(await t.read({ maxChars, start })) }); }));
-  server.registerTool('tab_act', { title: 'Act on a tab', description: 'One action: click, dblclick, hover, focus, fill (replace; value required, "" clears), type (append), press (key, no default), select, check/uncheck, upload (files), drag (to), scroll, back/forward/reload. Exactly one locator on target. Extra fields for that action are invalid_args with details.expected. Waits for actionability and dispatches a real mouse or key event. click fails with not_delivered when the page receives no pointerdown or mousedown. method:"dom" is click-only: HTMLElement.click() and no mouse event, only after not_delivered or a target with no box. Do not send method:"dom" after a click that already returned ok.',
+  server.registerTool('tab_act', { title: 'Act on a tab', description: 'One action. click/dblclick/hover/focus/check/uncheck need target; fill/type/press/select need target+value (press has no default key; value:"" clears with fill); upload needs target+files; drag needs target+to; scroll takes direction/amount and optional target; back/forward/reload take no target. Invalid combinations return invalid_args with details.expected. click sends a real mouse event; method:"dom" is click-only and only after not_delivered or no box. Do not repeat a click that returned ok.',
     inputSchema: { tab: z.string().optional().describe('required when the session has more than one tab'), action: z.enum(['click', 'dblclick', 'hover', 'focus', 'fill', 'type', 'press', 'select', 'check', 'uncheck', 'upload', 'drag', 'scroll', 'back', 'forward', 'reload']), target: targetSchema.optional(), value: z.string().optional().describe('fill/type text, press key, or select option. Required for those actions; "" fill clears'), files: z.array(z.string()).optional().describe('upload only'), to: targetSchema.optional().describe('drag only'), direction: z.enum(['up', 'down', 'left', 'right']).optional().describe('scroll only'), amount: z.number().optional().describe('scroll only'), method: z.enum(['cdp', 'dom']).optional().describe('click only. dom = HTMLElement.click(), no mouse event. Default cdp = real mouse event'), settleMs: z.number().int().min(0).max(10_000).default(600).describe('wait for the DOM to settle after the action'), observe: z.boolean().default(false).describe('also return the page state after the action') },
     annotations: { destructiveHint: true, openWorldHint: true },
   }, async ({ tab, action, target, to, observe, value, files, direction, amount, settleMs, method }) => run(async () => {
@@ -165,16 +165,22 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   server.registerTool('tab_expect', { title: 'Expect', description: 'Assert what the page must show now. At least one of text / notText / url / title / selector / ref is required (visible:false requires absence, and needs selector or ref). Polls up to timeout seconds; fails with expectation_failed.', inputSchema: { tab: z.string().optional().describe('required when the session has more than one tab'), text: z.string().optional(), notText: z.string().optional(), url: z.string().optional(), title: z.string().optional(), selector: z.string().optional(), ref: z.string().optional(), visible: z.boolean().optional().describe('with selector or ref; false requires absence'), timeout: z.number().default(5) }, annotations: { readOnlyHint: true } }, async ({ tab, timeout, ...what }) => run(async () => { checkExpect(what); const t = await tabOf(tab); return ok({ tab: t.id, ...(await t.expect(what, { timeoutMs: timeout * 1000 })) }); }));
 
   // ── sites ──
-  server.registerTool('sites_search', { title: 'Search sites & commands', description: 'Find site commands by keyword or domain. Each hit includes args[{name,type,required,help,default,choices}] — copy those into site_run. Do not invent parameters.', inputSchema: { query: z.string(), limit: z.number().int().max(100).default(20) }, annotations: { readOnlyHint: true } }, async ({ query, limit }) => run(async () => ok({ results: await api.sites.search(query, limit) })));
+  server.registerTool('sites_search', { title: 'Find site capabilities', description: 'No query: list available sites with sample commands. With a task, site, or domain as query: find matching commands. Results include args[{name,type,required,help,default,choices}] for site_run. Do not invent parameters.', inputSchema: { query: z.string().optional().describe('task, site, or domain; omit to browse available sites'), limit: z.number().int().min(1).max(100).default(20) }, annotations: { readOnlyHint: true } }, async ({ query, limit }) => run(async () => query?.trim() ? ok({ results: await api.sites.search(query, limit) }) : ok({ sites: rt.registry.sites().slice(0, limit) })));
   server.registerTool('site_run', { title: 'Run a site command', description: 'Run one site command. args must match the args list from sites_search. Invalid args return invalid_args with details.expected. Valid commands execute directly, including writes.', inputSchema: { site: z.string(), command: z.string(), args: z.record(z.string(), z.unknown()).default({}) }, annotations: { openWorldHint: true } }, async ({ site, command, args }, extra) => run(() => runSiteWithProgress(site, command, args, ctxExtra(extra))));
 
   // ── capabilities ──
 
   // ── recon & tools ──
   const argDef = z.object({ name: z.string(), type: z.enum(['string', 'int', 'number', 'boolean']).optional(), default: z.unknown().optional(), required: z.boolean().optional(), help: z.string().optional(), choices: z.array(z.string()).optional() });
-  server.registerTool('tools_define', { title: 'Define a site adapter', description: 'Save an explicit browser-backed adapter — usable as sites.<site>.<name>() in js and the <site>_<name> tool. `func` is the source of `async ({ tab, args, sites, recon }) => {…}`. Verify any endpoint before using tab.fetchJson. Written to ~/.opencli-mcp/adapters and available immediately.',
+  server.registerTool('tools_define', { title: 'Define a site adapter', description: 'Read docs_get {name:"define-tools"} before authoring. Save a host-side JavaScript adapter for immediate use through site_run or sites.<site>.<name>() in js. `func` is the source of `async ({ tab, args, sites, recon }) => {…}`; browser access goes through tab. Verify endpoints before encoding them. A typed <site>_<name> tool appears after sites.enable(site) in js.',
     inputSchema: { site: z.string(), name: z.string(), description: z.string(), access: z.enum(['read', 'write']), domain: z.string().optional(), args: z.array(argDef).optional(), func: z.string() },
-  }, async (def) => run(async () => ok(await api.tools.define(def))));
+  }, async (def) => run(async () => {
+    const saved = await api.tools.define(def);
+    const cmd = await rt.registry.resolve(def.site, def.name);
+    await syncSiteTools();
+    const enabled = state.enabledSites.get(def.site);
+    return ok({ ...saved, description: cmd.description, access: cmd.access, args: argSpec(cmd.args), next: { tool: 'site_run', arguments: { site: def.site, command: def.name, args: {} }, note: 'Supply required args and verify the result. To expose a typed tool, call sites.enable(site) in js (write:true for write commands).' }, typedToolAvailable: Boolean(enabled && (enabled.write || cmd.access === 'read')) });
+  }));
 
   // ── docs ──
   server.registerTool('docs_list', { title: 'List docs', description: 'Documentation available for this backend.', inputSchema: {}, annotations: { readOnlyHint: true } }, async () => run(async () => ok({ docs: listDocs(docCtx()).filter((d) => d.available).map(({ name, mode, description }) => ({ name, mode, description })) })));
@@ -183,53 +189,63 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   // ── code mode ──
   const jsGlobals = { agent: api.agent, browser: api.agent.browser, sites: api.sites, recon: api.recon, tools: api.tools, session: api.session, Tab };
   server.registerTool('js', {
-    title: 'JavaScript session', description: 'Host-side JavaScript against the object model, not page JavaScript. Page scripts go through tab.evaluate. Pre-bound: browser, agent, sites, recon, tools, session. Top-level const/let persist; the last expression is returned. Example: const tab = await browser.tabs.new(url); await tab.observe(); await sites.twitter.bookmarks({ limit: 5 }). First call also returns the API reference — read it once.',
+    title: 'JavaScript session', description: 'Host-side JavaScript against the object model, not page JavaScript. Page scripts go through tab.evaluate. Pre-bound: browser, agent, sites, recon, tools, session. Top-level const/let persist; the last expression is returned. Example: const tab = await browser.tabs.new(url); await tab.observe(). For the full API, call docs_get {name:"api-reference"} when needed.',
     inputSchema: { code: z.string(), timeoutMs: z.number().int().max(1_800_000).default(300_000) },
     annotations: { openWorldHint: true, destructiveHint: true },
   }, async ({ code, timeoutMs }) => run(async () => {
     if (!state.js) state.js = new JsSession(jsGlobals);
-    const first = state.js.runs === 0;
     const r = await state.js.run(code, { timeoutMs });
     const content: Content = [];
-    if (first) { const ref = readDoc('api-reference') ?? ''; content.push(text(`# API\n${readDoc('js-tool') ?? ''}\n\n${ref}\n\n# Result`)); }
-    if (r.writes.length) {
-      const joined = r.writes.join('\n');
-      content.push(text(joined.length > 24_000 ? `${joined.slice(0, 24_000)}\n…(truncated ${joined.length - 24_000} chars)` : joined));
-    }
     if (r.error) {
       // Same coded envelope as every other tool: branchable code/hint/data when the throw was an ActionError, else a generic js_error.
       const e = r.error;
       const env = { ok: false as const, error: { code: e.code ?? 'js_error', message: e.message, ...(e.hint && { hint: e.hint }), ...(e.data && { ...e.data }), ...(!e.code && e.stack && { stack: e.stack }) } };
       content.push(text(safeStringify(env, 120_000)));
     } else if (r.value !== undefined) content.push(text(safeStringify({ ok: true, value: r.value }, 120_000)));
-    else if (!r.writes.length) content.push(text(safeStringify({ ok: true, value: null }, 120_000)));
+    else content.push(text(safeStringify({ ok: true, value: null }, 120_000)));
+    if (r.writes.length) {
+      const joined = r.writes.join('\n');
+      content.push(text(joined.length > 24_000 ? `${joined.slice(0, 24_000)}\n…(truncated ${joined.length - 24_000} chars)` : joined));
+    }
     for (const img of r.images) content.push({ type: 'image', data: img.base64, mimeType: img.mimeType });
     return { content, isError: Boolean(r.error) };
   }));
   server.registerTool('js_reset', { title: 'Reset JavaScript session', description: 'Discard all JavaScript bindings (tabs and browser state are untouched).', inputSchema: {} }, async () => run(async () => { state.js?.reset(); return ok({ reset: true }); }));
 
   // ── dynamic site tools ──
-  const siteTools = new Map<string, RegisteredTool>();
+  const siteTools = new Map<string, { reg: RegisteredTool; metadata: string }>();
   const syncSiteTools = async (): Promise<void> => {
     const wanted = new Set<string>();
+    let changed = false;
     for (const [site, { write }] of state.enabledSites) {
       for (const cmd of await rt.registry.commands(site)) {
         if (!write && cmd.access === 'write') continue;
         const name = `${site}_${cmd.name}`.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64);
         wanted.add(name);
-        if (siteTools.has(name)) continue;
-        const reg = server.registerTool(name, {
+        const descriptor = {
           title: `${site} ${cmd.name}`,
           description: `${cmd.description}${cmd.domain ? ` (${cmd.domain})` : ''} [${cmd.access}]`,
-          inputSchema: argsToShape(cmd.args),
+          inputSchema: z.object(argsToShape(cmd.args)).strict(),
           annotations: { readOnlyHint: cmd.access === 'read', destructiveHint: cmd.access === 'write', openWorldHint: true },
-          ...(cmd.domain ? { icons: [{ src: `https://${cmd.domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '')}/favicon.ico` }] } : {}),
-        }, async (args, extra) => run(() => runSiteWithProgress(site, cmd.name, args as Record<string, unknown>, ctxExtra(extra))));
-        siteTools.set(name, reg);
+          icons: cmd.domain ? [{ src: `https://${cmd.domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '')}/favicon.ico` }] : [],
+        };
+        const metadata = JSON.stringify({ description: cmd.description, access: cmd.access, domain: cmd.domain, args: cmd.args });
+        const current = siteTools.get(name);
+        if (current) {
+          if (current.metadata !== metadata) {
+            current.reg.update({ title: descriptor.title, description: descriptor.description, paramsSchema: descriptor.inputSchema, annotations: descriptor.annotations, icons: descriptor.icons });
+            current.metadata = metadata;
+            changed = true;
+          }
+          continue;
+        }
+        const reg = server.registerTool(name, descriptor, async (args, extra) => run(() => runSiteWithProgress(site, cmd.name, args as Record<string, unknown>, ctxExtra(extra))));
+        siteTools.set(name, { reg, metadata });
+        changed = true;
       }
     }
-    for (const [name, reg] of siteTools) if (!wanted.has(name)) { reg.remove(); siteTools.delete(name); }
-    if (server.isConnected()) server.sendToolListChanged();
+    for (const [name, { reg }] of siteTools) if (!wanted.has(name)) { reg.remove(); siteTools.delete(name); changed = true; }
+    if (changed && server.isConnected()) server.sendToolListChanged();
   };
   const onToolsChanged = (): void => { void syncSiteTools().catch((err) => rt.emit('log', `syncSiteTools failed: ${(err as Error).message}`)); };
   if (persistent) rt.on('tools-changed', onToolsChanged);

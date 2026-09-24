@@ -22,7 +22,7 @@ export const DEFAULT_TIMEOUT_MS = 120_000;
 function withTimeout<T>(p: Promise<T>, ms: number, label: string, signal?: AbortSignal): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     let settled = false;
-    const timer = setTimeout(() => finish(() => reject(Object.assign(new Error(`${label} timed out after ${Math.round(ms / 1000)}s`), { code: 'timeout' }))), ms);
+    const timer = setTimeout(() => finish(() => reject(new ActionError('command_outcome_unknown', `${label} timed out after ${Math.round(ms / 1000)}s`, 'The adapter may still be running. Inspect browser or site state before retrying.'))), ms);
     const finish = (fn: () => void): void => {
       if (settled) return;
       settled = true;
@@ -30,7 +30,7 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string, signal?: Abort
       if (signal) signal.removeEventListener('abort', onAbort);
       fn();
     };
-    const onAbort = (): void => finish(() => reject(new ActionError('cancelled', `${label} cancelled by the client`)));
+    const onAbort = (): void => finish(() => reject(new ActionError('command_outcome_unknown', `${label} stopped waiting after client cancellation`, 'The adapter may still be running. Inspect browser or site state before retrying.')));
     // Attach before checking aborted, so a rejection from work already started cannot escape.
     p.then((v) => finish(() => resolve(v)), (e) => finish(() => reject(e)));
     if (signal?.aborted) onAbort();

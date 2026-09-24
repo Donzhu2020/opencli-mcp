@@ -146,7 +146,7 @@ try {
   host.stderr.on('data', (chunk) => { stderr += chunk; });
   host.stdout.resume();
   const { encodeFrame } = await import('../dist/src/host/native-messaging.js');
-  host.stdin.write(encodeFrame({ type: 'hello', extensionVersion: 'test' }));
+  host.stdin.write(encodeFrame({ type: 'hello', extensionVersion: 'test', features: [] }));
   const stateFile = path.join(stateDir, 'run', 'host.json');
   const deadline = Date.now() + 10_000;
   while (!fs.existsSync(stateFile) && Date.now() < deadline && host.exitCode === null) await new Promise((resolve) => setTimeout(resolve, 50));
@@ -190,6 +190,9 @@ try {
   assert(!/^\s+install\s/m.test(help));
   await cli(['install'], 2);
   console.log('setup smoke passed');
+} catch (error) {
+  if (stderr) process.stderr.write(`Native host stderr:\n${stderr}`);
+  throw error;
 } finally {
   await mcp?.close().catch(() => {});
   if (host && host.exitCode === null) {

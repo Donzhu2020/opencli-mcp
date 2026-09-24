@@ -11,7 +11,7 @@ For the recommended npm + Chrome Web Store installation, follow the [README quic
 
 It then checks the live browser connection. If disconnected, it opens the Chrome Web Store and waits for the extension to connect. The extension retries automatically, so you can install it before or after running setup. Already connected? No store page is opened.
 
-`setup` never installs an extension silently. Add it through the Chrome Web Store. It also does not overwrite existing MCP client settings. If an existing entry points at an old location, replace that entry with the configuration printed by setup.
+`setup` never installs an extension silently. Add it through the Chrome Web Store or from the manual-install zip in GitHub Releases. It also does not overwrite existing MCP client settings. If an existing entry points at an old location, replace that entry with the configuration printed by setup.
 
 ### Setup options
 
@@ -118,6 +118,16 @@ Only extension developers need an unpacked build:
 
 The development manifest uses the published extension's key, so it has the same ID. Use one build at a time. After changing extension code, run `npm run build:ext` and click **Reload** in Chrome.
 
+## Manual extension installation
+
+Starting with v0.0.20, each [GitHub Release](https://github.com/jackwener/opencli-mcp/releases) includes `opencli-mcp-extension-manual-install-<extension-version>.zip`. The extension version is separate from the npm package version.
+
+1. Download and extract the zip. Select the extracted directory containing `manifest.json`; Chrome cannot load the zip directly.
+2. In `chrome://extensions`, enable **Developer mode**. Disable the Web Store copy if present, then choose **Load unpacked** and select that directory.
+3. Run `opencli-mcp setup --no-open` and `opencli-mcp doctor` to verify the connection.
+
+Keep the extracted directory in place while using the extension. For an update, extract the newer zip to a stable directory and reload the extension in Chrome. The manual zip includes `manifest.key`, so Chrome uses the same extension ID as the Web Store copy. Do not use the separate Web Store upload zip with **Load unpacked**.
+
 ## From a release tarball
 
 Download a package from [GitHub Releases](https://github.com/jackwener/opencli-mcp/releases), then run:
@@ -127,7 +137,7 @@ npm install -g ./opencli-mcp-<version>.tgz
 opencli-mcp setup
 ```
 
-Use the same Chrome Web Store extension as the npm installation.
+Install the Chrome extension from the Web Store or use the manual-install zip above.
 
 ## Updating
 

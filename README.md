@@ -28,6 +28,8 @@ You need **Node.js 22 or newer**, **Google Chrome**, and an **MCP client**. The 
 
 [**Install opencli-mcp from the Chrome Web Store →**](https://chromewebstore.google.com/detail/opencli-mcp/lnaoghmfcdnbhgcihkakfobckmfhllkg)
 
+For an extension version ahead of the Web Store, download the **manual-install zip** from [GitHub Releases](https://github.com/jackwener/opencli-mcp/releases) and follow the [manual installation steps](docs/setup.md#manual-extension-installation).
+
 ### 2. Install the npm package and set up the connection
 
 ```bash

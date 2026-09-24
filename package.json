@@ -1,6 +1,6 @@
 {
   "name": "opencli-mcp",
-  "version": "0.0.19",
+  "version": "0.0.20",
   "description": "Chrome-backed MCP browser service with optional site adapters.",
   "repository": {
     "type": "git",

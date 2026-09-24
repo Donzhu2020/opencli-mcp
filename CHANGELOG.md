@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.20 — 2026-09-25
+
+- release: add manual extension asset and bump extension to 0.0.15
+- fix: reuse initial tabs in new browser windows
+
 ## 0.0.19 — 2026-09-24
 
 - chore: bump Chrome extension to 0.0.14

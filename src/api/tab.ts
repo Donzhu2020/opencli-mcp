@@ -209,7 +209,7 @@ export class Tab {
           ...(r.checked !== undefined ? { checked: r.checked, changed: r.changed } : {}),
           ...(r.selected !== undefined ? { selected: r.selected } : {}),
           ...(r.files !== undefined ? { files: r.files } : {}),
-          ...(r.openedTabs?.length ? { openedTabs: r.openedTabs.map(({ page, url, title, pending }) => ({ ...(page && { tab: page }), url, title, ...(pending && { pending }) })) } : {}),
+          ...(r.openedTabs?.length ? { openedTabs: r.openedTabs.map(({ page, tabId, url, title, pending }) => ({ ...(page && { tab: page }), tabId, url, title, ...(pending && { pending }) })) } : {}),
           ...(r.download ? { download: r.download } : {}),
           ...(action === 'click' && r.method === 'dom' ? { method: 'dom' as const } : {}),
         };

@@ -105,7 +105,7 @@ describe('browser tab ownership', () => {
     expect(tabs.create).not.toHaveBeenCalled();
   });
 
-  it('claims the foreground tab directly and keeps url/title as guards', async () => {
+  it('claims the foreground tab only when exact expected identity still matches', async () => {
     const tabs = chromeMock();
     const active = { id: 7, url: 'https://example.com/active', title: 'Active', windowId: 1, active: true };
     globalThis.chrome.windows.getLastFocused = vi.fn(async () => ({ id: 1, type: 'normal', tabs: [active] }));
@@ -114,9 +114,11 @@ describe('browser tab ownership', () => {
     const manager = new SessionManager(() => {});
     await manager.ready();
     const session = manager.get('foreground');
-    await expect(manager.claimUserTab(session, { active: true, url: 'https://other.test/' })).rejects.toMatchObject({ code: 'claim_identity_mismatch' });
+    await expect(manager.claimUserTab(session, { active: true, expectedUrl: 'https://other.test/' })).rejects.toMatchObject({ code: 'claim_identity_mismatch' });
+    await expect(manager.claimUserTab(session, { active: true, expectedUrl: 'https://example.com/' })).rejects.toMatchObject({ code: 'claim_identity_mismatch' });
+    await expect(manager.claimUserTab(session, { active: true, url: 'https://example.com/' })).rejects.toMatchObject({ code: 'invalid_args' });
     expect(session.leases.size).toBe(0);
-    const claimed = await manager.claimUserTab(session, { active: true, url: 'https://example.com/' });
+    const claimed = await manager.claimUserTab(session, { active: true, expectedUrl: 'https://example.com/active', expectedTitle: 'Active' });
     expect(claimed).toMatchObject({ tabId: 7, page: 'page-7' });
     expect(session.leases.get(7)?.origin).toBe('user');
     expect(tabs.query).not.toHaveBeenCalled();

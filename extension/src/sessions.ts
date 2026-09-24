@@ -261,12 +261,9 @@ export class SessionManager {
       .map((t) => ({ tabId: t.id!, title: t.title, url: t.url, windowId: t.windowId, active: Boolean(t.active), groupId: t.groupId && t.groupId > 0 ? t.groupId : undefined, lastAccessed: (t as { lastAccessed?: number }).lastAccessed }));
   }
 
-  /**
-   * Claim like Codex's claimTab(tab | id): the tab id alone is enough. url/title are optional matchers — a url matches by
-   * exact value or prefix, a title by case-insensitive substring — used as guards when an id is given, or to find the tab
-   * when it is not (then the match must be unique; ambiguity fails closed with the candidates).
-   */
-  async claimUserTab(s: Session, claim: { tabId?: number; active?: boolean; title?: string; url?: string }): Promise<{ tabId: number; page: string; tab: chrome.tabs.Tab }> {
+  /** Find by fuzzy url/title, then verify optional exact identity before adopting the chosen tab. */
+  async claimUserTab(s: Session, claim: { tabId?: number; active?: boolean; title?: string; url?: string; expectedUrl?: string; expectedTitle?: string }): Promise<{ tabId: number; page: string; tab: chrome.tabs.Tab }> {
+    if ((claim.active || claim.tabId !== undefined) && (claim.url !== undefined || claim.title !== undefined)) throw new SessionError('invalid_args', 'url/title are for lookup without tabId or active:true', 'Use expectedUrl/expectedTitle to verify the selected tab exactly.');
     const urlOk = (u?: string) => claim.url === undefined || (u !== undefined && (u === claim.url || u.startsWith(claim.url)));
     const titleOk = (t?: string) => claim.title === undefined || (t !== undefined && t.toLowerCase().includes(claim.title.toLowerCase()));
     let tab: chrome.tabs.Tab;
@@ -277,17 +274,17 @@ export class SessionManager {
       tab = await chrome.tabs.get(activeTab.id).catch(() => { throw new SessionError('claim_not_found', 'The foreground tab is no longer open', 'Focus the intended tab and retry.'); });
       if (!tab.active || tab.windowId !== focused?.id) throw new SessionError('claim_identity_mismatch', 'The foreground tab changed before it could be claimed', 'Focus the intended tab and retry.');
       if (claim.tabId !== undefined && tab.id !== claim.tabId) throw new SessionError('claim_identity_mismatch', `Active tab is ${tab.id}, not ${claim.tabId}`, 'Use the current tabId or omit it when claiming the active tab.');
-      if (!urlOk(tab.url) || !titleOk(tab.title)) throw new SessionError('claim_identity_mismatch', `Active tab does not match the given url/title (now "${tab.title}" ${tab.url})`, 'Focus the intended tab or update the url/title guard.');
     } else if (claim.tabId === undefined) {
       if (claim.url === undefined && claim.title === undefined) throw new SessionError('claim_not_allowed', 'claim needs a tabId, active:true, or a url/title to find the tab', 'Use tab_claim {active:true} for the foreground tab, or list user tabs first.');
       const candidates = (await this.listUserTabs({ query: claim.url ?? claim.title, all: true })).filter((t) => urlOk(t.url) && titleOk(t.title));
       if (candidates.length === 0) throw new SessionError('claim_not_found', `no user tab matches ${JSON.stringify({ url: claim.url, title: claim.title })}`, 'List user tabs and claim by tabId.');
       if (candidates.length > 1) throw new SessionError('claim_ambiguous', `${candidates.length} user tabs match; claim by tabId: ${candidates.map((c) => `${c.tabId} "${c.title}" ${c.url}`).join('; ')}`, 'Pass the tabId of the intended tab.');
       tab = await chrome.tabs.get(candidates[0].tabId);
+      if (!urlOk(tab.url) || !titleOk(tab.title)) throw new SessionError('claim_identity_mismatch', `Tab ${tab.id} changed during lookup`, 'List user tabs again and claim the current tab.');
     } else {
       try { tab = await chrome.tabs.get(claim.tabId); } catch { throw new SessionError('claim_identity_mismatch', `Tab ${claim.tabId} no longer exists`, 'List user tabs again and claim a current one.'); }
-      if (!urlOk(tab.url) || !titleOk(tab.title)) throw new SessionError('claim_identity_mismatch', `Tab ${claim.tabId} does not match the given url/title (now "${tab.title}" ${tab.url})`, 'Do not claim a different tab silently; list again and confirm, or claim by tabId alone.');
     }
+    if ((claim.expectedUrl !== undefined && tab.url !== claim.expectedUrl) || (claim.expectedTitle !== undefined && tab.title !== claim.expectedTitle)) throw new SessionError('claim_identity_mismatch', `Tab ${tab.id} changed (now "${tab.title}" ${tab.url})`, 'List user tabs again and use the current URL/title, or claim by tabId alone.');
     const tabId = tab.id!;
     if (!isHttp(tab.url)) throw new SessionError('claim_not_allowed', 'Only http(s) tabs can be claimed');
     const owner = this.ownerOf(tabId);

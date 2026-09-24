@@ -6,6 +6,7 @@ import { Runtime } from '../src/runtime/runtime.js';
 import { createMcpServer } from '../src/mcp/server.js';
 import type { RuntimePage } from '../src/backends/page-types.js';
 import type { NativeChannel } from '../src/host/native-messaging.js';
+import { PROTOCOL_REVISION } from '../src/protocol.js';
 
 class FakeChannel extends EventEmitter {
   send(_frame?: unknown): void {}
@@ -35,19 +36,43 @@ describe('runtime-advertised MCP contract', () => {
       expect(JSON.stringify(actSchema).length).toBeLessThan(7_000);
       expect(resultText(await client.callTool({ name: 'docs_get', arguments: { name: 'capabilities/cdp' } }))).toContain('unknown_doc');
       expect(resultText(await client.callTool({ name: 'docs_get', arguments: { name: 'api-reference' } }))).not.toContain('  network: {');
-      channel.emit('message', { type: 'hello', extensionVersion: 'test', features: ['cdp', 'network'] });
+      channel.emit('message', { type: 'hello', extensionVersion: 'test', protocolRevision: PROTOCOL_REVISION, features: ['cdp', 'network', 'downloads'] });
       expect((await client.listTools()).tools.map((t) => t.name)).toContain('network_inspect');
+      expect((await client.listTools()).tools.map((t) => t.name)).toContain('tab_download_wait');
       expect(resultText(await client.callTool({ name: 'doctor', arguments: {} }))).toContain('"network"');
       expect(resultText(await client.callTool({ name: 'docs_get', arguments: { name: 'capabilities/cdp' } }))).toContain('Chrome DevTools Protocol');
       expect(resultText(await client.callTool({ name: 'docs_get', arguments: { name: 'api-reference' } }))).toContain('  network: {');
       channel.emit('close');
       expect((await client.listTools()).tools.map((t) => t.name)).not.toContain('network_inspect');
+      expect((await client.listTools()).tools.map((t) => t.name)).not.toContain('tab_download_wait');
     } finally {
       await session.close();
       await client.close().catch(() => {});
       await rt.shutdown();
     }
   });
+});
+
+it('reports a host/extension protocol mismatch before sending browser commands', async () => {
+  const channel = new FakeChannel();
+  const send = vi.spyOn(channel, 'send');
+  const bridge = new ExtensionBridge(channel as unknown as NativeChannel);
+  const rt = new Runtime({ bridge });
+  await rt.init();
+  channel.emit('message', { type: 'hello', extensionVersion: 'older-extension', features: ['network', 'downloads'] });
+  expect(rt.doctor().extension).toMatchObject({ connected: true, compatible: false, protocolRevision: null, requiredProtocolRevision: PROTOCOL_REVISION, features: [] });
+  await expect(bridge.send('ping')).rejects.toMatchObject({ code: 'extension_update_required' });
+  expect(send).not.toHaveBeenCalled();
+  await expect(rt.getBrowserPage('mismatch')).rejects.toMatchObject({ code: 'extension_update_required' });
+  const session = createMcpServer(rt, 'mismatch');
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await session.server.connect(serverTransport);
+  const client = new Client({ name: 'mismatch', version: '1' }, { capabilities: {} });
+  await client.connect(clientTransport);
+  expect(JSON.parse(resultText(await client.callTool({ name: 'tab_list', arguments: {} })))).toMatchObject({ ok: false, error: { code: 'extension_update_required' } });
+  await session.close();
+  await client.close();
+  await rt.shutdown();
 });
 
 it('claims the active user tab and batch-closes numeric ids through the MCP contract', async () => {
@@ -68,16 +93,16 @@ it('claims the active user tab and batch-closes numeric ids through the MCP cont
   const bridge = new ExtensionBridge(channel as unknown as NativeChannel);
   const rt = new Runtime({ bridge });
   await rt.init();
-  channel.emit('message', { type: 'hello', extensionVersion: 'test', features: [] });
+  channel.emit('message', { type: 'hello', extensionVersion: 'test', protocolRevision: PROTOCOL_REVISION, features: [] });
   const session = createMcpServer(rt, 'tab-management');
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await session.server.connect(serverTransport);
   const client = new Client({ name: 'tab-management', version: '1' }, { capabilities: {} });
   await client.connect(clientTransport);
   try {
-    const claim = JSON.parse(resultText(await client.callTool({ name: 'tab_claim', arguments: { active: true, observe: false } })));
+    const claim = JSON.parse(resultText(await client.callTool({ name: 'tab_claim', arguments: { active: true, expectedUrl: 'https://example.test/', observe: false } })));
     expect(claim).toMatchObject({ ok: true, tab: 'page-7', tabId: 7 });
-    expect(commands.find((command) => command.action === 'claim')?.claim).toMatchObject({ active: true });
+    expect(commands.find((command) => command.action === 'claim')?.claim).toMatchObject({ active: true, expectedUrl: 'https://example.test/' });
     const close = JSON.parse(resultText(await client.callTool({ name: 'tab_close', arguments: { tabIds: [8, 9] } })));
     expect(close).toMatchObject({ ok: true, complete: true, closed: [8, 9], failed: [] });
     expect(commands.find((command) => command.action === 'close-user-tabs')?.tabIds).toEqual([8, 9]);
@@ -97,14 +122,18 @@ it('carries observation, read, and action evidence through MCP-only calls', asyn
   let captures = 0;
   vi.spyOn(rt, 'backend').mockReturnValue('extension');
   vi.spyOn(rt, 'hasFeature').mockReturnValue(true);
+  let sessionTabs: Array<Record<string, unknown>> = [{ tabId: 2, pending: true, url: 'about:blank', active: false, selected: false, origin: 'agent', state: 'active' }];
   const page = {
+    tabs: async () => sessionTabs,
     getCurrentUrl: async () => 'https://example.test/',
     evaluate: async () => 'Example',
     pageCall: async (fn: string, args: Record<string, unknown>) => fn === 'aria' ? aria : fn === 'readText' ? args.readId ? { readId: 'capture-1', text: ' document', chars: 9, start: 5, complete: true } : { readId: 'capture-1', text: 'Hello', chars: 5, start: 0, nextStart: 5, complete: false, reason: 'budget' } : null,
     readNetworkCapture: async () => captures < 2 ? [{ requestId: `r${++captures}`, url: `https://example.test/${captures}`, method: 'GET', done: true }] : [],
-    act: async () => ({ ok: true, kind: 'click', ref: 'e1', matches_n: 1, method: 'cdp', hit: 'target', openedTabs: [{ page: 'child-2', tabId: 2, url: 'https://example.test/report' }], download: { afterSequence: 4, started: [{ seq: 5, url: 'https://example.test/report.csv', suggestedFilename: 'report.csv' }] } }),
+    act: async () => ({ ok: true, kind: 'click', ref: 'e1', matches_n: 1, method: 'cdp', hit: 'target', openedTabs: [{ tabId: 2, pending: true, url: 'https://example.test/report' }], download: { afterSequence: 4, started: [{ seq: 5, url: 'https://example.test/report.csv', suggestedFilename: 'report.csv' }] } }),
+    waitForDownload: async () => ({ downloaded: true, started: true, state: 'complete', filename: '/tmp/report.csv' }),
   } as unknown as RuntimePage;
   state.pages.set('page-1', page);
+  vi.spyOn(rt, 'getBrowserPage').mockResolvedValue(page);
   const session = createMcpServer(rt, 'evidence');
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await session.server.connect(serverTransport);
@@ -124,10 +153,15 @@ it('carries observation, read, and action evidence through MCP-only calls', asyn
     expect(await call('tab_read', { readId: read.readId, start: read.nextStart })).toMatchObject({ text: ' document', complete: true });
     const action = await call('tab_act', { action: 'click', target: { ref: 'e1' } });
     expect(action).toMatchObject({ delivery: 'received', controlState: 'unverified', network: { afterSequence: 1, cursor: 2 } });
-    expect(action.openedTabs).toEqual([{ tab: 'child-2', url: 'https://example.test/report' }]);
+    expect(action.openedTabs).toEqual([{ tabId: 2, pending: true, url: 'https://example.test/report' }]);
     expect(action.download).toMatchObject({ afterSequence: 4, started: [{ seq: 5, suggestedFilename: 'report.csv' }] });
-    page.act = async () => { throw new BrowserCommandError('page changed', 'target_navigated', undefined, { openedTabs: [{ tab: 'child-3' }], download: { afterSequence: 5, started: [] } }); };
-    expect(await call('tab_act', { action: 'click', target: { ref: 'e1' } })).toMatchObject({ ok: false, error: { code: 'target_navigated', openedTabs: [{ tab: 'child-3' }], download: { afterSequence: 5 } } });
+    expect(await call('tab_download_wait', { afterSequence: action.download.afterSequence })).toMatchObject({ downloaded: true, state: 'complete' });
+    const listed = await call('tab_list', {});
+    expect(listed.tabs).toEqual([expect.objectContaining({ tabId: 2, pending: true })]);
+    sessionTabs = [{ tabId: 2, page: 'child-2', url: 'https://example.test/report', active: false, selected: false, origin: 'agent', state: 'active' }];
+    expect((await call('tab_list', {})).tabs).toEqual([expect.objectContaining({ tabId: 2, id: 'child-2' })]);
+    page.act = async () => { throw new BrowserCommandError('page changed', 'target_navigated', undefined, { openedTabs: [{ tab: 'child-3', tabId: 3 }], download: { afterSequence: 5, started: [] } }); };
+    expect(await call('tab_act', { action: 'click', target: { ref: 'e1' } })).toMatchObject({ ok: false, error: { code: 'target_navigated', openedTabs: [{ tab: 'child-3', tabId: 3 }], download: { afterSequence: 5 } } });
     expect(await call('network_inspect', { afterSequence: action.network.afterSequence })).toMatchObject({ entries: [expect.objectContaining({ seq: 2 })] });
   } finally {
     await session.close();

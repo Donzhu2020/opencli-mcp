@@ -81,7 +81,7 @@ async function handleCommand(cmd: Command): Promise<Result> {
         const started = executor.pageDownloadsAfter(tabId, downloadFrom).map(({ seq, guid, url, suggestedFilename }) => ({ seq, ...(guid && { guid }), url, suggestedFilename }));
         if (error) {
           const failure = errorResult(cmd.id, error);
-          failure.data = { ...(typeof failure.data === 'object' && failure.data !== null ? failure.data : {}), ...(openedTabs.length && { openedTabs: openedTabs.map(({ page, url, title, pending }) => ({ ...(page && { tab: page }), url, title, ...(pending && { pending }) })) }), download: { afterSequence: downloadFrom, started } };
+          failure.data = { ...(typeof failure.data === 'object' && failure.data !== null ? failure.data : {}), ...(openedTabs.length && { openedTabs: openedTabs.map(({ page, tabId, url, title, pending }) => ({ ...(page && { tab: page }), tabId, url, title, ...(pending && { pending }) })) }), download: { afterSequence: downloadFrom, started } };
           return failure;
         }
         return pageScoped(cmd.id, tabId, { ...result, ...(openedTabs.length && { openedTabs }), download: { afterSequence: downloadFrom, started } });
@@ -230,13 +230,13 @@ async function handleNavigate(cmd: Command, s: Session): Promise<Result> {
 async function handleTabs(cmd: Command, s: Session): Promise<Result> {
   switch (cmd.op) {
     case 'list': {
-      const out: Array<{ index: number; page?: string; url?: string; title?: string; active: boolean; selected: boolean; origin: string; state: string }> = [];
+      const out: Array<{ index: number; tabId: number; page?: string; pending?: true; url?: string; title?: string; active: boolean; selected: boolean; origin: string; state: string }> = [];
       let i = 0;
       for (const lease of s.leases.values()) {
         const t = await chrome.tabs.get(lease.tabId).catch(() => null);
         if (!t) continue;
         const page = await identity.resolveTargetId(lease.tabId).catch(() => undefined);
-        out.push({ index: i++, page, url: t.url, title: t.title, active: Boolean(t.active), selected: lease.tabId === s.preferredTabId, origin: lease.origin, state: lease.state });
+        out.push({ index: i++, tabId: lease.tabId, ...(page && { page }), ...(!page && { pending: true as const }), url: t.url, title: t.title, active: Boolean(t.active), selected: lease.tabId === s.preferredTabId, origin: lease.origin, state: lease.state });
       }
       return { id: cmd.id, ok: true, data: out };
     }

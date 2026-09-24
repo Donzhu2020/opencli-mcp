@@ -57,8 +57,10 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     if (id) return b.tabs.get(id);
     // selected is the last tab this session touched, not a disambiguator. The lease list is the only source.
     const tabs = (await b.tabs.list()).filter((t) => t.state === 'active');
-    if (tabs.length > 1) throw new ActionError('tab_required', `This session has ${tabs.length} tabs. Pass tab.`, 'Copy tab from this list.', { details: { tabs: tabs.map((t) => ({ tab: t.id, url: t.url, title: t.title })) } });
-    if (tabs.length === 1) return b.tabs.get(tabs[0].id);
+    const ready = tabs.filter((t): t is typeof t & { id: string } => Boolean(t.id));
+    if (tabs.length > 1) throw new ActionError('tab_required', `This session has ${tabs.length} tabs. Pass tab.`, 'Copy a ready tab id from this list; pending tabs have only tabId until their page is ready.', { details: { tabs: tabs.map((t) => ({ tab: t.id, tabId: t.tabId, pending: t.pending, url: t.url, title: t.title })) } });
+    if (ready.length === 1) return b.tabs.get(ready[0].id);
+    if (tabs.length === 1) throw new ActionError('tab_pending', `Tab ${tabs[0].tabId} has no page handle yet.`, 'Call tab_list again and match this tabId after its page becomes ready.', { details: { tabId: tabs[0].tabId } });
     throw new ActionError('no_tab', 'No tab is open in this session', 'Call tab_open first (or tab_claim a user tab).');
   };
   const run = async (fn: () => Promise<ToolResult>): Promise<ToolResult> => { try { return await fn(); } catch (err) { return fail(err); } };
@@ -98,7 +100,7 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
   }, async ({ keep }) => run(async () => ok(await (await api.agent.browsers.getDefault()).tabs.finalize({ keep }))));
 
   // ── tabs ──
-  server.registerTool('tab_list', { title: 'List tabs', description: 'List this session’s active and handoff tabs and, when user:true, user tabs available to claim. Session tabs include origin, state, active (Chrome foreground), and selected (last used in this session); user tabs include tabId for tab_claim.',
+  server.registerTool('tab_list', { title: 'List tabs', description: 'List this session’s active and handoff tabs and, when user:true, user tabs available to claim. Session tabs include numeric tabId; id is the page handle when ready, or pending:true until ready. Match a pending popup by tabId on a later call. User tabs include tabId for tab_claim.',
     inputSchema: { user: z.boolean().default(false).describe('also list user tabs available to claim'), query: z.string().optional().describe('filter user tabs by title or URL'), limit: z.number().int().min(1).max(100).default(20).describe('maximum user tabs returned') }, annotations: { readOnlyHint: true },
   }, async ({ user, query, limit }) => run(async () => { const b = await api.agent.browsers.getDefault(); return ok({ tabs: await b.tabs.list(), ...(user ? { userTabs: await b.user.openTabs({ query, limit }) } : {}) }); }));
   server.registerTool('tab_open', { title: 'Open a tab', description: 'Open a URL in a new agent tab (background, in this session’s tab group) and return its id plus the initial page state.',
@@ -112,12 +114,12 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     const { data, images } = stripImage({ tab: tab.id, ...(await tab.observe()) });
     return ok(data, images);
   }));
-  server.registerTool('tab_claim', { title: 'Claim a user tab', description: 'Take control of a user tab. Pass active:true for the foreground tab of the last focused Chrome window, tabId from tab_list, or url/title for a unique match. url/title and tabId guard active:true against claiming a different tab. Returns tab (page handle) and numeric tabId. Claimed user tabs are released, not closed, by session_finalize.',
-    inputSchema: { tabId: z.number().int().positive().optional(), active: z.boolean().optional().describe('claim the foreground tab of the last focused normal Chrome window'), title: z.string().optional(), url: z.string().optional(), observe: z.boolean().default(true) },
+  server.registerTool('tab_claim', { title: 'Claim a user tab', description: 'Claim active:true, a tabId from tab_list, or a unique fuzzy url/title lookup. For a specific tab mentioned by the user, pass exact expectedUrl/expectedTitle from its current listing; changed identity fails instead of claiming another tab. Returns page handle and numeric tabId. Claimed user tabs are released by session_finalize.',
+    inputSchema: { tabId: z.number().int().positive().optional(), active: z.boolean().optional().describe('foreground tab of the last focused normal Chrome window'), title: z.string().optional().describe('fuzzy lookup only; omit with tabId or active'), url: z.string().optional().describe('fuzzy lookup only; omit with tabId or active'), expectedTitle: z.string().optional().describe('exact title guard for the selected tab'), expectedUrl: z.string().optional().describe('exact URL guard for the selected tab'), observe: z.boolean().default(true) },
     annotations: { openWorldHint: true },
-  }, async ({ tabId, active, title, url, observe }) => run(async () => {
+  }, async ({ tabId, active, title, url, expectedTitle, expectedUrl, observe }) => run(async () => {
     const b = await api.agent.browsers.getDefault();
-    const tab = await b.user.claimTab({ tabId, active, title, url });
+    const tab = await b.user.claimTab({ tabId, active, title, url, expectedTitle, expectedUrl });
     if (!observe) return ok({ tab: tab.id, tabId: tab.tabId });
     const { data, images } = stripImage({ tab: tab.id, tabId: tab.tabId, ...(await tab.observe()) });
     return ok(data, images);
@@ -161,12 +163,20 @@ export function createMcpServer(rt: Runtime, sessionId: string, opts: { version?
     return ok({ tab: t.id, ...(await t.network.detail({ seq, part, start, maxChars })) });
   }));
   if (!rt.hasFeature('network')) networkTool.disable();
+  const downloadTool = server.registerTool('tab_download_wait', { title: 'Wait for a download', description: 'Wait for the download begun after one tab_act. Copy download.afterSequence from that action and use the same tab. downloaded:true means Chrome completed the file; not_started, unconfirmed, ambiguous, and cursor_expired do not prove completion.',
+    inputSchema: { tab: z.string().optional().describe('same page handle used by tab_act; required when the session has multiple tabs'), afterSequence: z.number().int().min(0).describe('download.afterSequence from tab_act'), timeoutMs: z.number().int().min(1).max(120_000).default(30_000) }, annotations: { readOnlyHint: true },
+  }, async ({ tab, afterSequence, timeoutMs }) => run(async () => {
+    const t = await tabOf(tab);
+    return ok({ tab: t.id, ...(await t.download(afterSequence, timeoutMs)) });
+  }));
+  if (!rt.hasFeature('downloads')) downloadTool.disable();
   const onFeaturesChanged = (): void => {
     if (networkTool.enabled !== rt.hasFeature('network')) networkTool.update({ enabled: rt.hasFeature('network') });
+    if (downloadTool.enabled !== rt.hasFeature('downloads')) downloadTool.update({ enabled: rt.hasFeature('downloads') });
     if (server.isConnected()) server.sendResourceListChanged();
   };
   if (persistent) rt.on('features-changed', onFeaturesChanged);
-  server.registerTool('tab_act', { title: 'Act on a tab', description: 'One action. The action-specific schema permits only its parameters. The result distinguishes input delivery from verified control state, returns openedTabs for popups from this tab observed during the action (pending:true means retry tab_list), a download.afterSequence cursor for tab.download() in js, and a Network cursor when available. A successful click means the mouse reached the page, not that the site completed the task; use tab_expect for the desired effect. method:"dom" is a click-only fallback after not_delivered or no box.',
+  server.registerTool('tab_act', { title: 'Act on a tab', description: 'One action. The result separates input delivery from verified control state. openedTabs identifies popups seen during the action: use tab directly, or match tabId in tab_list when pending:true. If expecting a download, pass download.afterSequence to tab_download_wait. A click does not prove the site completed the task; check the cheapest authoritative state with tab_expect or tab_observe. If an action has no effect, inspect before retrying. method:"dom" is a click-only fallback after not_delivered or no box.',
     inputSchema: actionSchema,
     annotations: { destructiveHint: true, openWorldHint: true },
   }, async (input) => run(async () => {

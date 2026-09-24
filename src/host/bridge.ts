@@ -6,7 +6,7 @@
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
 import type { NativeChannel } from './native-messaging.js';
-import type { Action, BrowserEvent, BrowserFeature, Command, ExtToHost, Result } from '../protocol.js';
+import { PROTOCOL_REVISION, type Action, type BrowserEvent, type BrowserFeature, type Command, type ExtToHost, type Result } from '../protocol.js';
 
 export class BrowserCommandError extends Error {
   constructor(message: string, readonly code: string = 'browser_command_failed', readonly hint?: string, readonly data?: unknown) {
@@ -18,7 +18,7 @@ export class BrowserCommandError extends Error {
 type Pending = { resolve: (r: Result) => void; reject: (e: Error) => void; timer: NodeJS.Timeout };
 
 export interface BridgeEvents {
-  hello: [{ extensionVersion: string; features: BrowserFeature[] }];
+  hello: [{ extensionVersion: string; protocolRevision: number; features: BrowserFeature[] }];
   event: [BrowserEvent];
   close: [];
 }
@@ -26,8 +26,10 @@ export interface BridgeEvents {
 export class ExtensionBridge extends EventEmitter<BridgeEvents> {
   private readonly pending = new Map<string, Pending>();
   extensionVersion: string | null = null;
+  protocolRevision: number | null = null;
   extensionFeatures: BrowserFeature[] = [];
   connected = false;
+  get compatible(): boolean { return this.connected && this.protocolRevision === PROTOCOL_REVISION; }
 
   /** Set by the host so the extension learns where MCP is served (informational). */
   ready: { version: string; port: number } | null = null;
@@ -39,6 +41,7 @@ export class ExtensionBridge extends EventEmitter<BridgeEvents> {
     channel.on('message', (raw) => this.onMessage(raw as ExtToHost));
     channel.on('close', () => {
       this.connected = false;
+      this.protocolRevision = null;
       this.extensionFeatures = [];
       for (const [id, p] of this.pending) {
         clearTimeout(p.timer);
@@ -54,6 +57,7 @@ export class ExtensionBridge extends EventEmitter<BridgeEvents> {
     if (msg.type === 'hello') {
       this.connected = true;
       this.extensionVersion = msg.extensionVersion;
+      this.protocolRevision = msg.protocolRevision ?? null;
       this.extensionFeatures = msg.features;
       if (this.ready) { try { this.channel.send({ type: 'ready', ...this.ready }); } catch { /* ignore */ } }
       this.emit('hello', msg);
@@ -72,6 +76,7 @@ export class ExtensionBridge extends EventEmitter<BridgeEvents> {
 
   /** Send a command; resolves with `data`, throws BrowserCommandError on `ok:false`. */
   async send(action: Action, params: Omit<Command, 'id' | 'action'> = {}, opts: { timeoutMs?: number } = {}): Promise<{ data: unknown; page?: string }> {
+    if (this.connected && !this.compatible) throw new BrowserCommandError(`Extension protocol ${this.protocolRevision ?? 'unknown'} does not match host protocol ${PROTOCOL_REVISION}.`, 'extension_update_required', 'Update the Chrome extension to the version packaged with this host, then reload it.');
     const timeoutMs = opts.timeoutMs ?? (params.timeoutMs ?? 60_000) + 5_000;
     const id = randomUUID();
     const command: Command = { id, action, ...params, deadlineAt: Date.now() + timeoutMs };

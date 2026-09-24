@@ -35,10 +35,10 @@ export class Browser {
       }
       return tab;
     },
-    list: async (): Promise<Array<{ id: string; url?: string; title?: string; active: boolean; selected: boolean; origin: 'agent' | 'user'; state: 'active' | 'handoff' }>> => {
+    list: async (): Promise<Array<{ id?: string; tabId: number; pending?: true; url?: string; title?: string; active: boolean; selected: boolean; origin: 'agent' | 'user'; state: 'active' | 'handoff' }>> => {
       const page = await this.page();
-      const tabs = await page.tabs() as Array<{ page?: string; url?: string; title?: string; active: boolean; selected: boolean; origin: 'agent' | 'user'; state: 'active' | 'handoff' }>;
-      return tabs.filter((t) => t.page).map((t) => ({ id: t.page!, url: t.url, title: t.title, active: t.active, selected: t.selected, origin: t.origin, state: t.state }));
+      const tabs = await page.tabs() as Array<{ tabId: number; page?: string; pending?: true; url?: string; title?: string; active: boolean; selected: boolean; origin: 'agent' | 'user'; state: 'active' | 'handoff' }>;
+      return tabs.map((t) => ({ ...(t.page && { id: t.page }), tabId: t.tabId, ...(!t.page && { pending: true as const }), url: t.url, title: t.title, active: t.active, selected: t.selected, origin: t.origin, state: t.state }));
     },
     get: (id: string): Tab => new Tab(id, this.ctx),
     selected: async (): Promise<Tab | undefined> => { const id = this.ctx.state.selected; return id ? new Tab(id, this.ctx) : undefined; },
@@ -55,8 +55,8 @@ export class Browser {
 
   readonly user = {
     openTabs: async (options: { query?: string; limit?: number } = {}): Promise<UserTabInfo[]> => this.ext(await this.page()).userTabs(options),
-    /** Claim the foreground tab with active:true, or a tab by id/unique url/title match. Returns a Tab with its numeric tabId. */
-    claimTab: async (tab: { tabId?: number; active?: boolean; title?: string; url?: string }): Promise<Tab> => {
+    /** Claim by foreground, id, or unique url/title lookup; expected fields verify the tab's current identity. */
+    claimTab: async (tab: { tabId?: number; active?: boolean; title?: string; url?: string; expectedUrl?: string; expectedTitle?: string }): Promise<Tab> => {
       const page = this.ext(await this.page());
       const r = await page.claim(tab);
       this.ctx.state.finalized = false;

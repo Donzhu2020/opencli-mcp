@@ -67,8 +67,8 @@ export interface Command {
   deadlineAt?: number;
   /** session-name */
   name?: string;
-  /** claim: active foreground tab, explicit tabId, or a unique url/title match; combined fields guard the identity */
-  claim?: { tabId?: number; active?: boolean; title?: string; url?: string };
+  /** claim: tabId/active choose a tab; url/title find a unique tab; expectedUrl/expectedTitle verify its current identity. */
+  claim?: { tabId?: number; active?: boolean; title?: string; url?: string; expectedUrl?: string; expectedTitle?: string };
   /** close-user-tabs: numeric Chrome ids, without adopting the tabs into the session. */
   tabIds?: number[];
   /** mark / finalize */
@@ -189,9 +189,11 @@ export type BrowserEvent =
   | { kind: 'session_released'; session: string; reason: string };
 
 export type HostToExt = { type: 'command'; command: Command } | { type: 'ready'; version: string; port: number };
+/** Bump when the host and extension command contract changes. Package versions are independent. */
+export const PROTOCOL_REVISION = 1;
 export type BrowserFeature = 'cdp' | 'network' | 'frames' | 'dialogs' | 'console' | 'downloads' | 'viewport' | 'visibility' | 'webmcp';
 export type ExtToHost =
-  | { type: 'hello'; extensionVersion: string; features: BrowserFeature[] }
+  | { type: 'hello'; extensionVersion: string; protocolRevision: number; features: BrowserFeature[] }
   | { type: 'result'; result: Result }
   | { type: 'event'; event: BrowserEvent };
 

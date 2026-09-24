@@ -20,7 +20,7 @@ export interface UserTabInfo { tabId: number; title?: string; url?: string; wind
 export interface ExtensionPageExtras {
   nameSession(name: string): Promise<void>;
   userTabs(options?: { query?: string; limit?: number }): Promise<UserTabInfo[]>;
-  claim(tab: { tabId?: number; active?: boolean; title?: string; url?: string }): Promise<{ page: string; tabId: number; url?: string; title?: string }>;
+  claim(tab: { tabId?: number; active?: boolean; title?: string; url?: string; expectedUrl?: string; expectedTitle?: string }): Promise<{ page: string; tabId: number; url?: string; title?: string }>;
   closeUserTabs(tabIds: number[]): Promise<CloseUserTabsResult>;
   mark(page: string, mark: 'deliverable' | 'handoff' | null): Promise<void>;
   finalize(keep: Array<{ page: string; status: 'deliverable' | 'handoff' }>): Promise<{ closed: string[]; kept: string[]; failed: Array<{ page: string; reason: string }> }>;
@@ -193,7 +193,7 @@ class ExtensionPage implements ExtensionRuntimePage {
   // ── opencli-mcp extras ──
   async nameSession(name: string): Promise<void> { await this.bridge.send('session-name', { ...this.sessionOpts(), name }); }
   async userTabs(options: { query?: string; limit?: number } = {}): Promise<UserTabInfo[]> { const r = await this.bridge.send('user-tabs', { ...this.sessionOpts(), ...options }); return Array.isArray(r.data) ? r.data as UserTabInfo[] : []; }
-  async claim(tab: { tabId?: number; active?: boolean; title?: string; url?: string }): Promise<{ page: string; tabId: number; url?: string; title?: string }> {
+  async claim(tab: { tabId?: number; active?: boolean; title?: string; url?: string; expectedUrl?: string; expectedTitle?: string }): Promise<{ page: string; tabId: number; url?: string; title?: string }> {
     const r = await this.bridge.send('claim', { ...this.sessionOpts(), claim: tab });
     const d = (r.data ?? {}) as { tabId?: number; url?: string; title?: string };
     if (!r.page || !Number.isSafeInteger(d.tabId) || d.tabId! <= 0) throw new BrowserCommandError('claim returned no tab identity', 'invalid_response');

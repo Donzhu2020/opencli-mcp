@@ -25,14 +25,14 @@ class Browser {
   type: "extension";
   tabs: {
     new(url?: string): Promise<Tab>;
-    list(): Promise<Array<{ id: string; url?: string; title?: string; active: boolean; selected: boolean; origin: "agent" | "user"; state: "active" | "handoff"; }>>;
+    list(): Promise<Array<{ id?: string; tabId: number; pending?: true; url?: string; title?: string; active: boolean; selected: boolean; origin: "agent" | "user"; state: "active" | "handoff"; }>>;
     get(id: string): Tab;
     selected(): Promise<Tab | undefined>;
     finalize(opts?: { keep?: Array<{ tab: string | Tab; status: "handoff" | "deliverable"; }>; }): Promise<{ closed: Array<string>; kept: Array<string>; failed: Array<{ page: string; reason: string; }>; }>;
   };
   user: {
     openTabs(options?: { query?: string; limit?: number; }): Promise<Array<UserTabInfo>>;
-    claimTab(tab: { tabId?: number; active?: boolean; title?: string; url?: string; }): Promise<Tab>; // Claim the foreground tab with active:true, or a tab by id/unique url/title match. Returns a Tab with its numeric tabId.
+    claimTab(tab: { tabId?: number; active?: boolean; title?: string; url?: string; expectedUrl?: string; expectedTitle?: string; }): Promise<Tab>; // Claim by foreground, id, or unique url/title lookup; expected fields verify the tab's current identity.
     closeTabs(tabIds: Array<number>): Promise<CloseUserTabsResult>; // Close user tabs by Chrome id without claiming or loading their pages.
   };
   nameSession(name: string): Promise<void>;

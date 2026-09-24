@@ -77,6 +77,7 @@ For integrations and custom workflows, the main tools are:
 |---|---|
 | Browse a page | `tab_open`, `tab_observe`, `tab_read`, `tab_act`, `tab_expect` |
 | Find or use an existing tab | `tab_list`, `tab_claim` |
+| Wait for a download started by an action | `tab_download_wait` |
 | Keep a tab open or close it | `tab_release`, `tab_close` |
 | Finish a browser session | `session_finalize` |
 | Discover and run site commands | `sites_search`, `site_run` |

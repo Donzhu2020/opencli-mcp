@@ -4,7 +4,7 @@
  * runtime warm. Reconnect immediately on disconnect (backoff) with an alarm as the safety net.
  */
 import type { Command, ExtToHost, HostToExt, Result, BrowserEvent, BrowserFeature } from '../../src/protocol.js';
-import { NATIVE_HOST_NAME } from '../../src/protocol.js';
+import { NATIVE_HOST_NAME, PROTOCOL_REVISION } from '../../src/protocol.js';
 
 const RECONNECT_ALARM = 'opencli-mcp-reconnect';
 
@@ -53,7 +53,7 @@ export class NativeHost {
     this.status = 'connected';
     const features: BrowserFeature[] = ['frames', 'dialogs', 'console', 'downloads', 'visibility', 'webmcp'];
     if (chrome.debugger) features.push('cdp', 'viewport', 'network');
-    this.send({ type: 'hello', extensionVersion: chrome.runtime.getManifest().version, features });
+    this.send({ type: 'hello', extensionVersion: chrome.runtime.getManifest().version, protocolRevision: PROTOCOL_REVISION, features });
     return true;
   }
 

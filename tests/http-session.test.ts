@@ -10,6 +10,7 @@ describe('HTTP client sessions', () => {
   it('keeps two MCP clients in separate runtime sessions and cleans up only the departing one', async () => {
     const rt = new Runtime();
     await rt.init();
+    open.push(() => rt.shutdown());
     const host = await startHttpServer(rt, { port: 0, token: 'test', version: '0.0.12' });
     open.push(() => host.close());
     const missing = await fetch(`http://${host.host}:${host.port}/mcp`, { method: 'POST', headers: { authorization: 'Bearer test' } });
@@ -23,7 +24,14 @@ describe('HTTP client sessions', () => {
       return client;
     };
     const first = await connect('client-one');
-    await connect('client-two');
+    const second = await connect('client-two');
+    const js = async (client: Client, code: string) => {
+      const result = await client.callTool({ name: 'js', arguments: { code } });
+      return JSON.parse((result.content as Array<{text: string}>)[0].text);
+    };
+    expect(await js(first, 'let count = 1; function next() { return ++count }; next()')).toMatchObject({ ok: true, value: 2 });
+    expect(await js(first, 'next()')).toMatchObject({ ok: true, value: 3 });
+    expect(await js(second, 'typeof count')).toMatchObject({ ok: true, value: 'undefined' });
     expect(rt.sessions.has('client-one')).toBe(true);
     expect(rt.sessions.has('client-two')).toBe(true);
     await first.close();

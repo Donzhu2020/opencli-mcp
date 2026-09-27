@@ -1,49 +1,55 @@
-// Live-browser end-to-end: goes through the stdio launcher, which proxies to the Chrome-spawned host.
+// Live MCP → persistent REPL → browser extension → deterministic local page.
+import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
+const fixture = createServer((_req, res) => {
+  res.setHeader('content-type', 'text/html');
+  res.end('<!doctype html><title>REPL smoke</title><button onclick="document.querySelector(\'h1\').textContent=\'Done\'">Continue</button><h1>Ready</h1>');
+});
+await new Promise(resolve => fixture.listen(0, '127.0.0.1', resolve));
+const url = `http://127.0.0.1:${fixture.address().port}/`;
 const transport = new StdioClientTransport({ command: 'node', args: ['dist/src/main.js', 'stdio'], stderr: 'pipe' });
-transport.stderr?.on('data', (d) => process.stderr.write(`  [launcher] ${d}`));
-const client = new Client({ name: 'smoke-browser', version: '0.0.0' }, { capabilities: {} });
-await client.connect(transport);
-const text = (r) => r.content.filter((c) => c.type === 'text').map((c) => c.text).join('\n');
-const images = (r) => r.content.filter((c) => c.type === 'image');
-let failures = 0;
-const call = async (name, args = {}, { expectError = false, show = 500 } = {}) => {
-  const r = await client.callTool({ name, arguments: args });
-  const s = text(r);
-  const bad = Boolean(r.isError) !== expectError;
-  if (bad) failures++;
-  console.log(`\n▶ ${name} ${JSON.stringify(args).slice(0, 160)} → ${r.isError ? 'ERROR' : 'ok'}${images(r).length ? ` +${images(r).length} image` : ''}${bad ? '   <<< UNEXPECTED' : ''}\n${s.slice(0, show)}${s.length > show ? '…' : ''}`);
-  return { r, s, json: (() => { try { return JSON.parse(s); } catch { return null; } })() };
+transport.stderr?.on('data', data => process.stderr.write(data));
+const client = new Client({ name: 'smoke-browser', version: '1' }, { capabilities: {} });
+const call = async (name, args = {}) => {
+  const result = await client.callTool({ name, arguments: args });
+  const first = result.content.find(c => c.type === 'text')?.text;
+  let body;
+  try { body = JSON.parse(first); } catch { body = first; }
+  assert(!result.isError, `${name}: ${first}`);
+  return { body, images: result.content.filter(c => c.type === 'image') };
 };
-
-await call('doctor');
-const opened = await call('tab_open', { url: 'https://example.com/', session: '🔎 opencli-mcp e2e' }, { show: 900 });
-const tab = opened.json?.tab;
-console.log('tab id =', tab);
-await call('js', { code: `const b0 = await agent.browsers.getDefault(); const t0 = await b0.tabs.get(${JSON.stringify(tab)}); await t0.find({ role: 'link' })` });
-await call('tab_act', { tab, action: 'click', target: { role: 'link' } /* example.com's only link; its text drifted from 'More information' to 'Learn more' */, observe: true }, { show: 700 });
-await call('tab_expect', { tab, url: 'iana.org', timeout: 20 });
-await call('tab_observe', { tab, mode: 'state' }, { show: 400 });
-await call('tab_observe', { tab, mode: 'screenshot', annotate: true }, { show: 120 });
-await call('js', { code: `await t0.evaluate('document.title')` });
-await call('js', { code: `await t0.evaluate('document.querySelector("a").click()')` }, { expectError: true, show: 200 });
-await call('tab_act', { tab, action: 'click', target: { text: 'this text does not exist on the page' } }, { expectError: true, show: 300 });
-await call('js', { code: `await t0.network.start()` });
-await call('tab_act', { tab, action: 'reload' });
-await call('js', { code: `await t0.network.read({ limit: 3 })` }, { show: 300 });
-await call('js', { code: `await recon.discover(t0, { maxScripts: 5 })` }, { show: 500 });
-await call('js', { code: `await b0.tabs.list()` });
-const users = await call('js', { code: `const ut = (await b0.user.openTabs()).find((t) => (t.url ?? '').includes('example.org')); ut ?? null` }, { show: 600 });
-const ut = users.json?.value ?? null;
-if (ut) {
-  await call('tab_claim', { tabId: ut.tabId, title: 'WRONG TITLE', url: ut.url }, { expectError: true, show: 300 });
-  const claimed = await call('tab_claim', { tabId: ut.tabId, title: ut.title, url: ut.url }, { show: 400 });
-  await call('tab_act', { tab: claimed.json?.tab, action: 'scroll', direction: 'down' });
+const js = code => call('js', { code });
+let connected = false;
+try {
+  await client.connect(transport);
+  connected = true;
+  const names = (await client.listTools()).tools.map(t => t.name);
+  assert(names.includes('js') && !names.includes('tab_open'), 'The running host has the old tool surface. Reconnect the extension to the newly built host before this smoke.');
+  await call('docs_get', { name: 'api-reference', member: 'Tab.act' });
+  await js(`await browser.nameSession('🔎 REPL smoke'); let tab = await browser.tabs.new(${JSON.stringify(url)}); function ready() { return tab.expect({text:'Done'}); }`);
+  const observed = await js('await tab.observe()');
+  const ref = observed.body.value.state.match(/button "Continue"[^\n]*\[ref=(e\d+)\]/)?.[1];
+  assert(ref, `Expected observed button ref: ${observed.body.value.state}`);
+  await js(`await tab.act({action:'click',target:{ref:${JSON.stringify(ref)}}}); await ready()`);
+  const both = await js("await tab.observe({mode:'both'})");
+  assert.equal(both.images.length, 1, 'observe both must return an MCP image');
+  assert(both.body.value.state.includes('Done'));
+  await call('js_reset');
+  assert.equal((await js('typeof tab')).body.value, 'undefined');
+  assert.equal((await js('await browser.tabs.list()')).body.value.length, 1, 'reset must keep the browser tab');
+  console.log('Passed: discovery, persistent declarations/handles, observe, real click, expectation, image output and reset.');
+} finally {
+  try {
+    if (connected) {
+      const finalized = await call('session_finalize');
+      assert.deepEqual(finalized.body.failed, []);
+      console.log('Passed: session cleanup.');
+    }
+  } finally {
+    await client.close();
+    await new Promise(resolve => fixture.close(resolve));
+  }
 }
-await call('js', { code: `const b = await agent.browsers.getDefault();\nconst t = await b.tabs.new('https://example.com/');\nconst st = await t.observe();\nnodeRepl.write(st.state.slice(0, 160));\nconst shot = await t.screenshot();\n({ url: st.url, title: st.title, tabs: (await b.tabs.list()).length })` }, { show: 600 });
-await call('session_finalize', { keep: [] }, { show: 300 });
-await client.close();
-console.log(`\nbrowser smoke done; unexpected results: ${failures}`);
-process.exit(failures ? 1 : 0);

@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BROWSER_CAPABILITIES, projectApiReference } from './surface.js';
+import { BROWSER_CAPABILITIES, projectApiReference, selectApiReference } from './surface.js';
 
 export type DocMode = 'included' | 'model' | 'lookup';
 export interface DocEntry {
@@ -23,7 +23,8 @@ export const DOCS_MANIFEST: DocEntry[] = [
   { name: 'safety', mode: 'included' },
   { name: 'tab-lifecycle', mode: 'lookup', description: 'session tabs, claiming user tabs, and finalization', when: { backends: ['extension'] } },
   { name: 'sites', mode: 'lookup', description: 'find, run, and define site adapters' },
-  { name: 'js-tool', mode: 'model' },
+  { name: 'js-tool', mode: 'model', description: 'compact browser REPL quickstart' },
+  { name: 'repl-session', mode: 'lookup', description: 'persistent declarations, output, timeout/reset and execution recovery' },
   { name: 'api-reference', mode: 'model', description: 'the whole object model, generated from its TypeScript declarations' },
   { name: 'errors', mode: 'lookup', description: 'error code families and what to do for each' },
   { name: 'recon', mode: 'lookup', description: 'read before discovering a site’s API endpoints' },
@@ -54,10 +55,12 @@ export function readDoc(name: string): string | null {
   return text;
 }
 
-export function readDocForContext(name: string, ctx: DocContext): string | null {
+export function readDocForContext(name: string, ctx: DocContext, member?: string): string | null {
   if (!listDocs(ctx).some((entry) => entry.name === name && entry.available)) return null;
   const source = readDoc(name);
-  return source && name === 'api-reference' ? projectApiReference(source, ctx.capabilities as import('../protocol.js').BrowserFeature[]) : source;
+  if (!source || name !== 'api-reference') return source;
+  const projected = projectApiReference(source, ctx.capabilities as import('../protocol.js').BrowserFeature[]);
+  return member ? selectApiReference(projected, member) : projected;
 }
 
 export function listDocs(ctx: DocContext): Array<DocEntry & { available: boolean }> {

@@ -171,7 +171,7 @@ try {
   mcp = new Client({ name: 'setup-e2e', version: '0.0.0' });
   await mcp.connect(transport);
   const tools = await mcp.listTools();
-  assert(tools.tools.some((tool) => tool.name === 'tab_open'));
+  assert(tools.tools.some((tool) => tool.name === 'js'));
   assert(tools.tools.some((tool) => tool.name === 'doctor'));
   await mcp.close();
   mcp = null;

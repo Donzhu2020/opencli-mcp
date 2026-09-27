@@ -1,11 +1,11 @@
 ## API reference (generated from the public TypeScript declarations — do not edit)
 
-In `js` the globals are `agent`, `sites`, `recon`, `tools`, `session` (the members of `AgentApi`) plus `nodeRepl` and `Tab`. This is the object-model signature reference; typed entry tools are projections of it. Site adapter definitions are documented in `define-tools`.
+In `js` the globals are `browser`, `agent`, `sites`, `recon`, `tools`, `session` and `nodeRepl`. Await API methods; returned Tab and Browser handles persist across calls. Use docs_get with name:"api-reference" and member:"Tab.act" (or another class/member) for a focused reference. Site adapter definitions are documented in `define-tools`.
 
 ```ts
 interface AgentApi {
-  agent: { browsers: { getDefault(): Promise<Browser>; }; browser: Browser; documentation: { get(name: string): string | null; }; };
-  sites: Record<string, unknown> & { search(q: string, limit?: number): Promise<unknown>; list(): unknown; enable(site: string, opts?: { write?: boolean; }): Promise<{ site: string; tools: Array<string>; }>; disable(site: string): boolean; run(site: string, name: string, args?: Record<string, unknown>): Promise<unknown>; };
+  agent: { browsers: { getDefault(): Promise<Browser>; }; browser: Browser; documentation: { get(name: string): Promise<string | null>; }; };
+  sites: Record<string, unknown> & { search(q: string, limit?: number): Promise<unknown>; list(): Promise<unknown>; enable(site: string, opts?: { write?: boolean; }): Promise<{ site: string; tools: Array<string>; }>; disable(site: string): Promise<boolean>; run(site: string, name: string, args?: Record<string, unknown>): Promise<unknown>; };
   recon: {
     discover(tab: Tab, opts?: { maxScripts?: number; includeStatic?: boolean; includeAssets?: boolean; includeInline?: boolean; fetchTimeoutMs?: number; network?: Array<Record<string, unknown>>; }): Promise<DiscoverResult>;
   };
@@ -13,8 +13,8 @@ interface AgentApi {
     define(def: ToolDefinition | (Omit<ToolDefinition, "func"> & { func?: string | ((ctx: Record<string, unknown>) => unknown); })): Promise<{ draftId: string; site: string; name: string; args: Array<Arg>; }>;
     try(draftId: string, args: Record<string, unknown>, expect: DraftExpectation): Promise<{ result: CommandRunResult | CommandRunError; verification: { passed: boolean; checks: Array<{ check: string; passed: boolean; actual?: unknown; }>; }; }>;
     activate(draftId: string): Promise<{ site: string; name: string; file: string; verifiedAt: string; }>;
-    discard(draftId: string): { draftId: string; discarded: true; };
-    list(): Array<{ site: string; name: string; file: string; }>;
+    discard(draftId: string): Promise<{ draftId: string; discarded: true; }>;
+    list(): Promise<Array<{ site: string; name: string; file: string; }>>;
     remove(site: string, name: string): Promise<boolean>;
   };
   session: { id: string; };
@@ -26,7 +26,7 @@ class Browser {
   tabs: {
     new(url?: string): Promise<Tab>;
     list(): Promise<Array<{ id?: string; tabId: number; pending?: true; url?: string; title?: string; active: boolean; selected: boolean; origin: "agent" | "user"; state: "active" | "handoff"; }>>;
-    get(id: string): Tab;
+    get(id: string): Promise<Tab>;
     selected(): Promise<Tab | undefined>;
     finalize(opts?: { keep?: Array<{ tab: string | Tab; status: "handoff" | "deliverable"; }>; }): Promise<{ closed: Array<string>; kept: Array<string>; failed: Array<{ page: string; reason: string; }>; }>;
   };
@@ -40,7 +40,7 @@ class Browser {
     list(): Promise<Array<{ id: string; description: string; }>>;
     get(id: string): Promise<Record<string, unknown>>;
   };
-  documentation(): string;
+  documentation(): Promise<string>;
 }
 
 class Tab {
@@ -58,7 +58,7 @@ class Tab {
   screenshot(opts?: { fullPage?: boolean; annotate?: boolean; format?: "png" | "jpeg"; quality?: number; }): Promise<ImageValue>;
   find(target: (Target & { limit?: number; }) | { query: string; limit?: number; }): Promise<FindResult | ElementAtResult | QueryFindResult>;
   read(opts?: ReadOptions): Promise<ReadTextResult>; // Linear text of a bounded document. Scrolls to mount lazy content, retains repeated text from distinct nodes, restores the scroll position. No refs. A feed that grows without a bottom returns reason `unbounded` and the head already read — do not call it again to finish the feed.
-  act(opts: ActOptions): Promise<Record<string, unknown>>; // wait + act in one call at the runtime edge: locate → wait actionable → hit-test → real input → settle. `method:'dom'` skips the mouse event.
+  act(opts: ActOptions): Promise<ActionOutcome>; // wait + act in one call at the runtime edge: locate → wait actionable → hit-test → real input → settle. `method:'dom'` skips the mouse event.
   webmcp: { // WebMCP: tools the page itself registers via navigator.modelContext (page-provided tool source).
     list(): Promise<Array<{ name: string; description?: string; inputSchema?: unknown; }>>;
     call(name: string, input?: Record<string, unknown>): Promise<unknown>;
@@ -83,7 +83,7 @@ class Tab {
   cookie(name: string, opts?: { domain?: string; }): Promise<string | undefined>; // Read one cookie's value at run time — useful for per-request tokens an adapter needs (csrf/ct0/ csrftoken/XSRF-TOKEN). Defaults to the current page's host. Returns undefined when the cookie is absent.
   fetchJson(url: string, opts?: Record<string, unknown>): Promise<unknown>; // Fetch JSON through the page (its cookies and origin) after verifying the endpoint.
   frames(): Promise<Array<{ index: number; frameId: string; url: string; name: string; crossOrigin?: boolean; oopif?: boolean; }>>;
-  download(afterSequence: number, timeoutMs?: number): Promise<DownloadWaitResult>; // Wait for the page download begun after a tab_act cursor, then check Chrome's file state.
+  download(afterSequence: number, timeoutMs?: number): Promise<DownloadWaitResult>; // Wait for the page download begun after a tab.act cursor, then check Chrome's file state.
 }
 
 type Target = ({ frame?: FrameStep | FrameStep[]; within?: string }) & (
@@ -97,6 +97,20 @@ type FrameStep = string | number;
 type ActAction = 'click' | 'dblclick' | 'hover' | 'focus' | 'fill' | 'type' | 'press' | 'select' | 'check' | 'uncheck' | 'upload' | 'drag' | 'scroll' | 'back' | 'forward' | 'reload';
 
 interface ActOptions { target?: Target; action: ActAction; value?: string; files?: string[]; to?: Target; direction?: 'up' | 'down' | 'left' | 'right'; amount?: number; timeoutMs?: number; settleMs?: number; method?: 'cdp' | 'dom' }
+
+interface ActionOutcome {
+  action: ActAction;
+  delivery: 'applied' | 'received' | 'dispatched';
+  controlState: 'verified' | 'unverified';
+  network?: { afterSequence: number; cursor: number };
+  matches_n?: number;
+  navigated?: boolean; url?: string; title?: string; timedOut?: boolean;
+  ref?: string; filled?: boolean; verified?: boolean; actual?: string;
+  checked?: boolean; changed?: boolean; selected?: string[]; files?: number;
+  openedTabs?: Array<{ tab?: string; tabId: number; url?: string; title?: string; pending?: true }>;
+  download?: { afterSequence: number; started: Array<{ seq: number; guid?: string; url: string; suggestedFilename: string }> };
+  method?: 'dom';
+}
 
 interface ObserveOptions { mode?: 'state' | 'screenshot' | 'both'; since?: string; viewport?: boolean; ref?: string; annotate?: boolean; fullPage?: boolean }
 
@@ -156,5 +170,72 @@ interface DownloadWaitResult {
   danger?: string;
   error?: string;
   elapsedMs: number;
+}
+
+interface ToolDefinition {
+  site: string;
+  name: string;
+  description: string;
+  access: 'read' | 'write';
+  domain?: string;
+  result?: { kind: 'rows' | 'value'; description: string; fields?: Record<string, string>; paginated?: boolean };
+  args?: Arg[]; func: string;
+}
+
+interface DraftExpectation { path?: string; equals?: unknown; minRows?: number }
+
+interface CommandRunResult { ok: true; site: string; name: string; rows?: unknown[]; value?: unknown; nextCursor?: string; elapsedMs: number }
+
+interface CommandRunError { ok: false; site: string; name: string; error: { code: string; message: string; hint?: string; details?: Record<string, unknown> }; elapsedMs: number }
+
+interface EndpointCandidate {
+  url: string;
+  method: string;
+  type: string;
+  kind: UrlMatch['kind'];
+  queryParams: string[];
+  bodyParams: string[];
+  evidence: 'network+static' | 'network' | 'static';
+  network?: { status?: number; contentType?: string; count: number; requestId?: string };
+  sources: Array<{ script: string; line: number; snippet: string }>;
+  score: number;
+}
+
+interface DiscoverResult {
+  pageUrl: string | null;
+  scripts: Array<{ url: string; bytes: number; analyzed: boolean; error?: string }>;
+  endpoints: EndpointCandidate[];
+  networkEntries: number;
+}
+
+interface UrlMatch {
+  url: string;
+  method: string;
+  type: string;
+  queryParams: string[];
+  bodyParams: string[];
+  headers?: Record<string, string>;
+  contentType?: string;
+  kind: 'api' | 'asset' | 'page' | 'unknown';
+  line: number;
+  source: string;
+  filename?: string;
+}
+
+interface ArgValue {
+  type?: 'string' | 'int' | 'number' | 'boolean' | 'array' | 'object';
+  nullable?: boolean;
+  choices?: Array<string | number | boolean>;
+  items?: ArgValue;
+  properties?: Record<string, ArgValue & { required?: boolean; help?: string }>;
+  min?: number;
+  max?: number;
+  minLength?: number;
+  maxLength?: number; example?: unknown;
+}
+
+interface Arg extends ArgValue { name: string;
+  required?: boolean;
+  default?: unknown; help?: string;
 }
 ```

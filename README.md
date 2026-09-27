@@ -18,7 +18,7 @@ opencli-mcp lets MCP clients observe and operate your Chrome tabs through a loca
 - **Add site adapters.** Inspect a site's requests, verify an API, and define an explicit reusable MCP tool.
 - **Keep browser work organized.** Agent-created tabs live in named groups and are cleaned up after use. Tabs borrowed from the user are never closed by session cleanup.
 
-Works with MCP clients including Claude Code, Codex, OpenCode, Cursor, Claude Desktop, DeepSeek Harness (`dsh`), and Pi (with `pi-mcp-adapter`). Clients can use structured tools for individual actions or a persistent JavaScript session for multi-step workflows.
+Works with MCP clients including Claude Code, Codex, OpenCode, Cursor, Claude Desktop, DeepSeek Harness (`dsh`), and Pi (with `pi-mcp-adapter`). Agents use a persistent JavaScript REPL for browser work and structured site tools for verified workflows.
 
 ## Quick start
 
@@ -75,19 +75,22 @@ For integrations and custom workflows, the main tools are:
 
 | Task | Tools |
 |---|---|
-| Browse a page | `tab_open`, `tab_observe`, `tab_read`, `tab_act`, `tab_expect` |
-| Find or use an existing tab | `tab_list`, `tab_claim` |
-| Wait for a download started by an action | `tab_download_wait` |
-| Keep a tab open or close it | `tab_release`, `tab_close` |
-| Finish a browser session | `session_finalize` |
+| Browser workspace | `js`, `js_reset` |
 | Discover and run site commands | `sites_search`, `site_run` |
-| Define and verify a site adapter | `tools_define`, `tools_try`, `tools_activate` |
-| Run multi-step JavaScript | `js`, `js_reset` |
-| Read built-in documentation | `docs_list`, `docs_get` |
+| Learn the API | `docs_get` (quickstart, topics, or an exact API member) |
+| Diagnose connection and execution | `doctor` |
+| Finish a browser session | `session_finalize` |
 
-The browser workflow is **observe → act → verify → finalize**. `tab_observe` is the action map (accessibility snapshot with element references); pass its `snapshotId` as `since` for an exact diff. `tab_read` is rendered document text; pass its `readId` and `nextStart` back together to continue the same capture. Actions wait for their targets to be ready before dispatching browser input.
+The browser workflow is **observe → act → verify → finalize**, expressed in `js` using the same object model as adapters:
 
-Browser control starts explicitly with `tab_open` or `tab_claim`; `tab_list` shows session tabs and, with `user:true`, up to 20 recent tabs available to claim. Use `query` to find an older tab by title or URL. `tab_release` leaves a tab open and gives up control. `tab_close` closes it, including a claimed user tab. Session cleanup closes agent-created tabs that you do not keep and releases claimed user tabs; any cleanup failures are reported for retry.
+```js
+let tab = await browser.tabs.new('https://example.com/');
+await tab.observe();
+```
+
+Variables, functions, classes and Tab handles persist across calls. After inspecting the result, use `await tab.act(...)` and `await tab.expect(...)` or observe again. Keep working data in variables and return only relevant evidence. `docs_get {}` provides a compact quickstart; `{name:"api-reference",member:"Tab.act"}` provides exact types. No repository documentation access is required.
+
+Use `browser.user.openTabs({query,limit})` and `browser.user.claimTab(...)` for user tabs. The lookup returns up to 20 recent matches by default. `tab.release()` leaves a tab open; `tab.close()` closes it. `session_finalize` closes agent tabs not kept and releases borrowed tabs. `js_reset` stops JavaScript and clears bindings while leaving tabs open; already dispatched operations may still complete. All API methods are awaited.
 
 Inside the `js` tool, you can also call site commands directly:
 

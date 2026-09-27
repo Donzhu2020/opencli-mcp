@@ -18,20 +18,20 @@ opencli-mcp 是一个连接到真实 Chrome 的 MCP browser service。Chrome ext
 
 ## Browser 工作流
 
-先调用 `tab_open` 打开新 tab，或用 `tab_list {user:true}` 找到现有 tab，再用 `tab_claim` 接管。随后按 **observe → act → verify** 工作：
+以 `js` 为 browser 的主要入口。用 `let tab = await browser.tabs.new(url)` 打开新 tab，或用 `await browser.user.openTabs({query:"…"})` 找到现有 tab，再用 `let tab = await browser.user.claimTab({tabId})` 接管。随后按 **observe → act → verify** 工作：
 
-- `tab_observe` 给出可访问性快照和 `eN` 引用；`tab_read` 读取长文档的线性文本。
-- `tab_act` 等待目标可操作、定位、执行真实输入并等待页面稳定。复杂流程可在持久的 `js` session 中使用同一套 `Tab` API。
-- `tab_expect` 轮询你要确认的结果。页面变化后重新 observe，不要沿用旧引用。
-- 如果 `tab_act` 返回 `openedTabs`，可直接使用其中的 `tab`；若为 `pending:true`，稍后用数字 `tabId` 在 `tab_list` 中找到它。下载时把 `download.afterSequence` 传给 `tab_download_wait`，确认文件是否完成。
+- `tab.observe` 给出可访问性快照和 `eN` 引用；`tab.read` 读取长文档的线性文本。
+- `tab.act` 等待目标可操作、定位、执行真实输入并等待页面稳定。所有 API 方法都用 `await`；变量、function 和 class 跨调用保留。
+- `tab.expect` 轮询你要确认的结果。页面变化后重新 observe，不要沿用旧引用。
+- 如果 `tab.act` 返回 `openedTabs`，可直接使用其中的 `tab`；若为 `pending:true`，稍后用数字 `tabId` 在 `browser.tabs.list()` 中找到它。下载时把 `download.afterSequence` 传给 `tab.download`，确认文件是否完成。
 
-完成后调用 `session_finalize`。没有保留的 agent tab 会关闭；已接管的 user tab 会释放。需要把新 tab 留给用户时标记为 `deliverable`，需要供后续回合继续接管时标记为 `handoff`。也可用 `tab_release` 保留单个 tab，或用 `tab_close` 明确关闭。详见 [tab 生命周期](tab-lifecycle.md)。
+完成后调用 `session_finalize`。没有保留的 agent tab 会关闭；已接管的 user tab 会释放。需要把新 tab 留给用户时标记为 `deliverable`，需要供后续回合继续接管时标记为 `handoff`。也可用 `tab.release` 保留单个 tab，或用 `tab.close` 明确关闭。详见 [tab 生命周期](tab-lifecycle.md)。
 
 ## Site Adapter
 
-内置 Adapter 覆盖 Twitter/X、Bilibili 和 Reddit。`sites_search` 查找命令和参数，`site_run` 直接执行；在 `js` 中可用 `sites.enable('reddit')` 暴露该站的动态工具。Adapter 与交互式 browser 操作使用同一个 `Tab` API 和当前 Chrome 登录状态。
+内置 Adapter 覆盖 Twitter/X、Bilibili 和 Reddit。`sites_search` 查找命令和参数，`site_run` 直接执行；在 `js` 中可用 `await sites.enable('reddit')` 暴露该站的动态工具。Adapter 与交互式 browser 操作使用同一个 `Tab` API 和当前 Chrome 登录状态。
 
-创建自己的 Adapter 时，先用 `network_inspect` 的 list/detail 和 `recon.discover(tab)` 找候选 API，再验证鉴权、参数、分页及错误行为。`tools_define` 创建不会立即生效的 draft；用 `tools_try` 传入真实参数和结果断言验证，通过后用 `tools_activate` 发布。系统不会根据一次操作轨迹猜测并生成永久工具。详见 [Adapter 指南](define-tools.md)。
+创建自己的 Adapter 时，先用 `tab.network.list()/detail()` 和 `recon.discover(tab)` 找候选 API，再验证鉴权、参数、分页及错误行为。`tools.define` 创建不会立即生效的 draft；用 `tools.try` 传入真实参数和结果断言验证，通过后用 `tools.activate` 发布。系统不会根据一次操作轨迹猜测并生成永久工具。详见 [Adapter 指南](define-tools.md)。
 
 ## 架构与开发
 

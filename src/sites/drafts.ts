@@ -26,7 +26,7 @@ const targetPath = (site: string, name: string): string => path.join(USER_ADAPTE
 
 function readRecord(id: string): DraftRecord {
   try { return JSON.parse(fs.readFileSync(draftPath(id, 'json'), 'utf8')) as DraftRecord; }
-  catch { throw new ActionError('unknown_draft', `No adapter draft ${id}.`, 'Create one with tools_define.'); }
+  catch { throw new ActionError('unknown_draft', `No adapter draft ${id}.`, 'Create one with tools.define.'); }
 }
 function writeRecord(record: DraftRecord): void { fs.writeFileSync(draftPath(record.id, 'json'), JSON.stringify(record, null, 2)); }
 
@@ -100,8 +100,8 @@ export function activateDraft(id: string, sourceFile: (site: string, name: strin
   const record = readRecord(id);
   if (inFlight.has(id)) throw new ActionError('draft_in_use', 'This draft is still being tried.', 'Wait for the trial to finish before activation.');
   const activeFile = sourceFile(record.site, record.name);
-  if (!record.verified || !record.verifiedAt) throw new ActionError('draft_not_verified', 'This draft has not passed a real trial with an output assertion.', 'Run tools_try with sample args and expect first.');
-  if (digest(draftPath(id, 'js')) !== record.verifiedDigest) throw new ActionError('draft_changed', 'This draft changed after its verified trial.', 'Run tools_try again before activating.');
+  if (!record.verified || !record.verifiedAt) throw new ActionError('draft_not_verified', 'This draft has not passed a real trial with an output assertion.', 'Run tools.try with sample args and expect first.');
+  if (digest(draftPath(id, 'js')) !== record.verifiedDigest) throw new ActionError('draft_changed', 'This draft changed after its verified trial.', 'Run tools.try again before activating.');
   const target = targetPath(record.site, record.name);
   if ((activeFile ?? null) !== record.baselineFile || (activeFile ? digest(activeFile) : null) !== record.baseline || (target !== activeFile && digest(target) !== null)) throw new ActionError('draft_conflict', 'The active adapter changed after this draft was created.', 'Create a new draft from the latest definition.');
   fs.mkdirSync(path.dirname(target), { recursive: true });

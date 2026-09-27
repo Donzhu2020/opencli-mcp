@@ -4,6 +4,7 @@
  */
 import type { RuntimePage } from '../backends/page-types.js';
 import { ActionError } from './errors.js';
+import { checkActInput, checkExpect } from './action-input.js';
 import { ariaDiff } from './diff.js';
 import { networkDetail, networkSummary } from './network.js';
 import { ARIA_BUDGET, collapseAria } from '../shared/aria-collapse.js';
@@ -22,6 +23,21 @@ export type ActAction = 'click' | 'dblclick' | 'hover' | 'focus' | 'fill' | 'typ
 
 export interface ActOptions { target?: Target; action: ActAction; value?: string; files?: string[]; to?: Target; direction?: 'up' | 'down' | 'left' | 'right'; amount?: number; timeoutMs?: number; settleMs?: number; /** click only. `dom` runs HTMLElement.click() and sends no mouse event. Default is a real mouse event. */ method?: 'cdp' | 'dom' }
 
+/** Input delivery and control verification are separate from completion of the site's task. */
+export interface ActionOutcome {
+  action: ActAction;
+  delivery: 'applied' | 'received' | 'dispatched';
+  controlState: 'verified' | 'unverified';
+  network?: { afterSequence: number; cursor: number };
+  matches_n?: number;
+  navigated?: boolean; url?: string; title?: string; timedOut?: boolean;
+  ref?: string; filled?: boolean; verified?: boolean; actual?: string;
+  checked?: boolean; changed?: boolean; selected?: string[]; files?: number;
+  openedTabs?: Array<{ tab?: string; tabId: number; url?: string; title?: string; pending?: true }>;
+  download?: { afterSequence: number; started: Array<{ seq: number; guid?: string; url: string; suggestedFilename: string }> };
+  method?: 'dom';
+}
+
 export interface ObserveOptions { mode?: 'state' | 'screenshot' | 'both'; /** Return a diff only against this exact snapshot id; otherwise return the full state. */ since?: string; /** only the subtree on screen right now (what a screenshot shows). Not a page of the full tree. */ viewport?: boolean; /** open one branch of the action map (`eN` from a collapsed line). Ignores viewport. */ ref?: string; /** overlay eN labels on the screenshot */ annotate?: boolean; fullPage?: boolean }
 
 export interface ReadOptions { /** stop after this many characters. Default 60000. */ maxChars?: number; /** character offset returned as nextStart by a previous read */ start?: number; /** capture id returned by that same read */ readId?: string }
@@ -38,6 +54,7 @@ export class Tab {
   readonly tabId?: number;
   constructor(private readonly initialId: string, private readonly ctx: SessionContext, private readonly bound?: RuntimePage, tabId?: number) { this.tabId = tabId; }
   get id(): string { return this.bound?.getActivePage() ?? this.initialId; }
+  toJSON(): { type: 'Tab'; id: string; tabId?: number } { return { type: 'Tab', id: this.id, ...(this.tabId !== undefined && { tabId: this.tabId }) }; }
   private closed = false;
 
   /** Run `fn` on this tab's own page object. Operations are serialized per tab, never across tabs. */
@@ -165,15 +182,16 @@ export class Tab {
    */
   async read(opts: ReadOptions = {}): Promise<ReadTextResult> {
     return this.use(async (page) => {
-      if (opts.start !== undefined && !opts.readId) throw new ActionError('invalid_args', 'Continuing a read requires both readId and start.', 'Copy readId and nextStart from the previous tab_read result.');
+      if (opts.start !== undefined && !opts.readId) throw new ActionError('invalid_args', 'Continuing a read requires both readId and start.', 'Copy readId and nextStart from the previous tab.read result.');
       const r = await page.pageCall('readText', opts) as ReadTextResult;
-      if (r.reason === 'stale') throw new ActionError('stale_read', 'This page no longer has that text capture.', 'Call tab_read without readId to start a new capture.');
+      if (r.reason === 'stale') throw new ActionError('stale_read', 'This page no longer has that text capture.', 'Call tab.read without readId to start a new capture.');
       return r;
     });
   }
 
   /** wait + act in one call at the runtime edge: locate → wait actionable → hit-test → real input → settle. `method:'dom'` skips the mouse event. */
-  async act(opts: ActOptions): Promise<Record<string, unknown>> {
+  async act(opts: ActOptions): Promise<ActionOutcome> {
+    opts = { ...opts, ...checkActInput(opts) };
     const { action } = opts;
     return this.use(async (page) => {
       try {
@@ -234,6 +252,7 @@ export class Tab {
 
   /** Assert what the page must show now (polled up to timeoutMs). */
   async expect(what: Expectation, opts: { timeoutMs?: number } = {}): Promise<CheckResult> {
+    checkExpect(what);
     return this.use(async (page) => {
       try { return await page.expect(what, opts); }
       catch (err) { const e = err as { code?: string; message?: string; hint?: string; extra?: Record<string, unknown> }; throw new ActionError(e.code ?? 'expectation_failed', e.message ?? String(err), e.hint, e.extra); }
@@ -304,6 +323,6 @@ export class Tab {
   /** Fetch JSON through the page (its cookies and origin) after verifying the endpoint. */
   async fetchJson(url: string, opts: Record<string, unknown> = {}): Promise<unknown> { return this.use((p) => p.fetchJson(url, opts as never)); }
   async frames(): Promise<Array<{ index: number; frameId: string; url: string; name: string; crossOrigin?: boolean; oopif?: boolean }>> { return this.use((p) => p.frames()); }
-  /** Wait for the page download begun after a tab_act cursor, then check Chrome's file state. */
+  /** Wait for the page download begun after a tab.act cursor, then check Chrome's file state. */
   async download(afterSequence: number, timeoutMs = 30_000): Promise<DownloadWaitResult> { return this.use((p) => p.waitForDownload(afterSequence, timeoutMs)); }
 }

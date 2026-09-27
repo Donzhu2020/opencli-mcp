@@ -27,19 +27,21 @@ async function harness() {
   const site = `ctest${Math.random().toString(36).slice(2)}`;
   const drafts: string[] = [];
   const define = async (name: string, overrides: Record<string, unknown> = {}) => {
-    const result = await client.callTool({ name: 'tools_define', arguments: { site, name, description: 'test write', access: 'write', func: 'async () => ({ done: true })', ...overrides } });
-    const data = body(result);
+    const definition = { site, name, description: 'test write', access: 'write', func: 'async () => ({ done: true })', ...overrides };
+    const result = await client.callTool({ name: 'js', arguments: { code: `await tools.define({...${JSON.stringify(definition)}, func: (${definition.func})})` } });
+    const data: Record<string, unknown> = { ok: body(result).ok, ...(body(result).value as Record<string, unknown>) };
     if (typeof data.draftId === 'string') drafts.push(data.draftId);
     return { result, data };
   };
-  const tryDraft = async (draftId: string, args: Record<string, unknown> = {}, expect: Record<string, unknown> = { path: 'value.done', equals: true }) => body(await client.callTool({ name: 'tools_try', arguments: { draftId, args, expect } }));
-  const activate = async (draftId: string) => body(await client.callTool({ name: 'tools_activate', arguments: { draftId } }));
+  const js = async (code: string) => { const result = body(await client.callTool({ name: 'js', arguments: { code } })); return result.ok ? { ok: true, ...(result.value as Record<string, unknown>) } : result; };
+  const tryDraft = async (draftId: string, args: Record<string, unknown> = {}, expect: Record<string, unknown> = { path: 'value.done', equals: true }) => js(`await tools.try(${JSON.stringify(draftId)}, ${JSON.stringify(args)}, ${JSON.stringify(expect)})`);
+  const activate = async (draftId: string) => js(`await tools.activate(${JSON.stringify(draftId)})`);
   const cleanup = async () => {
-    for (const draftId of drafts) await client.callTool({ name: 'tools_discard', arguments: { draftId } }).catch(() => {});
+    for (const draftId of drafts) await js(`await tools.discard(${JSON.stringify(draftId)})`).catch(() => {});
     try { await client.callTool({ name: 'js', arguments: { code: `await tools.remove('${site}', 'poke')` } }); } catch { /* ignore */ }
     await client.close().catch(() => {}); await rt.shutdown().catch(() => {});
   };
-  return { client, site, define, tryDraft, activate, elicits: () => elicits, cleanup };
+  return { client, site, js, define, tryDraft, activate, elicits: () => elicits, cleanup };
 }
 
 describe('adapter draft lifecycle and write commands', () => {
@@ -47,11 +49,11 @@ describe('adapter draft lifecycle and write commands', () => {
     const h = await harness();
     try {
       const { data } = await h.define('poke', { args: [{ name: 'x', required: false }] });
-      expect(data).toMatchObject({ ok: true, status: 'draft' });
+      expect(data).toMatchObject({ ok: true, draftId: expect.any(String) });
       expect(body(await h.client.callTool({ name: 'site_run', arguments: { site: h.site, command: 'poke', args: {} } }))).toMatchObject({ ok: false, error: { code: 'unknown_command' } });
       expect((await h.client.listTools()).tools.some((t) => t.name === `${h.site}_poke`)).toBe(false);
       expect(await h.tryDraft(data.draftId as string)).toMatchObject({ ok: true, verification: { passed: true } });
-      expect(await h.activate(data.draftId as string)).toMatchObject({ ok: true, status: 'active' });
+      expect(await h.activate(data.draftId as string)).toMatchObject({ ok: true, site: h.site });
       expect(body(await h.client.callTool({ name: 'sites_search', arguments: {} }))).toMatchObject({ sites: expect.arrayContaining([expect.objectContaining({ site: h.site, commands: 1, write: 1 })]) });
       const direct = await h.client.callTool({ name: 'site_run', arguments: { site: h.site, command: 'poke', args: {} } });
       expect(body(direct)).toMatchObject({ ok: true, value: { done: true } });
@@ -72,9 +74,9 @@ describe('adapter draft lifecycle and write commands', () => {
       const { data } = await h.define('poke');
       const draftId = data.draftId as string;
       expect(await h.tryDraft(draftId, {}, { path: 'value.done', equals: false })).toMatchObject({ verification: { passed: false } });
-      expect(body(await h.client.callTool({ name: 'tools_activate', arguments: { draftId } }))).toMatchObject({ ok: false, error: { code: 'draft_not_verified' } });
-      expect(body(await h.client.callTool({ name: 'tools_discard', arguments: { draftId } }))).toMatchObject({ ok: true, discarded: true });
-      expect(body(await h.client.callTool({ name: 'tools_activate', arguments: { draftId } }))).toMatchObject({ ok: false, error: { code: 'unknown_draft' } });
+      expect(await h.js(`await tools.activate(${JSON.stringify(draftId)})`)).toMatchObject({ ok: false, error: { code: 'draft_not_verified' } });
+      expect(await h.js(`await tools.discard(${JSON.stringify(draftId)})`)).toMatchObject({ ok: true, discarded: true });
+      expect(await h.js(`await tools.activate(${JSON.stringify(draftId)})`)).toMatchObject({ ok: false, error: { code: 'unknown_draft' } });
     } finally { await h.cleanup(); }
   });
 });

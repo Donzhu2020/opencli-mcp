@@ -38,3 +38,32 @@ export function projectApiReference(source: string, features: readonly BrowserFe
   const banner = `Available extension features now: ${features.length ? features.join(', ') : 'none (browser disconnected or not advertised)'}. Optional Tab members absent below are unavailable.`;
   return lines.join('\n').replace('```ts\n', `${banner}\n\n\`\`\`ts\n`);
 }
+
+/** Slice the generated reference and include the value types needed by that member. */
+export function selectApiReference(source: string, member: string): string | null {
+  const code = source.split('```ts\n')[1]?.split('```')[0];
+  if (!code) return null;
+  const declarations = new Map<string, string>();
+  const starts = [...code.matchAll(/^(?:class|interface|type) (\w+)\b/gm)];
+  for (const [i, match] of starts.entries()) declarations.set(match[1], code.slice(match.index, starts[i + 1]?.index ?? code.length).trim());
+  const [name, method, ...rest] = member.split('.');
+  if (rest.length) return null;
+  let selected = declarations.get(name);
+  if (!selected) return null;
+  if (method) {
+    const lines = selected.split('\n');
+    const start = lines.findIndex(line => /^  (\w+)\??(?:\(|:)/.exec(line)?.[1] === method);
+    if (start < 0) return null;
+    let end = start + 1;
+    if (/\{\s*(?:\/\/.*)?$/.test(lines[start])) { while (end < lines.length && lines[end] !== '  };') end++; end++; }
+    selected = `${lines[0]}\n${lines.slice(start, end).join('\n')}\n}`;
+  }
+  const included = new Set([name]);
+  const sections = [selected];
+  for (const section of sections) for (const token of section.match(/\b[A-Z]\w*\b/g) ?? []) {
+    if (included.has(token) || ['Tab', 'Browser', 'AgentApi'].includes(token)) continue;
+    const declaration = declarations.get(token);
+    if (declaration) { included.add(token); sections.push(declaration); }
+  }
+  return `## API reference: ${member}\n\n${source.match(/^Available extension features now:.*$/m)?.[0] ?? ''}\n\n\`\`\`ts\n${sections.join('\n\n')}\n\`\`\`\n\nFor returned object handles, request their class or member (for example Tab.observe).`;
+}

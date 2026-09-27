@@ -1,160 +1,187 @@
-/**
- * Persistent JavaScript session (code mode): the same object model as the typed tools, but the
- * agent composes many steps in one call. Top-level const/let become session globals so handles
- * survive across calls; the last expression's value is returned.
- */
-import vm from 'node:vm';
-import { AsyncLocalStorage } from 'node:async_hooks';
+/** Persistent Node REPL with a per-session worker and a bridge to the existing object model. */
+import { Worker } from 'node:worker_threads';
+import { Tab } from '../api/tab.js';
+import { Browser } from '../api/browser.js';
 
 export interface JsRunResult { value: unknown; writes: string[]; images: Array<{ mimeType: string; base64: string }>; error?: { name: string; message: string; stack?: string; code?: string; hint?: string; data?: Record<string, unknown> } }
 export interface JsImage { mimeType?: string; base64?: string; bytes?: Uint8Array | ArrayBuffer }
-
-const STATEMENT_KEYWORDS = /^(return|if|else|for|while|do|switch|try|catch|finally|throw|const|let|var|function|class|import|export|break|continue|\}|\/\/|\/\*|\*)/;
-
-/** Mask strings/template literals/comments so bracket depth tracking ignores their contents. */
-function maskCode(code: string): string {
-  let out = ''; let i = 0; const n = code.length;
-  while (i < n) {
-    const c = code[i]; const next = code[i + 1];
-    if (c === '/' && next === '/') { while (i < n && code[i] !== '\n') { out += ' '; i++; } continue; }
-    if (c === '/' && next === '*') { while (i < n && !(code[i] === '*' && code[i + 1] === '/')) { out += code[i] === '\n' ? '\n' : ' '; i++; } out += '  '; i += 2; continue; }
-    if (c === '"' || c === "'" || c === '`') {
-      const q = c; out += q; i++;
-      while (i < n && code[i] !== q) { if (code[i] === '\\') { out += '  '; i += 2; continue; } out += code[i] === '\n' ? '\n' : ' '; i++; }
-      out += q; i++; continue;
-    }
-    out += c; i++;
-  }
-  return out;
-}
-
-/**
- * Put every top-level statement on its own line: `const a = 1; const b = a + 1; b` on one line becomes three lines, so the
- * per-line rewrite below sees each declaration (semicolons inside brackets/strings do not split).
- */
-function splitTopLevelStatements(code: string): string {
-  const masked = maskCode(code);
-  const lines = code.split('\n'); const maskedLines = masked.split('\n');
-  let depth = 0; const out: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]; const ml = maskedLines[i];
-    if (depth !== 0) { for (const ch of ml) { if (ch === '{' || ch === '(' || ch === '[') depth++; else if (ch === '}' || ch === ')' || ch === ']') depth = Math.max(0, depth - 1); } out.push(line); continue; }
-    let d = 0; let start = 0; const parts: string[] = [];
-    for (let j = 0; j < ml.length; j++) {
-      const ch = ml[j];
-      if (ch === '{' || ch === '(' || ch === '[') d++; else if (ch === '}' || ch === ')' || ch === ']') d = Math.max(0, d - 1);
-      else if (ch === ';' && d === 0 && j < ml.length - 1 && ml.slice(j + 1).trim()) { parts.push(line.slice(start, j + 1)); start = j + 1; }
-    }
-    parts.push(line.slice(start));
-    depth = d;
-    out.push(...parts.map((p, k) => (k === 0 ? p : p.replace(/^\s+/, ''))));
-  }
-  return out.join('\n');
-}
-
-/** Rewrite top-level declarations to assignments and return the last top-level expression. */
-export function transformCode(input: string): string {
-  const code = splitTopLevelStatements(input);
-  const masked = maskCode(code);
-  const lines = code.split('\n'); const maskedLines = masked.split('\n');
-  let depth = 0; const topLevel: boolean[] = [];
-  for (const ml of maskedLines) {
-    topLevel.push(depth === 0);
-    for (const ch of ml) { if (ch === '{' || ch === '(' || ch === '[') depth++; else if (ch === '}' || ch === ')' || ch === ']') depth = Math.max(0, depth - 1); }
-  }
-  const out = lines.map((line, idx) => {
-    if (!topLevel[idx]) return line;
-    if (!/^(\s*)(const|let|var)\s+/.test(maskedLines[idx])) return line; // masked view: not inside a string/template/comment
-    const m = /^(\s*)(const|let|var)\s+(.*)$/.exec(line);
-    if (!m) return line;
-    const rest = m[3];
-    if (!rest.includes('=')) return `${m[1]}${rest.replace(/;\s*$/, '').split(',').map((n) => `${n.trim()} = undefined`).join(', ')};`; // let a, b;
-    if (/^[{[]/.test(rest)) {
-      // destructuring: const {a, b} = expr;  →  ({a, b} = expr);
-      const eq = rest.indexOf('=');
-      if (eq > 0) { const body = rest.replace(/;\s*$/, ''); return `${m[1]}(${body});`; }
-    }
-    return `${m[1]}${rest}`;
-  });
-  // last top-level statement (may span lines) → return its value when it is an expression
-  let last = out.length - 1;
-  while (last >= 0 && !out[last].trim()) last--;
-  if (last >= 0) {
-    let start = last;
-    while (start > 0 && !topLevel[start]) start--; // back up to the line where this statement began (depth 0)
-    const stmt = out.slice(start, last + 1).join('\n');
-    const t = stmt.trim();
-    const maskedFirst = maskedLines[start].trim();
-    const isStatement = STATEMENT_KEYWORDS.test(t) || maskedFirst.startsWith('({') || /^[A-Za-z_$][\w$]*\s*=[^=]/.test(maskedFirst);
-    if (!isStatement && t) {
-      out.splice(start, last - start + 1, `return (${t.replace(/;\s*$/, '')});`);
-    } else if (/^[A-Za-z_$][\w$]*\s*=[^=]/.test(maskedFirst)) {
-      out.push(`return ${maskedFirst.split('=')[0].trim()};`);
-    }
-  }
-  return out.join('\n');
-}
+type ActiveRun = { id: number; output: JsRunResult; finish: (result: JsRunResult) => void };
 
 export class JsSession {
-  private context: vm.Context;
-  private readonly output = new AsyncLocalStorage<{ writes: string[]; images: Array<{ mimeType: string; base64: string }> }>();
+  private worker?: Worker;
+  private active?: ActiveRun;
+  private tail: Promise<unknown> = Promise.resolve();
+  private generation = 0;
+  private disposed = false;
+  private references = new Map<number, any>();
+  private identities = new WeakMap<object, number>();
+  private pendingCalls = 0;
+  private drainWaiters = new Set<() => void>();
   runs = 0;
 
-  constructor(private readonly globals: Record<string, unknown>) {
-    this.context = this.makeContext();
+  constructor(private readonly globals: Record<string, unknown>) {}
+
+  status(): { state: 'idle' | 'running' | 'draining'; generation: number; pendingCalls: number } {
+    return { state: this.active ? 'running' : this.pendingCalls ? 'draining' : 'idle', generation: this.generation, pendingCalls: this.pendingCalls };
   }
 
-  private makeContext(): vm.Context {
-    const self = this;
-    const fmt = (v: unknown): string => typeof v === 'string' ? v : safeStringify(v);
-    const write = (value: string): void => { self.output.getStore()?.writes.push(value); };
-    const nodeRepl = {
-      write: (v: unknown) => { write(fmt(v)); },
-      emitImage: async (img: JsImage) => { self.output.getStore()?.images.push(normalizeImage(img)); },
-    };
-    const consoleShim = {
-      log: (...a: unknown[]) => write(a.map(fmt).join(' ')),
-      info: (...a: unknown[]) => write(a.map(fmt).join(' ')),
-      warn: (...a: unknown[]) => write('[warn] ' + a.map(fmt).join(' ')),
-      error: (...a: unknown[]) => write('[error] ' + a.map(fmt).join(' ')),
-      debug: () => {},
-    };
-    return vm.createContext({
-      ...this.globals,
-      nodeRepl, console: consoleShim,
-      setTimeout, clearTimeout, setInterval, clearInterval, queueMicrotask,
-      URL, URLSearchParams, TextEncoder, TextDecoder, structuredClone, fetch, AbortController, Headers, Request, Response,
-      Buffer, atob, btoa, crypto: globalThis.crypto,
-    }, { name: 'opencli-mcp js session' });
+  reset(): { reset: true; pendingCalls: number } {
+    this.stop('js_reset', 'JavaScript execution was reset.');
+    return { reset: true, pendingCalls: this.pendingCalls };
   }
 
-  reset(): void { this.context = this.makeContext(); this.runs = 0; }
-
-  async run(code: string, opts: { timeoutMs?: number } = {}): Promise<JsRunResult> {
-    const output = { writes: [] as string[], images: [] as Array<{ mimeType: string; base64: string }> };
-    return this.output.run(output, () => this.runCaptured(code, opts, output));
+  async dispose(): Promise<void> {
+    this.disposed = true;
+    this.stop('js_closed', 'JavaScript session was closed.');
+    // A dispatched tab creation may finish after the worker exits. Drain it before browser cleanup.
+    if (this.pendingCalls) await new Promise<void>(resolve => { this.drainWaiters.add(resolve); });
   }
 
-  private async runCaptured(code: string, opts: { timeoutMs?: number }, output: { writes: string[]; images: Array<{ mimeType: string; base64: string }> }): Promise<JsRunResult> {
-    const body = transformCode(code);
-    const wrapped = `(async () => {\n${body}\n})()`;
-    const timeoutMs = opts.timeoutMs ?? 300_000;
-    let timer: NodeJS.Timeout | undefined;
+  run(code: string, opts: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<JsRunResult> {
+    const generation = this.generation;
+    const next = this.tail.then(() => {
+      if (opts.signal?.aborted) return this.failure('js_cancelled', 'This call was cancelled before execution.');
+      if (this.disposed || generation !== this.generation) return this.failure('js_reset', 'The session changed before this queued call could start.', 'Inspect the session and resubmit only the code you still need.');
+      if (this.pendingCalls) return this.failure('js_busy', 'An earlier browser/API operation is still completing.', 'Call doctor to inspect javascript.pendingCalls before submitting more code.');
+      return this.execute(code, opts.timeoutMs ?? 300_000, opts.signal);
+    });
+    this.tail = next.catch(() => {});
+    return next;
+  }
+
+  private failure(code: string, message: string, hint?: string): JsRunResult {
+    return { value: undefined, writes: [], images: [], error: { name: 'Error', code, message, hint } };
+  }
+
+  private stop(code: string, message: string): void {
+    const worker = this.worker;
+    this.worker = undefined;
+    this.generation++;
+    if (worker) void worker.terminate().catch(() => {});
+    const active = this.active;
+    if (active) active.finish({ ...active.output, error: { name: 'Error', code, message,
+      hint: 'JavaScript bindings were cleared. Already dispatched API operations may still complete; inspect the page before retrying.',
+      data: { bindingsCleared: true, pendingCalls: this.pendingCalls } } });
+    this.references.clear();
+    this.identities = new WeakMap();
+  }
+
+  private reference(value: object): unknown {
+    let id = this.identities.get(value);
+    if (id === undefined) { id = this.references.size + 1; this.identities.set(value, id); this.references.set(id, value); }
+    const summary = value instanceof Tab || value instanceof Browser ? value.toJSON() : { type: 'API' };
+    const props = value instanceof Browser ? { id: value.id, type: value.type } : value instanceof Tab ? { ...summary, tabId: value.tabId } : summary;
+    return { $remote: id, callable: typeof value === 'function', props, summary };
+  }
+
+  private encode(value: any): any {
+    if (value instanceof Tab || value instanceof Browser || typeof value === 'function') return this.reference(value);
+    if (!value || typeof value !== 'object') return value;
+    if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return value;
+    return Array.isArray(value) ? value.map(v => this.encode(v)) : Object.fromEntries(Object.entries(value).map(([k, v]) => [k, this.encode(v)]));
+  }
+
+  private decode(value: any): any {
+    if (!value || typeof value !== 'object') return value;
+    if (value.$remote !== undefined) {
+      let result = this.references.get(value.$remote);
+      for (const key of value.path ?? []) result = result?.[key];
+      return result;
+    }
+    if (value.$function !== undefined) return value.$function;
+    if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return value;
+    return Array.isArray(value) ? value.map(v => this.decode(v)) : Object.fromEntries(Object.entries(value).map(([k, v]) => [k, this.decode(v)]));
+  }
+
+  private appendWrite(output: JsRunResult, entry: string): void {
+    const remaining = 24_000 - output.writes.join('\n').length;
+    const hint = '[output truncated; keep large data in a variable and return a summary]';
+    if (remaining > 0) output.writes.push(entry.length <= remaining ? entry : `${entry.slice(0, remaining)}\n${hint}`);
+    else if (!output.writes.at(-1)?.endsWith(hint)) output.writes.push(hint);
+  }
+
+  private startWorker(): Worker {
+    if (this.worker) return this.worker;
+    const globals = Object.fromEntries(Object.entries(this.globals).map(([name, value]) => [name, name === 'sites' ? this.reference(value as object) : this.encode(value)]));
+    const worker = new Worker(new URL('./js-worker.mjs', import.meta.url), { workerData: { globals }, execArgv: [], stdout: true, stderr: true });
+    this.worker = worker;
+    // Node modules may print outside the injected console. Never let that corrupt Native Messaging/stdio.
+    for (const stream of [worker.stdout, worker.stderr]) stream.on('data', data => {
+      if (worker === this.worker && this.active) this.appendWrite(this.active.output, String(data));
+    });
+    worker.on('message', (message) => {
+      if (worker !== this.worker) return;
+      if (message.kind === 'call') { void this.call(worker, message); return; }
+      const active = this.active;
+      if (!active || active.id !== message.run) return;
+      try {
+        const value = this.decode(message.value);
+        if (message.kind === 'write' || message.kind === 'log') {
+          const fmt = (v: unknown) => typeof v === 'string' ? v : safeStringify(v, 24_000);
+          const entry = message.kind === 'log' ? value.values.map(fmt).join(' ') : fmt(value);
+          this.appendWrite(active.output, entry);
+        } else if (message.kind === 'image') active.output.images.push(normalizeImage(value));
+        else if (message.kind === 'done') {
+          if (this.pendingCalls) { this.stop('command_outcome_unknown', 'The snippet returned with API work still in flight. Await every API call.'); return; }
+          active.output.value = extractImages(value, active.output.images);
+          active.output.error = message.error;
+          active.finish(active.output);
+        }
+      } catch (error) { active.finish({ ...active.output, error: { name: 'Error', message: String(error) } }); }
+    });
+    worker.on('error', error => { if (worker === this.worker) this.stop('js_worker_failed', error.message); });
+    worker.on('exit', () => { if (worker === this.worker) this.stop('js_worker_exited', 'The JavaScript worker exited.'); });
+    worker.unref();
+    return worker;
+  }
+
+  private async call(worker: Worker, message: any): Promise<void> {
+    if (this.active?.id !== message.run) {
+      worker.postMessage({ kind: 'reply', id: message.id, error: { code: 'js_inactive', message: 'This js call has finished. Await all API operations before returning.' } });
+      return;
+    }
+    this.pendingCalls++;
     try {
-      const script = new vm.Script(wrapped, { filename: `js-call-${++this.runs}.js` });
-      // `timeout` bounds the synchronous part (e.g. while(true){}); the race below bounds awaited work
-      const promise = script.runInContext(this.context, { timeout: Math.min(timeoutMs, 30_000) }) as Promise<unknown>;
-      const value = await Promise.race([promise, new Promise<never>((_, rej) => { timer = setTimeout(() => rej(Object.assign(new Error(`js call timed out after ${Math.round(timeoutMs / 1000)}s`), { code: 'command_outcome_unknown', hint: 'The JavaScript may still be running. Inspect browser or site state before retrying.' })), timeoutMs); })]);
-      const images = [...output.images];
-      let out = value;
-      if (isImageValue(value)) { images.push({ mimeType: value.mimeType, base64: value.base64 }); out = { image: `${value.mimeType} (${Math.round(value.base64.length * 0.75 / 1024)} KB)` }; }
-      return { value: out, writes: [...output.writes], images };
-    } catch (err) {
-      const e = err as Error & { code?: string; hint?: string; data?: Record<string, unknown> };
-      // Preserve the branchable code/hint/data (ActionError) so the js path gets the same coded error envelope as everywhere else.
-      return { value: undefined, writes: [...output.writes], images: [...output.images], error: { name: e.name ?? 'Error', message: e.message ?? String(err), stack: e.stack?.split('\n').slice(0, 4).join('\n'), ...(e.code && { code: e.code }), ...(e.hint && { hint: e.hint }), ...(e.data && typeof e.data === 'object' && { data: e.data }) } };
-    } finally { if (timer) clearTimeout(timer); }
+      let target = this.references.get(message.target);
+      let receiver: any;
+      for (const key of message.path) { receiver = target; target = target?.[key]; }
+      if (typeof target !== 'function') throw Object.assign(new Error(`Unknown API method ${message.path.join('.')}`), { code: 'unknown_method', hint: 'Read docs_get for the relevant API topic.' });
+      const value = await Reflect.apply(target, receiver, this.decode(message.args));
+      if (worker === this.worker) worker.postMessage({ kind: 'reply', id: message.id, value: this.encode(value) });
+    } catch (error) {
+      const e = error as Error & { code?: string; hint?: string; data?: unknown };
+      if (worker === this.worker) worker.postMessage({ kind: 'reply', id: message.id, error: { name: e.name, message: e.message, code: e.code, hint: e.hint, data: e.data } });
+    } finally {
+      this.pendingCalls--;
+      if (!this.pendingCalls) { for (const resolve of this.drainWaiters) resolve(); this.drainWaiters.clear(); }
+    }
   }
+
+  private execute(code: string, timeoutMs: number, signal?: AbortSignal): Promise<JsRunResult> {
+    return new Promise(resolve => {
+      const worker = this.startWorker();
+      worker.ref();
+      const id = ++this.runs;
+      const timer = setTimeout(() => this.stop(this.pendingCalls ? 'command_outcome_unknown' : 'js_timeout', `JavaScript exceeded ${timeoutMs} ms and was stopped.`), timeoutMs);
+      const cancel = () => this.stop(this.pendingCalls ? 'command_outcome_unknown' : 'js_cancelled', 'JavaScript execution was cancelled.');
+      this.active = { id, output: { value: undefined, writes: [], images: [] }, finish: result => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', cancel);
+        this.active = undefined;
+        worker.unref();
+        resolve(result);
+      } };
+      signal?.addEventListener('abort', cancel, { once: true });
+      worker.postMessage({ kind: 'run', run: id, code });
+    });
+  }
+}
+
+function extractImages(value: any, images: JsRunResult['images']): unknown {
+  if (isImageValue(value)) { images.push(normalizeImage(value)); return { image: value.mimeType }; }
+  if (value instanceof Tab || value instanceof Browser) return value.toJSON();
+  if (!value || typeof value !== 'object' || ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return value;
+  return Array.isArray(value) ? value.map(v => extractImages(v, images)) : Object.fromEntries(Object.entries(value).map(([key, v]) => [key, extractImages(v, images)]));
 }
 
 function isImageValue(v: unknown): v is { __image: true; mimeType: string; base64: string } {

@@ -215,6 +215,7 @@ export class Runtime extends EventEmitter<RuntimeEvents> implements PageProvider
   async closeSession(id: string, opts: { finalize?: boolean } = {}): Promise<void> {
     const s = this.sessions.get(id);
     if (!s) return;
+    await s.js?.dispose();
     this.sessions.delete(id);
     const page = s.browserPage;
     if (page && opts.finalize !== false && !s.finalized) {

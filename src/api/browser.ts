@@ -13,6 +13,7 @@ import type { SessionContext } from './context.js';
 
 export class Browser {
   constructor(readonly id: 'chrome', readonly type: 'extension', private readonly ctx: SessionContext) {}
+  toJSON(): { type: 'Browser'; id: string; backend: string } { return { type: 'Browser', id: this.id, backend: this.type }; }
   private page(): Promise<RuntimePage> { return this.ctx.rt.getBrowserPage(this.ctx.sessionId); }
   private ext(page: RuntimePage): ExtensionRuntimePage {
     if (!this.ctx.rt.isExtensionPage(page)) throw new ActionError('unsupported_backend', 'This operation needs the Chrome extension backend', 'Run doctor; make sure Chrome is running with the opencli-mcp extension.');
@@ -39,7 +40,7 @@ export class Browser {
       const tabs = await page.tabs() as Array<{ tabId: number; page?: string; pending?: true; url?: string; title?: string; active: boolean; selected: boolean; origin: 'agent' | 'user'; state: 'active' | 'handoff' }>;
       return tabs.map((t) => ({ ...(t.page && { id: t.page }), tabId: t.tabId, ...(!t.page && { pending: true as const }), url: t.url, title: t.title, active: t.active, selected: t.selected, origin: t.origin, state: t.state }));
     },
-    get: (id: string): Tab => new Tab(id, this.ctx),
+    get: async (id: string): Promise<Tab> => new Tab(id, this.ctx),
     selected: async (): Promise<Tab | undefined> => {
       const tabs = (await this.tabs.list()).filter((tab) => tab.state === 'active' && tab.id);
       const current = tabs.find((tab) => tab.selected) ?? tabs.find((tab) => tab.active) ?? tabs[0];
@@ -89,12 +90,12 @@ export class Browser {
       if (id === 'cdp') return { send: (method: string, params?: Record<string, unknown>) => page.cdp(method, params), documentation: () => readDocForContext('capabilities/cdp', { backend: this.ctx.rt.backend(), capabilities: this.ctx.rt.features() }) };
       if (id === 'viewport') return { set: ({ width, height }: { width: number; height: number }) => page.cdp('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false }), reset: () => page.cdp('Emulation.clearDeviceMetricsOverride', {}) };
       if (id === 'visibility') { const ext = this.ext(page); return { get: () => ext.getVisibility(), set: (v: boolean) => ext.setVisibility(v), documentation: () => readDocForContext('capabilities/visibility', { backend: this.ctx.rt.backend(), capabilities: this.ctx.rt.features() }) }; }
-      if (id === 'webmcp') { const sel = await this.tabs.selected(); if (!sel) throw new ActionError('no_tab', 'Open a tab first', 'Call tab_open (or tab_claim a user tab) before using this capability.'); return { list: () => sel.webmcp.list(), call: (name: string, input?: Record<string, unknown>) => sel.webmcp.call(name, input), documentation: () => readDocForContext('capabilities/webmcp', { backend: this.ctx.rt.backend(), capabilities: this.ctx.rt.features() }) }; }
+      if (id === 'webmcp') { const sel = await this.tabs.selected(); if (!sel) throw new ActionError('no_tab', 'Open a tab first', 'Call browser.tabs.new (or browser.user.claimTab a user tab) before using this capability.'); return { list: () => sel.webmcp.list(), call: (name: string, input?: Record<string, unknown>) => sel.webmcp.call(name, input), documentation: () => readDocForContext('capabilities/webmcp', { backend: this.ctx.rt.backend(), capabilities: this.ctx.rt.features() }) }; }
       throw new ActionError('unknown_capability', `no capability "${id}"`, 'Use browser.capabilities to see what this backend supports.');
     },
   };
 
-  documentation(): string {
+  async documentation(): Promise<string> {
     const ctx: DocContext = { backend: this.type, capabilities: this.ctx.rt.features() };
     return `${buildInstructions(ctx)}\n\n${readDocForContext('js-tool', ctx) ?? ''}\n\n${readDocForContext('api-reference', ctx) ?? ''}`;
   }

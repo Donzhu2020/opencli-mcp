@@ -1,13 +1,10 @@
-/**
- * MCP-boundary checks for tab_act / tab_expect.
- * Typed tools reject mixed locators and fields the action does not take, before any browser call.
- * Missing value for fill/type/press/select is also rejected in the shared engine, so js cannot bypass it.
- */
-import { ActionError } from '../api/errors.js';
-import type { ActAction, Target } from '../api/tab.js';
+/** Object-model action validation shared by REPL sessions and adapters. */
+import { ActionError } from './errors.js';
+import { z } from 'zod';
+import type { ActAction, Target } from './tab.js';
 
 export interface RawTarget {
-  ref?: string;
+  ref?: string | number;
   selector?: string;
   within?: string;
   nth?: number;
@@ -30,6 +27,27 @@ export interface ActToolInput {
   direction?: 'up' | 'down' | 'left' | 'right';
   amount?: number;
   method?: 'cdp' | 'dom';
+  timeoutMs?: number;
+  settleMs?: number;
+}
+
+const frame = z.union([z.string(), z.number().int()]);
+const targetShape = z.object({
+  ref: z.union([z.string(), z.number().int()]).optional(),
+  selector: z.string().optional(), within: z.string().optional(), nth: z.number().int().optional(),
+  role: z.string().optional(), name: z.string().optional(), label: z.string().optional(), text: z.string().optional(), testid: z.string().optional(),
+  x: z.number().optional(), y: z.number().optional(), frame: z.union([frame, z.array(frame)]).optional(),
+}).strict();
+const actionShape = z.object({
+  action: z.string(), target: targetShape.optional(), to: targetShape.optional(), value: z.string().optional(),
+  files: z.array(z.string().min(1)).optional(), direction: z.enum(['up', 'down', 'left', 'right']).optional(), amount: z.number().optional(),
+  timeoutMs: z.number().int().nonnegative().optional(), settleMs: z.number().int().min(0).max(10_000).optional(), method: z.enum(['cdp', 'dom']).optional(),
+}).strict();
+const expectationShape = z.object({ text: z.string().optional(), notText: z.string().optional(), url: z.string().optional(), title: z.string().optional(), selector: z.string().optional(), ref: z.union([z.string(), z.number().int()]).optional(), visible: z.boolean().optional() }).strict();
+
+function validate(shape: z.ZodType, value: unknown): void {
+  const result = shape.safeParse(value);
+  if (!result.success) throw new ActionError('invalid_args', result.error.issues.map(i => `${i.path.join('.') || 'input'}: ${i.message}`).join('; '), 'Read docs_get with name:"api-reference" and member:"Tab.act" or "Tab.expect" for exact fields.');
 }
 
 type Need = 'required' | 'nonempty' | 'present' | 'optional' | 'forbidden';
@@ -60,7 +78,6 @@ export function expectedAct(action: ActAction): Record<string, string> {
   const rule = ACTION_RULES[action];
   return {
     action,
-    tab: 'session tab id; required when more than one tab is open',
     target: rule.target === 'forbidden' ? 'forbidden' : rule.target === 'optional' ? `optional. ${TARGET_HELP}` : `required. ${TARGET_HELP}`,
     value: rule.value === 'forbidden' ? 'forbidden' : rule.value === 'present' ? 'string, required; "" clears the field' : rule.value === 'optional' ? 'optional string' : 'non-empty string, required',
     files: rule.files === 'required' ? 'non-empty string[], required' : 'forbidden',
@@ -120,7 +137,9 @@ function present(value: unknown): boolean {
 }
 
 export function checkActInput(input: ActToolInput): { target?: Target; to?: Target; method?: 'cdp' | 'dom' } {
+  validate(actionShape, input);
   const rule = ACTION_RULES[input.action];
+  if (!Object.hasOwn(ACTION_RULES, input.action)) throw new ActionError('invalid_args', `Unknown action ${input.action}`, `Choose one of: ${Object.keys(ACTION_RULES).join(', ')}`);
   const target = pickTarget(input.target, input.action, 'target');
   const to = pickTarget(input.to, input.action, 'to');
   if (rule.target === 'required' && !target) reject(input.action, `action "${input.action}" needs a target.`);
@@ -143,10 +162,11 @@ export function checkActInput(input: ActToolInput): { target?: Target; to?: Targ
 
 const EXPECT_KEYS = ['text', 'notText', 'url', 'title', 'selector', 'ref'] as const;
 
-export function checkExpect(what: { text?: string; notText?: string; url?: string; title?: string; selector?: string; ref?: string; visible?: boolean }): void {
+export function checkExpect(what: { text?: string; notText?: string; url?: string; title?: string; selector?: string; ref?: string | number; visible?: boolean }): void {
+  validate(expectationShape, what);
   const has = EXPECT_KEYS.some((k) => what[k] !== undefined && what[k] !== '');
   if (!has) {
-    throw new ActionError('invalid_args', 'tab_expect needs at least one of text, notText, url, title, selector, ref.', 'An empty expect succeeds without looking at the page.', { details: { expected: { oneOf: [...EXPECT_KEYS] } } });
+    throw new ActionError('invalid_args', 'tab.expect needs at least one of text, notText, url, title, selector, ref.', 'An empty expect succeeds without looking at the page.', { details: { expected: { oneOf: [...EXPECT_KEYS] } } });
   }
   if (what.visible !== undefined && !what.selector && !what.ref) {
     throw new ActionError('invalid_args', 'visible requires selector or ref.', 'visible does not apply to text, url, or title checks.', { details: { expected: { visible: 'boolean', with: 'selector or ref' } } });

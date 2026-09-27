@@ -28,9 +28,9 @@ describe('stdio launcher when Chrome starts later', () => {
     cleanup.push(() => client.close());
 
     expect(client.getInstructions()).toContain('opencli-mcp');
-    expect((await client.listTools()).tools.map((tool) => tool.name)).toContain('tab_open');
+    expect((await client.listTools()).tools.map((tool) => tool.name)).toContain('js');
     expect((await client.listResources()).resources.some((resource) => resource.uri.startsWith('opencli://docs/'))).toBe(true);
-    const offline = await client.callTool({ name: 'tab_open', arguments: { url: 'https://example.com' } });
+    const offline = await client.callTool({ name: 'js', arguments: { code: 'await browser.tabs.new("https://example.com")' } });
     expect(offline.isError).toBe(true);
     expect(offline.content).toMatchObject([{ type: 'text', text: expect.stringContaining('host_unavailable') }]);
 
@@ -49,6 +49,6 @@ describe('stdio launcher when Chrome starts later', () => {
     const online = await client.callTool({ name: 'doctor', arguments: {} });
     expect(online.isError).not.toBe(true);
     expect(online.content).toMatchObject([{ type: 'text', text: expect.stringContaining('"ok":true') }]);
-    expect((await client.listTools()).tools.map((tool) => tool.name)).toContain('tab_open');
+    expect((await client.listTools()).tools.map((tool) => tool.name)).toContain('js');
   });
 });

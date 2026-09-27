@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.0.23 — 2026-09-28
+
+- Make js the primary browser workspace with seven default MCP tools; browser actions and adapter authoring use the shared object API.
+- Use a persistent Node REPL for variables, functions, classes and top-level await, with interruptible worker execution and explicit timeout/reset/cancellation outcomes.
+- Return compact browser handles, bounded output and MCP images, and expose focused API documentation directly through docs_get.
+- Keep the adapter draft → trial → activation lifecycle and preserve action validation at the object API boundary.
+- Fix live Chrome tab identity and adapter capture during initial navigation; report host/extension protocol drift as a warning.
+- Bundle Chrome extension 0.0.17.
+
+Migration: typed browser and adapter-authoring tools have been removed. Use js with browser, tab, tools and recon; use docs_get without arguments for the quickstart. Await every API call. Reset or timeout clears JavaScript bindings but does not undo already dispatched browser operations.
+
 ## 0.0.22 — 2026-09-25
 
 - feat: include LinkedIn connection count in profile analytics

@@ -40,6 +40,20 @@ describe('browser tab ownership', () => {
     expect(tabs.create).not.toHaveBeenCalled();
   });
 
+  it('keeps raw-created tabs owned and preserves their presentation through repeated claim', async () => {
+    const tabs = chromeMock();
+    const manager = new SessionManager(() => {});
+    await manager.ready();
+    const session = manager.get('native');
+    await manager.adoptCreatedTab(session, { id: 19, windowId: 1 });
+    await manager.claimUserTab(session, { tabId: 19 });
+    expect(session.leases.get(19)).toMatchObject({ origin: 'agent', nativePresentation: true });
+    await manager.finalize(session, [{ page: '19', status: 'deliverable' }]);
+    expect(tabs.update).not.toHaveBeenCalled();
+    expect(tabs.ungroup).not.toHaveBeenCalled();
+    expect(tabs.remove).not.toHaveBeenCalled();
+  });
+
   it('claims the foreground tab only when exact expected identity still matches', async () => {
     const tabs = chromeMock();
     const active = { id: 7, url: 'https://example.com/active', title: 'Active', windowId: 1, active: true };

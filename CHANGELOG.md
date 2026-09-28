@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.25 — 2026-09-28
+
+- Fix JavaScript execution on Node 26 while retaining Node 22+ support, using one V8 Inspector REPL implementation across Node 22, 24 and 26.
+- Preserve bindings after ordinary errors, correctly report falsy exceptions, and support redeclaring top-level bindings across calls.
+- Drain dispatched API work within the call timeout; handle unobserved RPC failures and prevent late callbacks from affecting later calls.
+- Validate persistent JavaScript execution through the native host and MCP, with Node 22/24/26 release checks.
+- Chrome extension remains at 0.0.18; this release changes the local host only.
+
 ## 0.0.24 — 2026-09-28
 
 - Expose native Chrome APIs with on-demand signatures, direct CDP commands, and bounded event streams in the REPL.

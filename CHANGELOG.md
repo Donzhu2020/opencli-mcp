@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.24 — 2026-09-28
+
+- Expose native Chrome APIs with on-demand signatures, direct CDP commands, and bounded event streams in the REPL.
+- Support writable Main World evaluation with frame targeting and explicit uncertain outcomes without replaying dispatched commands.
+- Add page console and extension log capture, and improve native tab/window ownership and session cleanup.
+- Add frame-aware ARIA/DOM observations and exact DOM reads across nested and cross-origin frames.
+- Ship Chrome extension 0.0.18 with updated runtime documentation and Chrome API reference attribution.
+
 ## 0.0.23 — 2026-09-28
 
 - Make js the primary browser workspace with seven default MCP tools; browser actions and adapter authoring use the shared object API.

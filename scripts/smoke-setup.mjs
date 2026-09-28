@@ -173,9 +173,16 @@ try {
   const tools = await mcp.listTools();
   assert(tools.tools.some((tool) => tool.name === 'js'));
   assert(tools.tools.some((tool) => tool.name === 'doctor'));
+  const js = async code => {
+    const result = await mcp.callTool({ name: 'js', arguments: { code } });
+    return JSON.parse(result.content.find(item => item.type === 'text').text);
+  };
+  assert.equal((await js('let counter = await Promise.resolve(1); counter + 1')).value, 2);
+  assert.equal((await js('throw null')).ok, false);
+  assert.equal((await js('counter += 1; counter')).value, 2);
   await mcp.close();
   mcp = null;
-  console.log('PASS MCP: registered command connects through the launcher to the native host');
+  console.log('PASS MCP: registered command executes persistent JavaScript and recovers after errors through the native host');
 
   // A live connection must not hide a broken on-disk registration; setup repairs it.
   manifest.allowed_origins = [];

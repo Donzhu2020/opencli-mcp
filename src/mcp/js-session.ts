@@ -5,7 +5,7 @@ import { Browser } from '../api/browser.js';
 
 export interface JsRunResult { value: unknown; writes: string[]; images: Array<{ mimeType: string; base64: string }>; error?: { name: string; message: string; stack?: string; code?: string; hint?: string; data?: Record<string, unknown> } }
 export interface JsImage { mimeType?: string; base64?: string; bytes?: Uint8Array | ArrayBuffer }
-type ActiveRun = { id: number; output: JsRunResult; finish: (result: JsRunResult) => void };
+type ActiveRun = { id: number; phase: 'running' | 'draining'; output: JsRunResult; finish: (result: JsRunResult) => void };
 
 export class JsSession {
   private worker?: Worker;
@@ -24,7 +24,7 @@ export class JsSession {
   constructor(private readonly globals: Record<string, unknown>, private readonly onReset?: () => Promise<void>) {}
 
   status(): { state: 'idle' | 'running' | 'draining'; generation: number; pendingCalls: number; cleanupError?: string } {
-    return { state: this.active ? 'running' : (this.pendingCalls || this.cleanup) ? 'draining' : 'idle', generation: this.generation, pendingCalls: this.pendingCalls + (this.cleanup ? 1 : 0), ...(this.cleanupError && { cleanupError: this.cleanupError }) };
+    return { state: this.active ? this.active.phase : (this.pendingCalls || this.cleanup) ? 'draining' : 'idle', generation: this.generation, pendingCalls: this.pendingCalls + (this.cleanup ? 1 : 0), ...(this.cleanupError && { cleanupError: this.cleanupError }) };
   }
 
   reset(): { reset: true; pendingCalls: number } {
@@ -121,23 +121,28 @@ export class JsSession {
     });
     worker.on('message', (message) => {
       if (worker !== this.worker) return;
+      if (message.kind === 'fatal') { this.stop('js_worker_failed', message.error.message); return; }
       if (message.kind === 'call') { void this.call(worker, message); return; }
       const active = this.active;
       if (!active || active.id !== message.run) return;
       try {
         const value = this.decode(message.value);
+        if (message.kind === 'draining') { active.phase = 'draining'; return; }
         if (message.kind === 'write' || message.kind === 'log') {
           const fmt = (v: unknown) => typeof v === 'string' ? v : safeStringify(v, 24_000);
           const entry = message.kind === 'log' ? value.values.map(fmt).join(' ') : fmt(value);
           this.appendWrite(active.output, entry);
         } else if (message.kind === 'image') active.output.images.push(normalizeImage(value));
         else if (message.kind === 'done') {
-          if (this.pendingCalls) { this.stop('command_outcome_unknown', 'The snippet returned with API work still in flight. Await every API call.'); return; }
-          active.output.value = extractImages(value, active.output.images);
-          active.output.error = message.error;
+          if (message.ok) active.output.value = extractImages(value, active.output.images);
+          else active.output.error ??= message.error;
           active.finish(active.output);
         }
-      } catch (error) { active.finish({ ...active.output, error: { name: 'Error', message: String(error) } }); }
+      } catch (error) {
+        // Output conversion must not end the call before its RPCs have drained.
+        active.output.error ??= { name: 'Error', message: String(error) };
+        if (message.kind === 'done') active.finish(active.output);
+      }
     });
     worker.on('error', error => { if (worker === this.worker) this.stop('js_worker_failed', error.message); });
     worker.on('exit', () => { if (worker === this.worker) this.stop('js_worker_exited', 'The JavaScript worker exited.'); });
@@ -162,8 +167,8 @@ export class JsSession {
       const value = await Reflect.apply(target, receiver, args);
       if (worker === this.worker) worker.postMessage({ kind: 'reply', id: message.id, value: this.encode(value) });
     } catch (error) {
-      const e = error as Error & { code?: string; hint?: string; data?: unknown };
-      if (worker === this.worker) worker.postMessage({ kind: 'reply', id: message.id, error: { name: e.name, message: e.message, code: e.code, hint: e.hint, data: e.data } });
+      const e = error as (Error & { code?: string; hint?: string; data?: unknown }) | null | undefined;
+      if (worker === this.worker) worker.postMessage({ kind: 'reply', id: message.id, error: { name: e?.name ?? 'Error', message: e?.message ?? String(error), code: e?.code, hint: e?.hint, data: e?.data } });
     } finally {
       this.pendingCalls--;
       if (!this.pendingCalls) { for (const resolve of this.drainWaiters) resolve(); this.drainWaiters.clear(); }
@@ -177,7 +182,7 @@ export class JsSession {
       const id = ++this.runs;
       const timer = setTimeout(() => this.stop(this.pendingCalls ? 'command_outcome_unknown' : 'js_timeout', `JavaScript exceeded ${timeoutMs} ms and was stopped.`), timeoutMs);
       const cancel = () => this.stop(this.pendingCalls ? 'command_outcome_unknown' : 'js_cancelled', 'JavaScript execution was cancelled.');
-      this.active = { id, output: { value: undefined, writes: [], images: [] }, finish: result => {
+      this.active = { id, phase: 'running', output: { value: undefined, writes: [], images: [] }, finish: result => {
         clearTimeout(timer);
         signal?.removeEventListener('abort', cancel);
         this.active = undefined;

@@ -1,6 +1,6 @@
 ## Browser REPL quickstart
 
-`js` runs a persistent Node REPL. Pre-bound `browser`, `sites`, `tools`, `recon`, `agent`, `session`, `nodeRepl`; no imports or bootstrap. Await API methods. Variables, functions and classes survive calls. Prefer `let` for working bindings; reuse a binding by assignment instead of redeclaring it.
+`js` runs a persistent Node REPL. Pre-bound `browser`, `sites`, `tools`, `recon`, `agent`, `session`, `nodeRepl`; no imports or bootstrap. Await API methods. Each call drains already-dispatched API work before returning; an ordinary error preserves bindings. Variables, functions and classes survive calls. Prefer `let` for working bindings; reuse bindings across calls; redeclaration is also supported.
 
 Use `browser.chrome.call(method, argsArray)` for native browser management, `tab.cdp.send(method, params)` for Tab-level CDP, and `tab.evaluate(script, {arg})` for Main World page code. These execute in different contexts from the host REPL. Query `browser.chrome.describe("tabs.query")` or read `capabilities/chrome` for native API signatures and events.
 

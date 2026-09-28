@@ -146,7 +146,7 @@ npm install -g opencli-mcp@latest
 opencli-mcp setup
 ```
 
-Setup refreshes the browser registration, including the Node.js path. Chrome updates the store extension independently. If the old host is still running, disable and re-enable the extension to start the updated program. If your MCP client uses a path that has changed, replace its entry with the configuration printed by setup, then reconnect it.
+Setup refreshes the browser registration, including the Node.js path. After upgrading Node, rerun `opencli-mcp setup` using the new runtime; changing PATH alone does not update an existing browser host launcher. Chrome updates the store extension independently. If the old host is still running, disable and re-enable the extension to start the updated program. If your MCP client uses a path that has changed, replace its entry with the configuration printed by setup, then reconnect it.
 
 ## Remote clients
 
